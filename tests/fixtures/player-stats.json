@@ -1,0 +1,30 @@
+{
+  "draw": 0,
+  "recordsTotal": 2,
+  "recordsFiltered": 2,
+  "data": [
+    {
+      "player_key": 13,
+      "player_name": "Damon Heta",
+      "country": "AUS",
+      "sumField1": 634267,
+      "sumField2": 20194,
+      "stat": "94.23",
+      "rank": 21,
+      "player_profile_url": "https://dartsorakel.com/player/details/13/damon-heta",
+      "DT_RowIndex": 21
+    },
+    {
+      "player_key": 73,
+      "player_name": "Robert Thornton",
+      "country": "SCO",
+      "sumField1": 311875,
+      "sumField2": 11767,
+      "stat": "79.51",
+      "rank": 716,
+      "player_profile_url": "https://dartsorakel.com/player/details/73/robert-thornton",
+      "DT_RowIndex": 716
+    }
+  ],
+  "input": []
+}
