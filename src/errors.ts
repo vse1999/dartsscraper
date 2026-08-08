@@ -54,3 +54,30 @@ export class InsufficientMatchDataError extends DartsOrakelError {
     this.available = available;
   }
 }
+
+export class ModusSourceUnavailableError extends Error {
+  public readonly failures: readonly string[];
+
+  public constructor(date: string, failures: readonly string[]) {
+    super(`No configured MODUS source could provide fixtures for ${date}. ${failures.join(" ")}`);
+    this.name = new.target.name;
+    this.failures = failures;
+  }
+}
+
+export class AgentLimitError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
+
+export class OllamaRequestError extends Error {
+  public readonly status: number | undefined;
+
+  public constructor(message: string, status?: number, options?: ErrorOptions) {
+    super(message, options);
+    this.name = new.target.name;
+    this.status = status;
+  }
+}
