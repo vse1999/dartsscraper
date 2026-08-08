@@ -52,3 +52,13 @@ function createResolver(options: DefaultServiceOptions): PlayerResolver {
   const client = options.client ?? new DartsOrakelClient(options.clientOptions);
   return new PlayerResolver(client);
 }
+export { resolveResearchDate, IsoDateSchema } from "./agent/date.js";
+export { createDartsResearchAgent } from "./agent/factory.js";
+export { DartsResearchAgent } from "./agent/harness.js";
+export { OllamaClient } from "./agent/ollama-client.js";
+export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js";
+export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";
+export { FixtureNameResolver } from "./modus/fixture-name-resolver.js";
+export { OfficialModusSource } from "./modus/official-source.js";
+export { ModusPlayersService } from "./modus/service.js";
+export type { ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
