@@ -1,5 +1,16 @@
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+const LogLevelPriority: Readonly<Record<LogLevel, number>> = {
+  debug: 10,
+  info: 20,
+  warn: 30,
+  error: 40,
+};
+
+export interface ConsoleLoggerOptions {
+  minimumLevel?: LogLevel;
+}
+
 export type LogContext = Readonly<Record<string, unknown>>;
 
 export interface Logger {
@@ -10,6 +21,12 @@ export interface Logger {
 }
 
 export class ConsoleLogger implements Logger {
+  private readonly minimumLevel: LogLevel;
+
+  public constructor(options: ConsoleLoggerOptions = {}) {
+    this.minimumLevel = options.minimumLevel ?? "debug";
+  }
+
   public debug(message: string, context?: LogContext): void {
     this.write("debug", message, context);
   }
@@ -27,6 +44,9 @@ export class ConsoleLogger implements Logger {
   }
 
   private write(level: LogLevel, message: string, context?: LogContext): void {
+    if (LogLevelPriority[level] < LogLevelPriority[this.minimumLevel]) {
+      return;
+    }
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
       level,

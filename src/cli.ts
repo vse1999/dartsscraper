@@ -17,7 +17,7 @@ interface CliArguments {
 
 async function main(): Promise<void> {
   const args = parseArguments(process.argv.slice(2));
-  const logger = new ConsoleLogger();
+  const logger = new ConsoleLogger({ minimumLevel: "warn" });
   const client = new DartsOrakelClient({
     cache: new FileCache({ directory: path.resolve(process.cwd(), ".cache", "dartsorakel"), logger }),
     logger,

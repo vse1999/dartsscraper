@@ -7,6 +7,7 @@ import type { PlayerIdentity } from "../schemas/player.js";
 const NullableStatSchema = z.union([z.number(), z.string()]).nullable().optional();
 
 export const DartsOrakelMatchRowSchema = z.object({
+  tournament_key: z.number().int().positive(),
   event_key: z.number().int().positive(),
   tournament_name: z.string().trim().min(1),
   tournament_no: z.union([z.number().int().nonnegative(), z.string()]).nullable().optional(),
@@ -18,6 +19,8 @@ export const DartsOrakelMatchRowSchema = z.object({
   opponent: z.string().trim().min(1),
   score: z.string().trim().min(1),
   stat: NullableStatSchema,
+  stat1: NullableStatSchema,
+  stat2: NullableStatSchema,
   is_bye: z.union([z.number().int(), z.string()]).nullable().optional(),
 });
 
@@ -190,7 +193,17 @@ function isIncompleteResult(result: string): boolean {
 }
 
 function matchIdentity(row: DartsOrakelMatchRow): string {
-  return [row.event_key, row.winner_key, row.loser_key, row.match_date, row.round?.trim() ?? "", row.score.trim()].join("|");
+  return [
+    row.tournament_key,
+    row.event_key,
+    row.winner_key,
+    row.loser_key,
+    row.match_date,
+    row.round?.trim() ?? "",
+    row.score.trim(),
+    row.stat1 ?? "",
+    row.stat2 ?? "",
+  ].join("|");
 }
 
 function formatPath(path: readonly PropertyKey[]): string {

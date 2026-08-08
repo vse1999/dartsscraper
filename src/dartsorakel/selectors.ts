@@ -11,4 +11,13 @@ export const DartsOrakelMatchQuery = {
   tournaments: "tourns",
 } as const;
 
+// Values observed on the live player matches page when the table shows the
+// complete "Averages" view. Omitting organStat makes the API silently return
+// only a subset of competitions for some players.
+export const DartsOrakelMatchDefaults = {
+  rankKey: "25",
+  organStat: "All",
+  tournaments: "",
+} as const;
+
 export const DartsOrakelPlayerProfilePattern = /\/player\/details\/(\d+)\/([^/?#]+)/i;

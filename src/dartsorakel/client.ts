@@ -8,6 +8,7 @@ import {
 } from "../schemas/player.js";
 import {
   DartsOrakelApiPath,
+  DartsOrakelMatchDefaults,
   DartsOrakelMatchQuery,
 } from "./selectors.js";
 import {
@@ -101,10 +102,21 @@ export class DartsOrakelClient {
     const url = this.urlFor(DartsOrakelApiPath.playerMatches(playerId), {
       [DartsOrakelMatchQuery.dateFrom]: HISTORICAL_START_DATE,
       [DartsOrakelMatchQuery.dateTo]: dateTo,
+      [DartsOrakelMatchQuery.rankKey]: DartsOrakelMatchDefaults.rankKey,
+      [DartsOrakelMatchQuery.organStat]: DartsOrakelMatchDefaults.organStat,
+      [DartsOrakelMatchQuery.tournaments]: DartsOrakelMatchDefaults.tournaments,
     });
     return this.getJson(
       url,
-      `player-matches-${playerId}-${HISTORICAL_START_DATE}-${dateTo}`,
+      [
+        "player-matches-v2",
+        playerId,
+        HISTORICAL_START_DATE,
+        dateTo,
+        DartsOrakelMatchDefaults.rankKey,
+        DartsOrakelMatchDefaults.organStat,
+        DartsOrakelMatchDefaults.tournaments || "all-tournaments",
+      ].join("-"),
       DartsOrakelMatchesResponseSchema,
       this.matchCacheTtlMs,
     );

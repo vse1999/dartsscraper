@@ -12,7 +12,11 @@ GET https://dartsorakel.com/api/player/matches/{playerId}
 
 The response is JSON with the shape `{ draw, recordsTotal, recordsFiltered, data }`. Each `data` row contains the fields used by the table, including `match_date`, `tournament_name`, `tournament_no`, `round`, `result`, `opponent`, `score`, and `stat`. The `opponent` value is an HTML anchor string; the visible player name is the anchor text. The selected `Averages` stat is returned in `stat`.
 
-The match page also passes the discovered `dateFrom`, `dateTo`, `rankKey`, `organStat`, and `tourns` query parameters to the same endpoint. The implementation uses the endpoint directly and supplies a wide date range (`1900-01-01` through tomorrow) so retired players such as Robert Thornton are not lost behind the page's default one-year date range.
+The match page also passes the discovered `dateFrom`, `dateTo`, `rankKey`, `organStat`, and `tourns` query parameters to the same endpoint. The complete default Averages view uses `rankKey=25`, `organStat=All`, and an empty `tourns` value. `organStat=All` is semantically required: omitting it does not produce an API error, but silently returns only a subset of competitions for some players. For example, Rob Cross returned 629 historical rows without it and 1,311 rows with it; the smaller response omitted World Matchplay and European Tour matches from the latest results.
+
+The implementation uses the endpoint directly, sends those observed default filter values, and supplies a wide date range (`1900-01-01` through tomorrow) so retired players such as Robert Thornton are not lost behind the page's default one-year date range. Match-cache keys include a schema/filter version so responses cached under an older incomplete query cannot mask corrected live data.
+
+The wider all-competition response also exposed legitimate repeated matchups within the same event: Robert Thornton played Jake Jones twice on the same day, in the same round, with the same 4–3 score, but with different underlying stat totals and averages. A fingerprint based only on event, players, date, round, and score incorrectly treated those as conflicting duplicates. Match identity now includes the API's underlying `stat1` and `stat2` values, preserving distinct repeated matches while still removing exact duplicate rows.
 
 ## 2. Player-resolution mechanism
 
