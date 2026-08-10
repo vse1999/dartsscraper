@@ -59,6 +59,10 @@ export type { AgentConversationMessage, AgentRunOptions, AgentRunResult } from "
 export { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from "./agent/config.js";
 export { ChatSessionStore } from "./chat/session-store.js";
 export type { ChatSessionStoreOptions } from "./chat/session-store.js";
+export { createChatServer, startChatServer } from "./chat/server.js";
+export type { ChatAgent, ChatServerOptions, StartChatServerOptions, StartedChatServer } from "./chat/server.js";
+export { createOllamaHealthChecker } from "./chat/ollama-health.js";
+export type { OllamaHealthChecker, OllamaHealthCheckerOptions, OllamaHealthResult, OllamaHealthStatus } from "./chat/ollama-health.js";
 export { OllamaClient } from "./agent/ollama-client.js";
 export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js";
 export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";

@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "player": "tsx src/cli.ts",
-    "agent": "tsx src/agent-cli.ts"
+    "agent": "tsx src/agent-cli.ts",
+    "chat": "tsx src/chat-server.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
