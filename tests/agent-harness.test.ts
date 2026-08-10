@@ -9,7 +9,7 @@ class ScriptedClient implements OllamaChatClient {
   private index = 0;
   public constructor(private readonly responses: readonly OllamaChatResponse[]) {}
   public async chat(request: OllamaChatRequest): Promise<OllamaChatResponse> {
-    this.requests.push(request);
+    this.requests.push(structuredClone(request));
     const response = this.responses[this.index];
     this.index += 1;
     if (response === undefined) throw new Error("No scripted response.");
@@ -22,6 +22,26 @@ function toolResponse(count: number): OllamaChatResponse {
 const finalResponse: OllamaChatResponse = { message: { role: "assistant", content: "Final verified answer" } };
 
 describe("bounded agent harness", () => {
+  it("defaults to Gemma 4 and includes validated follow-up history", async () => {
+    const client = new ScriptedClient([finalResponse]);
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => ({ ok: true, data: null }) } });
+    const result = await agent.run("What about his average?", {
+      history: [
+        { role: "user", content: "Show Rob Cross's latest matches." },
+        { role: "assistant", content: "Here are the matches." },
+      ],
+    });
+    expect(result.model).toBe("gemma4:12b");
+    expect(client.requests[0]).toMatchObject({
+      model: "gemma4:12b",
+      messages: [
+        { role: "system" },
+        { role: "user", content: "Show Rob Cross's latest matches." },
+        { role: "assistant", content: "Here are the matches." },
+        { role: "user", content: "What about his average?" },
+      ],
+    });
+  });
   it("runs independent tool calls with controlled concurrency", async () => {
     const client = new ScriptedClient([toolResponse(6), finalResponse]);
     let active = 0; let maximum = 0;
@@ -99,6 +119,16 @@ describe("bounded agent harness", () => {
     }) };
     const agent = new DartsResearchAgent({ client, timeoutMs: 10, toolExecutor: { execute: async () => ({ ok: true, data: null }) } });
     await expect(agent.run("research")).rejects.toThrow("deadline");
+  });
+  it("honors caller cancellation", async () => {
+    const client: OllamaChatClient = { chat: async (_request, signal) => new Promise<OllamaChatResponse>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }) };
+    const controller = new AbortController();
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => ({ ok: true, data: null }) } });
+    const result = agent.run("research", { signal: controller.signal });
+    controller.abort();
+    await expect(result).rejects.toThrow("cancelled");
   });
 });
 
