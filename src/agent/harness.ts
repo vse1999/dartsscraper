@@ -1,6 +1,7 @@
 import { AgentLimitError } from "../errors.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { ModusPlayersResultSchema } from "../modus/schemas.js";
+import { ModusResultsSnapshotSchema, type ModusResultsSnapshot } from "../modus/results-schemas.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import { resolveResearchDate, type ResolvedDate } from "./date.js";
 import { AGENT_TOOL_DEFINITIONS, type AgentToolCall, type AgentToolResult, type DartsAgentToolExecutor } from "./tools.js";
@@ -69,9 +70,11 @@ export class DartsResearchAgent {
     if (options.signal?.aborted === true) abortFromCaller();
     else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const timeout = setTimeout(() => controller.abort(new Error("Agent deadline exceeded.")), this.timeoutMs);
-    const resolvedDate = this.tryResolveDate(trimmed);
     const normalizedQuery = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("en-US");
     const modusResearch = normalizedQuery.includes("modus");
+    const officialModusResultsRequest = isOfficialModusResultsRequest(normalizedQuery);
+    const resolvedDate = this.tryResolveDate(trimmed)
+      ?? (officialModusResultsRequest ? resolveResearchDate("today", { now: this.now(), timeZone: this.timeZone }) : undefined);
     const wantsMatchRows = asksForMatchRows(normalizedQuery);
     const preferAverageTool = /\b(average|mean|atlag)/i.test(normalizedQuery) && !wantsMatchRows;
     const messages: OllamaMessage[] = [
@@ -81,6 +84,8 @@ export class DartsResearchAgent {
     ];
     let toolCallCount = 0;
     let discoveredPlayers: readonly string[] = [];
+    let modusResultsEvidence: ModusResultsSnapshot | undefined;
+    let modusResultsAttempted = false;
     const averageEvidence = new Map<string, AverageEvidence>();
     const completedTools = new Map<string, ExecutedTool>();
     let answerRepairAttempts = 0;
@@ -89,19 +94,51 @@ export class DartsResearchAgent {
     let freshEvidenceRepairAttempts = 0;
 
     try {
+      if (controller.signal.aborted) throw new AgentLimitError("Agent request was cancelled.");
+      if (officialModusResultsRequest && resolvedDate !== undefined) {
+        const call: AgentToolCall = { name: "getModusResults", arguments: { date: resolvedDate.date } };
+        const startedAt = Date.now();
+        const result = await this.toolExecutor.execute(call, controller.signal);
+        this.logger.debug("Agent tool completed.", {
+          tool: call.name,
+          arguments: call.arguments,
+          index: 0,
+          durationMs: Date.now() - startedAt,
+          ok: result.ok,
+          errorCode: result.ok ? undefined : result.error.code,
+        });
+        const item: ExecutedTool = { call, result };
+        toolCallCount = 1;
+        modusResultsAttempted = true;
+        completedTools.set(toolCallSignature(call), item);
+        this.collectEvidence(
+          item,
+          averageEvidence,
+          (players) => { discoveredPlayers = players; },
+          (snapshot) => { modusResultsEvidence = snapshot; },
+        );
+        messages.push(
+          { role: "assistant", content: "", tool_calls: [toOllamaToolCall(call)] },
+          { role: "tool", tool_name: call.name, content: JSON.stringify(result) },
+        );
+      }
+
       for (let iteration = 1; iteration <= this.maxIterations; iteration += 1) {
         if (controller.signal.aborted) throw new AgentLimitError(`Agent exceeded its ${this.timeoutMs}ms deadline.`);
         const response = await this.client.chat({ model: this.model, messages, tools: AGENT_TOOL_DEFINITIONS }, controller.signal);
         messages.push(response.message);
         const modelCalls = response.message.tool_calls?.map((call) => ({ name: call.function.name, arguments: call.function.arguments })) ?? [];
         const plannedCalls = deduplicateToolCalls(this.planCalls({
-          modelCalls, resolvedDate, modusResearch, preferAverageTool, discoveredPlayers,
+          modelCalls, resolvedDate, modusResearch, officialModusResultsRequest, modusResultsAttempted, preferAverageTool, discoveredPlayers,
           averageEvidence, query: normalizedQuery, modelReturnedFinal: modelCalls.length === 0,
         }));
 
         if (plannedCalls.length === 0) {
           const answer = response.message.content.trim();
           if (answer === "") {
+            if (modusResultsEvidence !== undefined) {
+              return { answer: deterministicModusResultsAnswer(trimmed, modusResultsEvidence), iterations: iteration, toolCalls: toolCallCount, model: this.model };
+            }
             emptyAnswerRepairAttempts += 1;
             if (emptyAnswerRepairAttempts <= 2 && completedTools.size > 0) {
               messages.push({ role: "user", content: "You returned an empty draft after receiving tool evidence. Answer the user's question now from the existing tool results. Do not call any completed tool again and do not invent missing facts." });
@@ -119,6 +156,9 @@ export class DartsResearchAgent {
               continue;
             }
             throw new Error("The model did not use a required tool to verify the factual follow-up.");
+          }
+          if (officialModusResultsRequest && modusResultsEvidence !== undefined && !validateModusResultsAnswer(answer, modusResultsEvidence)) {
+            return { answer: deterministicModusResultsAnswer(trimmed, modusResultsEvidence), iterations: iteration, toolCalls: toolCallCount, model: this.model };
           }
           if (modusResearch && preferAverageTool && discoveredPlayers.length > 0 && !validateEvidenceAnswer(answer, discoveredPlayers, averageEvidence, resolvedDate?.date)) {
             answerRepairAttempts += 1;
@@ -154,18 +194,26 @@ export class DartsResearchAgent {
         messages[messages.length - 1] = { role: "assistant", content: "", tool_calls: plannedCalls.map(toOllamaToolCall) };
         const executed = await mapWithConcurrency(uncachedCalls, this.concurrency, async (call, index): Promise<ExecutedTool> => {
           const startedAt = Date.now();
-          const result = await this.toolExecutor.execute(call);
+          const result = await this.toolExecutor.execute(call, controller.signal);
           this.logger.debug("Agent tool completed.", {
             tool: call.name, arguments: call.arguments, index, durationMs: Date.now() - startedAt,
             ok: result.ok, errorCode: result.ok ? undefined : result.error.code,
           });
           return { call, result };
         });
-        for (const item of executed) completedTools.set(toolCallSignature(item.call), item);
+        for (const item of executed) {
+          completedTools.set(toolCallSignature(item.call), item);
+          if (item.call.name === "getModusResults") modusResultsAttempted = true;
+        }
         for (const call of plannedCalls) {
           const item = completedTools.get(toolCallSignature(call));
           if (item === undefined) throw new Error(`No result was recorded for tool ${call.name}.`);
-          this.collectEvidence(item, averageEvidence, (players) => { discoveredPlayers = players; });
+          this.collectEvidence(
+            item,
+            averageEvidence,
+            (players) => { discoveredPlayers = players; },
+            (snapshot) => { modusResultsEvidence = snapshot; },
+          );
           messages.push({ role: "tool", tool_name: item.call.name, content: JSON.stringify(item.result) });
         }
         if (uncachedCalls.length < plannedCalls.length) {
@@ -189,6 +237,8 @@ export class DartsResearchAgent {
     modelCalls: readonly AgentToolCall[];
     resolvedDate: ResolvedDate | undefined;
     modusResearch: boolean;
+    officialModusResultsRequest: boolean;
+    modusResultsAttempted: boolean;
     preferAverageTool: boolean;
     discoveredPlayers: readonly string[];
     averageEvidence: ReadonlyMap<string, AverageEvidence>;
@@ -196,6 +246,12 @@ export class DartsResearchAgent {
     modelReturnedFinal: boolean;
   }): readonly AgentToolCall[] {
     const guarded = input.modelCalls.map((call) => this.guardToolCall(call, input.resolvedDate, input.preferAverageTool));
+    if (input.officialModusResultsRequest) {
+      if (!input.modusResultsAttempted && input.resolvedDate !== undefined) {
+        return [{ name: "getModusResults", arguments: { date: input.resolvedDate.date } }];
+      }
+      return guarded.filter((call) => call.name !== "getModusResults" && call.name !== "getModusPlayers" && call.name !== "getPlayerMatches" && call.name !== "getPlayerMatchAverage");
+    }
     if (!input.modusResearch) return guarded;
     if (input.discoveredPlayers.length === 0) {
       return guarded.filter((call) => call.name !== "getPlayerMatches" && call.name !== "getPlayerMatchAverage");
@@ -210,7 +266,17 @@ export class DartsResearchAgent {
     return guarded.filter((call) => call.name !== "getPlayerMatches" && call.name !== "getPlayerMatchAverage" && call.name !== "getModusPlayers");
   }
 
-  private collectEvidence(item: ExecutedTool, averageEvidence: Map<string, AverageEvidence>, setPlayers: (players: readonly string[]) => void): void {
+  private collectEvidence(
+    item: ExecutedTool,
+    averageEvidence: Map<string, AverageEvidence>,
+    setPlayers: (players: readonly string[]) => void,
+    setModusResults: (snapshot: ModusResultsSnapshot) => void,
+  ): void {
+    if (item.call.name === "getModusResults" && item.result.ok) {
+      const parsed = ModusResultsSnapshotSchema.safeParse(item.result.data);
+      if (parsed.success) setModusResults(parsed.data);
+      return;
+    }
     if (item.call.name === "getModusPlayers" && item.result.ok) {
       const parsed = ModusPlayersResultSchema.safeParse(item.result.data);
       if (parsed.success) setPlayers(parsed.data.players.map((player) => player.name));
@@ -235,7 +301,7 @@ export class DartsResearchAgent {
   }
   private guardToolCall(call: AgentToolCall, resolvedDate: ResolvedDate | undefined, preferAverageTool: boolean): AgentToolCall {
     if (call.name === "getPlayerMatches" && preferAverageTool) return { name: "getPlayerMatchAverage", arguments: call.arguments };
-    if (call.name !== "getModusPlayers" || resolvedDate === undefined) return call;
+    if ((call.name !== "getModusPlayers" && call.name !== "getModusResults") || resolvedDate === undefined) return call;
     return { name: call.name, arguments: { date: resolvedDate.date } };
   }
   private systemPrompt(resolvedDate: ResolvedDate | undefined): string {
@@ -246,7 +312,9 @@ export class DartsResearchAgent {
       "Never invent players, matches, averages, dates, or unavailable results. Never calculate averages yourself.",
       "A successful tool result is authoritative. Never repeat an identical tool call. After all required results arrive, answer instead of calling the same tools again.",
       "When the user asks to see match rows and an average, call getPlayerMatches once because it returns both the rows and meanMatchAverage.",
-      "For relative dates call resolveDate first. Then call getModusPlayers. Use only returned players and call getPlayerMatchAverage for each requested average.",
+      "For current, today, or latest MODUS matches, results, or averages, call getModusResults once. It is the authoritative official MODUS source for scores, per-match averages, and cumulative weekly averages.",
+      "Never substitute DartsOrakel last-N history for official MODUS results. DartsOrakel remains the source for PDC matches and explicitly requested cross-event player history.",
+      "For MODUS fixture-only questions outside the official current-day feed, call getModusPlayers. Use getPlayerMatchAverage only when the user explicitly asks for DartsOrakel last-N form.",
       "Put all independent player calls in one parallel batch. Preserve tool errors as explicit unavailable rows.",
       "Language rule: use only the latest user message to choose the response language. Answer an English message entirely in English and a Hungarian message entirely in Hungarian.",
       "Use a compact table when it helps. State the ISO date when relevant, actual sample size, source limitations, and partial failures.",
@@ -293,15 +361,85 @@ function deterministicAverageAnswer(query: string, evidence: readonly AverageEvi
     : `| ${item.player} | ${item.matchCount} | ${item.average.toFixed(2)} | ${hungarian ? "Rendben" : "OK"} |`);
   return `${heading}\n\n${columns}\n${rows.join("\n")}`;
 }
+function validateModusResultsAnswer(answer: string, evidence: ModusResultsSnapshot): boolean {
+  if (!answer.includes(evidence.date)) return false;
+  const lines = answer.split(/\r?\n/).map((line) => normalizePlayerName(line));
+  const hasEveryMatchExactlyOnce = evidence.matches.every((match) => lines.filter((line) => {
+    if (!line.includes(normalizePlayerName(match.home.name)) || !line.includes(normalizePlayerName(match.away.name))) return false;
+    if (match.home.score !== null && !line.includes(String(match.home.score))) return false;
+    if (match.away.score !== null && !line.includes(String(match.away.score))) return false;
+    if (match.home.average !== null && !containsFormattedNumber(line, match.home.average)) return false;
+    return match.away.average === null || containsFormattedNumber(line, match.away.average);
+  }).length === 1);
+  if (!hasEveryMatchExactlyOnce) return false;
+  const hasEveryWeekAverage = evidence.weekAverages.every((item) => lines.some((line) =>
+    line.includes(normalizePlayerName(item.player))
+      && line.includes(String(item.played))
+      && line.includes(String(item.darts))
+      && containsFormattedNumber(line, item.average),
+  ));
+  return hasEveryWeekAverage
+    && answer.includes(evidence.generatedAt)
+    && answer.includes(evidence.source.dailyFeedUrl)
+    && answer.includes(evidence.source.weekAveragesUrl);
+}
+function deterministicModusResultsAnswer(query: string, evidence: ModusResultsSnapshot): string {
+  const hungarian = /[áéíóöőúüű]|\b(mai|meccs|átlag|eredmény)/i.test(query);
+  const title = hungarian ? `Hivatalos MODUS Super Series eredmények — ${evidence.date}` : `Official MODUS Super Series results — ${evidence.date}`;
+  const context = `${evidence.context.seriesName} · ${evidence.context.weekName} · ${evidence.context.group}`;
+  const matchHeader = hungarian
+    ? "| # | Állapot | 1. játékos | Eredmény | Meccsátlag | 2. játékos | Meccsátlag |\n|---:|---|---|---:|---:|---|---:|"
+    : "| # | Status | Player 1 | Score | Match avg | Player 2 | Match avg |\n|---:|---|---|---:|---:|---|---:|";
+  const matchRows = evidence.matches.map((match) => `| ${match.matchNumber} | ${match.status} | ${match.home.name} | ${formatScore(match.home.score, match.away.score)} | ${formatAverage(match.home.average)} | ${match.away.name} | ${formatAverage(match.away.average)} |`);
+  const averageTitle = hungarian ? "Heti összesített hivatalos átlagok" : "Official cumulative weekly averages";
+  const averageHeader = hungarian
+    ? "| Hely | Játékos | Meccsek | Dobások | Átlag |\n|---:|---|---:|---:|---:|"
+    : "| Pos | Player | Played | Darts | Average |\n|---:|---|---:|---:|---:|";
+  const averageRows = evidence.weekAverages.map((item) => `| ${item.position} | ${item.player} | ${item.played} | ${item.darts} | ${item.average.toFixed(2)} |`);
+  const freshnessLabel = hungarian ? "Frissítve" : "Feed generated";
+  const sourceLabel = hungarian ? "Források" : "Sources";
+  const warnings = evidence.warnings.length === 0 ? "" : `\n\n${hungarian ? "Figyelmeztetések" : "Warnings"}: ${evidence.warnings.join(" ")}`;
+  return [
+    title,
+    context,
+    "",
+    matchHeader,
+    ...matchRows,
+    "",
+    averageTitle,
+    averageHeader,
+    ...averageRows,
+    "",
+    `${freshnessLabel}: ${evidence.generatedAt}`,
+    `${sourceLabel}: ${evidence.source.dailyFeedUrl} · ${evidence.source.weekAveragesUrl}`,
+  ].join("\n") + warnings;
+}
+function isOfficialModusResultsRequest(query: string): boolean {
+  if (!query.includes("modus")) return false;
+  const officialScope = /\b(today|current|latest|results?|scores?|all matches|match averages?|player averages?|overall averages?|cumulative|accumulative|weekly|mai|legfrissebb|eredmeny\w*|osszes meccs|meccsatlag\w*|heti atlag\w*)\b/i.test(query);
+  if (!officialScope) return false;
+  const explicitLastNHistory = /\b(last|utolso)\s+\d{1,3}\s+(?:match(?:es)?|meccs\w*)\b/i.test(query);
+  const explicitOfficialResults = /\b(today|current|latest|results?|all matches|overall|cumulative|accumulative|mai|legfrissebb|eredmeny\w*|osszes meccs)\b/i.test(query);
+  return !explicitLastNHistory || explicitOfficialResults;
+}
+function containsFormattedNumber(line: string, value: number): boolean {
+  return line.includes(value.toFixed(2)) || line.includes(String(value));
+}
+function formatScore(home: number | null, away: number | null): string {
+  return home === null || away === null ? "—" : `${home}–${away}`;
+}
+function formatAverage(value: number | null): string {
+  return value === null ? "—" : value.toFixed(2);
+}
 function asksForMatchRows(query: string): boolean {
   const asksToList = /\b(show|list|display|return|give|mutasd|sorold|jelenitsd)\b/i.test(query);
-  const mentionsMatches = /\b(matches?|games?|meccs\w*)\b/i.test(query);
+  const mentionsMatches = /\b(match(?:es)?|games?|meccs\w*)\b/i.test(query);
   return asksToList && mentionsMatches;
 }
 function needsFreshEvidence(query: string): boolean {
   const conceptual = /\b(explain|define|how (?:does|do|is|are)|what (?:is|are) (?:a|an)|magyarazd|mit jelent)\b/i.test(query);
   if (conceptual) return false;
-  return /\b(most recent|latest|last|opponent|score|result|average|mean|matches?|fixtures?|plays?|ranking|ranked|modus|legutobbi|ellenfel|eredmeny|atlag|meccs\w*)\b/i.test(query);
+  return /\b(most recent|latest|last|opponent|score|result|average|mean|match(?:es)?|fixtures?|plays?|ranking|ranked|modus|legutobbi|ellenfel|eredmeny|atlag|meccs\w*)\b/i.test(query);
 }
 function deduplicateToolCalls(calls: readonly AgentToolCall[]): readonly AgentToolCall[] {
   const seen = new Set<string>();
