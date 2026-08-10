@@ -72,7 +72,8 @@ export class DartsResearchAgent {
     const resolvedDate = this.tryResolveDate(trimmed);
     const normalizedQuery = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("en-US");
     const modusResearch = normalizedQuery.includes("modus");
-    const preferAverageTool = /\b(average|mean|atlag)/i.test(normalizedQuery);
+    const wantsMatchRows = asksForMatchRows(normalizedQuery);
+    const preferAverageTool = /\b(average|mean|atlag)/i.test(normalizedQuery) && !wantsMatchRows;
     const messages: OllamaMessage[] = [
       { role: "system", content: this.systemPrompt(resolvedDate) },
       ...history,
@@ -81,7 +82,11 @@ export class DartsResearchAgent {
     let toolCallCount = 0;
     let discoveredPlayers: readonly string[] = [];
     const averageEvidence = new Map<string, AverageEvidence>();
+    const completedTools = new Map<string, ExecutedTool>();
     let answerRepairAttempts = 0;
+    let emptyAnswerRepairAttempts = 0;
+    let duplicateToolRepairAttempts = 0;
+    let freshEvidenceRepairAttempts = 0;
 
     try {
       for (let iteration = 1; iteration <= this.maxIterations; iteration += 1) {
@@ -89,14 +94,32 @@ export class DartsResearchAgent {
         const response = await this.client.chat({ model: this.model, messages, tools: AGENT_TOOL_DEFINITIONS }, controller.signal);
         messages.push(response.message);
         const modelCalls = response.message.tool_calls?.map((call) => ({ name: call.function.name, arguments: call.function.arguments })) ?? [];
-        const plannedCalls = this.planCalls({
+        const plannedCalls = deduplicateToolCalls(this.planCalls({
           modelCalls, resolvedDate, modusResearch, preferAverageTool, discoveredPlayers,
           averageEvidence, query: normalizedQuery, modelReturnedFinal: modelCalls.length === 0,
-        });
+        }));
 
         if (plannedCalls.length === 0) {
           const answer = response.message.content.trim();
-          if (answer === "") throw new Error("The model returned neither executable tool calls nor a final answer.");
+          if (answer === "") {
+            emptyAnswerRepairAttempts += 1;
+            if (emptyAnswerRepairAttempts <= 2 && completedTools.size > 0) {
+              messages.push({ role: "user", content: "You returned an empty draft after receiving tool evidence. Answer the user's question now from the existing tool results. Do not call any completed tool again and do not invent missing facts." });
+              continue;
+            }
+            if (averageEvidence.size > 0) {
+              return { answer: deterministicAverageAnswer(trimmed, [...averageEvidence.values()]), iterations: iteration, toolCalls: toolCallCount, model: this.model };
+            }
+            throw new Error("The model returned neither executable tool calls nor a final answer after answer repair.");
+          }
+          if (toolCallCount === 0 && history.length > 0 && needsFreshEvidence(normalizedQuery)) {
+            freshEvidenceRepairAttempts += 1;
+            if (freshEvidenceRepairAttempts <= 2) {
+              messages.push({ role: "user", content: "This is a factual follow-up about a player, match, opponent, result, score, fixture, or statistic. Prior assistant prose is context, not evidence. Resolve the referenced entity from the conversation, call the appropriate tool to revalidate the fact, and then answer from the new tool result." });
+              continue;
+            }
+            throw new Error("The model did not use a required tool to verify the factual follow-up.");
+          }
           if (modusResearch && preferAverageTool && discoveredPlayers.length > 0 && !validateEvidenceAnswer(answer, discoveredPlayers, averageEvidence, resolvedDate?.date)) {
             answerRepairAttempts += 1;
             if (answerRepairAttempts >= 2) {
@@ -108,10 +131,28 @@ export class DartsResearchAgent {
           return { answer, iterations: iteration, toolCalls: toolCallCount, model: this.model };
         }
 
-        if (toolCallCount + plannedCalls.length > this.maxToolCalls) throw new AgentLimitError(`Agent exceeded the maximum of ${this.maxToolCalls} tool calls.`);
-        toolCallCount += plannedCalls.length;
+        const uncachedCalls = plannedCalls.filter((call) => !completedTools.has(toolCallSignature(call)));
+        if (uncachedCalls.length === 0) {
+          duplicateToolRepairAttempts += 1;
+          messages[messages.length - 1] = { role: "assistant", content: "", tool_calls: plannedCalls.map(toOllamaToolCall) };
+          for (const call of plannedCalls) {
+            const cached = completedTools.get(toolCallSignature(call));
+            if (cached !== undefined) messages.push({ role: "tool", tool_name: call.name, content: JSON.stringify(cached.result) });
+          }
+          if (duplicateToolRepairAttempts <= 2) {
+            messages.push({ role: "user", content: "Every requested tool call above was already completed and the existing results were returned again. Do not repeat them. Answer the user's question now from that evidence." });
+            continue;
+          }
+          if (averageEvidence.size > 0) {
+            return { answer: deterministicAverageAnswer(trimmed, [...averageEvidence.values()]), iterations: iteration, toolCalls: toolCallCount, model: this.model };
+          }
+          throw new AgentLimitError("The model repeatedly requested identical completed tool calls instead of answering.");
+        }
+
+        if (toolCallCount + uncachedCalls.length > this.maxToolCalls) throw new AgentLimitError(`Agent exceeded the maximum of ${this.maxToolCalls} tool calls.`);
+        toolCallCount += uncachedCalls.length;
         messages[messages.length - 1] = { role: "assistant", content: "", tool_calls: plannedCalls.map(toOllamaToolCall) };
-        const executed = await mapWithConcurrency(plannedCalls, this.concurrency, async (call, index): Promise<ExecutedTool> => {
+        const executed = await mapWithConcurrency(uncachedCalls, this.concurrency, async (call, index): Promise<ExecutedTool> => {
           const startedAt = Date.now();
           const result = await this.toolExecutor.execute(call);
           this.logger.debug("Agent tool completed.", {
@@ -120,9 +161,15 @@ export class DartsResearchAgent {
           });
           return { call, result };
         });
-        for (const item of executed) {
+        for (const item of executed) completedTools.set(toolCallSignature(item.call), item);
+        for (const call of plannedCalls) {
+          const item = completedTools.get(toolCallSignature(call));
+          if (item === undefined) throw new Error(`No result was recorded for tool ${call.name}.`);
           this.collectEvidence(item, averageEvidence, (players) => { discoveredPlayers = players; });
           messages.push({ role: "tool", tool_name: item.call.name, content: JSON.stringify(item.result) });
+        }
+        if (uncachedCalls.length < plannedCalls.length) {
+          messages.push({ role: "user", content: "Some requested tool calls were already completed, so their authoritative cached results were reused. Do not request them again; continue with new work or answer now." });
         }
       }
       throw new AgentLimitError(`Agent exceeded the maximum of ${this.maxIterations} iterations.`);
@@ -195,10 +242,14 @@ export class DartsResearchAgent {
     return [
       "You are a local darts research orchestrator. Use tools for every date, fixture, match, and numeric fact.",
       "Use the supplied conversation history to understand follow-up questions, but never treat prior assistant text as verified evidence.",
+      "For factual follow-ups, resolve pronouns from history and call tools again in the current run before answering.",
       "Never invent players, matches, averages, dates, or unavailable results. Never calculate averages yourself.",
+      "A successful tool result is authoritative. Never repeat an identical tool call. After all required results arrive, answer instead of calling the same tools again.",
+      "When the user asks to see match rows and an average, call getPlayerMatches once because it returns both the rows and meanMatchAverage.",
       "For relative dates call resolveDate first. Then call getModusPlayers. Use only returned players and call getPlayerMatchAverage for each requested average.",
       "Put all independent player calls in one parallel batch. Preserve tool errors as explicit unavailable rows.",
-      "Answer in the user's language with a compact table. State the ISO date, actual sample size, source limitations, and partial failures.",
+      "Language rule: use only the latest user message to choose the response language. Answer an English message entirely in English and a Hungarian message entirely in Hungarian.",
+      "Use a compact table when it helps. State the ISO date when relevant, actual sample size, source limitations, and partial failures.",
       `Current instant: ${this.now().toISOString()}. Time zone: ${this.timeZone}.`,
       resolvedDate === undefined ? "No deterministic date was pre-resolved." : `Deterministic date guard: every date reference in this single-date query resolves to ${resolvedDate.date}. Use exactly this date for fixture tools.`,
     ].join("\n");
@@ -232,6 +283,48 @@ function deterministicEvidenceAnswer(query: string, date: string | undefined, pl
     return `| ${player} | ${item.matchCount} | ${item.average.toFixed(2)} | ${hungarian ? "Rendben" : "OK"} |`;
   });
   return `${header}\n\n${columns}\n${rows.join("\n")}`;
+}
+function deterministicAverageAnswer(query: string, evidence: readonly AverageEvidence[]): string {
+  const hungarian = /[áéíóöőúüű]|\b(keresd|játékos|meccs|átlag)/i.test(query);
+  const heading = hungarian ? "Ellenőrzött meccsátlagok" : "Verified match averages";
+  const columns = hungarian ? "| Játékos | Meccsek | Átlag | Állapot |\n|---|---:|---:|---|" : "| Player | Matches | Average | Status |\n|---|---:|---:|---|";
+  const rows = evidence.map((item) => item.average === null
+    ? `| ${item.player} | ${item.matchCount} | — | ${item.error ?? (hungarian ? "Nem elérhető" : "Unavailable")} |`
+    : `| ${item.player} | ${item.matchCount} | ${item.average.toFixed(2)} | ${hungarian ? "Rendben" : "OK"} |`);
+  return `${heading}\n\n${columns}\n${rows.join("\n")}`;
+}
+function asksForMatchRows(query: string): boolean {
+  const asksToList = /\b(show|list|display|return|give|mutasd|sorold|jelenitsd)\b/i.test(query);
+  const mentionsMatches = /\b(matches?|games?|meccs\w*)\b/i.test(query);
+  return asksToList && mentionsMatches;
+}
+function needsFreshEvidence(query: string): boolean {
+  const conceptual = /\b(explain|define|how (?:does|do|is|are)|what (?:is|are) (?:a|an)|magyarazd|mit jelent)\b/i.test(query);
+  if (conceptual) return false;
+  return /\b(most recent|latest|last|opponent|score|result|average|mean|matches?|fixtures?|plays?|ranking|ranked|modus|legutobbi|ellenfel|eredmeny|atlag|meccs\w*)\b/i.test(query);
+}
+function deduplicateToolCalls(calls: readonly AgentToolCall[]): readonly AgentToolCall[] {
+  const seen = new Set<string>();
+  return calls.filter((call) => {
+    const signature = toolCallSignature(call);
+    if (seen.has(signature)) return false;
+    seen.add(signature);
+    return true;
+  });
+}
+function toolCallSignature(call: AgentToolCall): string {
+  return `${call.name}:${stableStringify(call.arguments)}`;
+}
+function stableStringify(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string" || typeof value === "boolean" || typeof value === "number") return JSON.stringify(value);
+  if (typeof value === "undefined") return "undefined";
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  if (typeof value === "object") {
+    const record = value as Readonly<Record<string, unknown>>;
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(String(value));
 }
 function toOllamaToolCall(call: AgentToolCall): OllamaToolCall { return { function: { name: call.name, arguments: call.arguments } }; }
 function readStringProperty(value: unknown, key: string): string | undefined {

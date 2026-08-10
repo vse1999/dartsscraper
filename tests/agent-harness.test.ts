@@ -25,7 +25,7 @@ describe("bounded agent harness", () => {
   it("defaults to Gemma 4 and includes validated follow-up history", async () => {
     const client = new ScriptedClient([finalResponse]);
     const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => ({ ok: true, data: null }) } });
-    const result = await agent.run("What about his average?", {
+    const result = await agent.run("Thank me for the context.", {
       history: [
         { role: "user", content: "Show Rob Cross's latest matches." },
         { role: "assistant", content: "Here are the matches." },
@@ -38,7 +38,7 @@ describe("bounded agent harness", () => {
         { role: "system" },
         { role: "user", content: "Show Rob Cross's latest matches." },
         { role: "assistant", content: "Here are the matches." },
-        { role: "user", content: "What about his average?" },
+        { role: "user", content: "Thank me for the context." },
       ],
     });
   });
@@ -53,6 +53,68 @@ describe("bounded agent harness", () => {
     const result = await agent.run("research");
     expect(result).toMatchObject({ answer: "Final verified answer", iterations: 2, toolCalls: 6 });
     expect(maximum).toBe(3);
+  });
+  it("deduplicates identical tool calls within a model batch", async () => {
+    const duplicate: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
+      { function: { name: "getPlayerMatchAverage", arguments: { player: "Rob Cross", limit: 3 } } },
+      { function: { name: "getPlayerMatchAverage", arguments: { limit: 3, player: "Rob Cross" } } },
+    ] } };
+    const client = new ScriptedClient([duplicate, finalResponse]);
+    let executions = 0;
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => {
+      executions += 1;
+      return { ok: true, data: { player: "Rob Cross", requestedLimit: 3, matchCount: 3, average: 95.17 } };
+    } } });
+    const result = await agent.run("What is Rob Cross's last 3 match average?");
+    expect(result.toolCalls).toBe(1);
+    expect(executions).toBe(1);
+  });
+  it("reuses completed tool evidence and tells the model to stop repeating calls", async () => {
+    const repeated: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
+      { function: { name: "getPlayerMatchAverage", arguments: { player: "Rob Cross", limit: 3 } } },
+    ] } };
+    const client = new ScriptedClient([repeated, repeated, finalResponse]);
+    let executions = 0;
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => {
+      executions += 1;
+      return { ok: true, data: { player: "Rob Cross", requestedLimit: 3, matchCount: 3, average: 95.17 } };
+    } } });
+    const result = await agent.run("What is Rob Cross's last 3 match average?");
+    expect(result).toMatchObject({ answer: "Final verified answer", toolCalls: 1, iterations: 3 });
+    expect(executions).toBe(1);
+    expect(client.requests[2]?.messages.at(-1)?.content).toContain("already completed");
+  });
+  it("keeps match-row requests on the full match tool even when an average is requested", async () => {
+    const rows: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
+      { function: { name: "getPlayerMatches", arguments: { player: "Rob Cross", limit: 3 } } },
+    ] } };
+    const calls: string[] = [];
+    const agent = new DartsResearchAgent({ client: new ScriptedClient([rows, finalResponse]), toolExecutor: { execute: async (call) => {
+      calls.push(call.name);
+      return { ok: true, data: { player: { name: "Rob Cross" }, matches: [], meanMatchAverage: 95.17 } };
+    } } });
+    await agent.run("Show Rob Cross's last 3 completed matches and calculate the mean average.");
+    expect(calls).toEqual(["getPlayerMatches"]);
+  });
+  it("requires fresh tool evidence for factual follow-up questions", async () => {
+    const toolCall: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
+      { function: { name: "getPlayerMatches", arguments: { player: "Rob Cross", limit: 1 } } },
+    ] } };
+    const client = new ScriptedClient([{ message: { role: "assistant", content: "Unsupported history answer" } }, toolCall, finalResponse]);
+    let executions = 0;
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => {
+      executions += 1;
+      return { ok: true, data: { player: { name: "Rob Cross" }, matches: [], meanMatchAverage: 93.82 } };
+    } } });
+    const result = await agent.run("Who was his most recent opponent, and what was that match average?", {
+      history: [
+        { role: "user", content: "Show Rob Cross's last 3 matches." },
+        { role: "assistant", content: "Here are Rob Cross's matches." },
+      ],
+    });
+    expect(result.answer).toBe("Final verified answer");
+    expect(executions).toBe(1);
+    expect(client.requests[1]?.messages.at(-1)?.content).toContain("Prior assistant prose is context, not evidence");
   });
   it("keeps partial failures in tool messages for final formatting", async () => {
     const client = new ScriptedClient([toolResponse(2), finalResponse]);
