@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head><title>MODUS Super Series Results</title></head>
+  <body>
+    <main id="results">
+      <select id="seriesSelect" name="series_id">
+        <option value="25">Series 14</option>
+        <option value="26" selected>Series 15</option>
+      </select>
+      <select id="weekSelect" name="week_id">
+        <option value="191">Week 1</option>
+        <option value="192" selected>Week 2</option>
+      </select>
+      <div class="group-tabs">
+        <button class="active" type="button">Group A</button>
+        <button type="button">Group B</button>
+        <button type="button" onclick="location.href='/week-averages.php?series_id=26&amp;week_id=192'">Averages</button>
+      </div>
+      <article class="fixture-card">
+        <div class="player-row"><span class="score">4</span>Jack Drayton</div>
+        <div class="player-row"><span class="score">2</span>Ryan Branley</div>
+      </article>
+      <article class="fixture-card">
+        <div class="player-row"><span class="score"></span>George Cressey</div>
+        <div class="player-row"><span class="score"></span>Berry Van Peer</div>
+      </article>
+      <article class="fixture-card">
+        <div class="player-row"><span class="score"></span>Michael Huntley</div>
+        <div class="player-row"><span class="score"></span>Lesic Zvonimir</div>
+      </article>
+    </main>
+  </body>
+</html>

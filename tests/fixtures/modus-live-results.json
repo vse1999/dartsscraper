@@ -1,0 +1,71 @@
+{
+  "generated_at": "2026-08-10T10:12:00Z",
+  "date": "2026-08-10",
+  "summaries": [
+    {
+      "sport_event": {
+        "id": "modus-26-192-a-001",
+        "start_time": "2026-08-10T10:00:00+01:00",
+        "competitors": [
+          { "id": "competitor-102", "name": "Branley, Ryan", "qualifier": "away" },
+          { "id": "competitor-101", "name": "Drayton, Jack", "qualifier": "home" }
+        ]
+      },
+      "sport_event_status": {
+        "status": "closed",
+        "match_status": "finished",
+        "home_score": 4,
+        "away_score": 2
+      },
+      "statistics": {
+        "totals": {
+          "competitors": [
+            { "id": "competitor-102", "statistics": { "average_3_darts": 81.0 } },
+            { "qualifier": "home", "statistics": { "average_3_darts": 91.58 } }
+          ]
+        }
+      }
+    },
+    {
+      "sport_event": {
+        "id": "modus-26-192-a-002",
+        "start_time": "2026-08-10T10:30:00+01:00",
+        "competitors": [
+          { "id": "competitor-104", "name": "van Peer, Berry", "qualifier": "away" },
+          { "id": "competitor-103", "name": "Cressey, George", "qualifier": "home" }
+        ]
+      },
+      "sport_event_status": {
+        "status": "live",
+        "match_status": "in progress",
+        "home_score": null,
+        "away_score": null
+      },
+      "statistics": {
+        "totals": {
+          "competitors": [
+            { "id": "competitor-103", "qualifier": "home", "statistics": { "average_3_darts": null } },
+            { "id": "competitor-104", "qualifier": "away", "statistics": null }
+          ]
+        }
+      }
+    },
+    {
+      "sport_event": {
+        "id": "modus-26-192-a-003",
+        "start_time": "2026-08-10T11:00:00+01:00",
+        "competitors": [
+          { "id": "competitor-106", "name": "Zvonimir, Lesic", "qualifier": "away" },
+          { "id": "competitor-105", "name": "Huntley, Michael", "qualifier": "home" }
+        ]
+      },
+      "sport_event_status": {
+        "status": "scheduled",
+        "match_status": "not started",
+        "home_score": null,
+        "away_score": null
+      },
+      "statistics": null
+    }
+  ]
+}

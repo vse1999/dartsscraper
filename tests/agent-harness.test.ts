@@ -3,6 +3,7 @@ import { AgentLimitError, OllamaRequestError } from "../src/errors.js";
 import { DartsResearchAgent } from "../src/agent/harness.js";
 import { OllamaClient, type OllamaChatClient, type OllamaChatRequest, type OllamaChatResponse } from "../src/agent/ollama-client.js";
 import type { AgentToolResult } from "../src/agent/tools.js";
+import type { ModusResultsSnapshot } from "../src/modus/results-schemas.js";
 
 class ScriptedClient implements OllamaChatClient {
   public readonly requests: OllamaChatRequest[] = [];
@@ -20,6 +21,35 @@ function toolResponse(count: number): OllamaChatResponse {
   return { message: { role: "assistant", content: "", tool_calls: Array.from({ length: count }, (_value, index) => ({ function: { name: "getPlayerMatchAverage", arguments: { player: `Player ${index}`, limit: 10 } } })) } };
 }
 const finalResponse: OllamaChatResponse = { message: { role: "assistant", content: "Final verified answer" } };
+const officialModusSnapshot: ModusResultsSnapshot = {
+  event: "MODUS Super Series",
+  date: "2026-08-10",
+  generatedAt: "2026-08-10T12:00:00Z",
+  fetchedAt: "2026-08-10T12:00:01Z",
+  context: { seriesId: "26", seriesName: "Series 15", weekId: "192", weekName: "Week 2", group: "Group A" },
+  matches: [
+    {
+      id: "sr:sport_event:1", matchNumber: 1, startTime: "2026-08-10T08:38:00Z", status: "completed",
+      home: { name: "Jack Drayton", score: 4, average: 91.58 },
+      away: { name: "Ryan Branley", score: 2, average: 81 },
+    },
+    {
+      id: "sr:sport_event:2", matchNumber: 2, startTime: "2026-08-10T09:00:00Z", status: "scheduled",
+      home: { name: "George Cressey", score: null, average: null },
+      away: { name: "Berry Van Peer", score: null, average: null },
+    },
+  ],
+  weekAverages: [
+    { position: 1, player: "George Cressey", played: 5, points: 11_472, darts: 386, average: 89.16 },
+    { position: 2, player: "Jack Drayton", played: 5, points: 13_139, darts: 447, average: 88.18 },
+  ],
+  source: {
+    dailyFeedUrl: "https://modussuperseries.com/live-scores-json.php",
+    resultsUrl: "https://modussuperseries.com/results.php",
+    weekAveragesUrl: "https://modussuperseries.com/week-averages.php?series_id=26&week_id=192",
+  },
+  warnings: [],
+};
 
 describe("bounded agent harness", () => {
   it("defaults to Gemma 4 and includes validated follow-up history", async () => {
@@ -136,6 +166,49 @@ describe("bounded agent harness", () => {
   it("stops at the maximum iteration count", async () => {
     const agent = new DartsResearchAgent({ client: new ScriptedClient([toolResponse(1)]), maxIterations: 1, toolExecutor: { execute: async () => ({ ok: true, data: null }) } });
     await expect(agent.run("research")).rejects.toThrow("maximum of 1 iterations");
+  });
+  it("forces the official bulk MODUS source and deterministically renders complete evidence", async () => {
+    const invalidDraft: OllamaChatResponse = { message: { role: "assistant", content: "Old DartsOrakel averages only" } };
+    const client = new ScriptedClient([invalidDraft, invalidDraft, invalidDraft]);
+    const calls: { name: string; arguments: unknown }[] = [];
+    const signals: AbortSignal[] = [];
+    const agent = new DartsResearchAgent({
+      client,
+      now: () => new Date("2026-08-10T12:00:00Z"),
+      toolExecutor: { execute: async (call, signal): Promise<AgentToolResult> => {
+        calls.push(call);
+        if (signal !== undefined) signals.push(signal);
+        return { ok: true, data: officialModusSnapshot };
+      } },
+    });
+    const result = await agent.run("today darts modus all matches and player averages");
+    expect(calls).toEqual([{ name: "getModusResults", arguments: { date: "2026-08-10" } }]);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    expect(result.toolCalls).toBe(1);
+    expect(result.answer).toContain("Official MODUS Super Series results — 2026-08-10");
+    expect(result.answer).toContain("| 1 | completed | Jack Drayton | 4–2 | 91.58 | Ryan Branley | 81.00 |");
+    expect(result.answer).toContain("| 1 | George Cressey | 5 | 386 | 89.16 |");
+    expect(result.answer).toContain("https://modussuperseries.com/live-scores-json.php");
+  });
+  it("maps an undated latest MODUS request to the current local date", async () => {
+    const client = new ScriptedClient([
+      { message: { role: "assistant", content: "", tool_calls: [{ function: { name: "getModusPlayers", arguments: { date: "2025-01-01" } } }] } },
+      { message: { role: "assistant", content: "Official MODUS 2026-08-10\nJack Drayton | Ryan Branley | 4–2 | 91.58 | 81.00\nGeorge Cressey | Berry Van Peer\nGeorge Cressey | 5 | 386 | 89.16\nJack Drayton | 5 | 447 | 88.18\n2026-08-10T12:00:00Z\nhttps://modussuperseries.com/live-scores-json.php\nhttps://modussuperseries.com/week-averages.php?series_id=26&week_id=192" } },
+    ]);
+    const calls: { name: string; arguments: unknown }[] = [];
+    const agent = new DartsResearchAgent({
+      client,
+      now: () => new Date("2026-08-10T12:00:00Z"),
+      toolExecutor: { execute: async (call): Promise<AgentToolResult> => {
+        calls.push(call);
+        return { ok: true, data: officialModusSnapshot };
+      } },
+    });
+
+    await agent.run("latest MODUS results and overall averages");
+
+    expect(calls).toEqual([{ name: "getModusResults", arguments: { date: "2026-08-10" } }]);
   });
   it("guards the resolved date and replaces hallucinated players with discovered MODUS players", async () => {
     const discovery: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [{ function: { name: "getModusPlayers", arguments: { date: "2026-08-08" } } }] } };

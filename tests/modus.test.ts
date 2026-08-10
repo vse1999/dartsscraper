@@ -42,15 +42,16 @@ describe("MODUS discovery", () => {
     const official = new OfficialModusSource({ fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }) });
     await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["Ryan Branley"]);
   });  it("falls back, deduplicates, and caches a successful provider", async () => {
-    const writes: unknown[] = [];
+    const writes: { key: string; value: unknown; ttlMs: number }[] = [];
     const service = new ModusPlayersService({
       sources: [source("official", []), source("fallback", ["Jack Drayton", " jack   drayton ", "George Cressey"])],
-      cache: { get: async () => null, set: async (_key, value) => { writes.push(value); } },
+      cache: { get: async () => null, set: async (key, value, ttlMs) => { writes.push({ key, value, ttlMs }); } },
+      now: () => new Date("2026-08-10T12:00:00Z"),
     });
     const result = await service.getModusPlayers("2026-08-10");
     expect(result.players.map((player) => player.name)).toEqual(["Jack Drayton", "George Cressey"]);
     expect(result.players.every((player) => player.confidence === 1)).toBe(true);
-    expect(writes).toHaveLength(1);
+    expect(writes).toMatchObject([{ key: "modus-players-v2-2026-08-10", ttlMs: 30_000 }]);
   });
   it("reports all unavailable sources", async () => {
     const service = new ModusPlayersService({ sources: [source("official", new Error("offline")), source("fallback", [])] });
