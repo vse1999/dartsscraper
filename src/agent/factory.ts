@@ -6,6 +6,8 @@ import { ConsoleLogger, type LogLevel } from "../logger.js";
 import { DartsNerdModusSource } from "../modus/darts-nerd-source.js";
 import { FixtureNameResolver } from "../modus/fixture-name-resolver.js";
 import { OfficialModusSource } from "../modus/official-source.js";
+import { OfficialModusResultsSource } from "../modus/official-results-source.js";
+import { OfficialModusResultsService } from "../modus/results-service.js";
 import { ModusPlayersService } from "../modus/service.js";
 import { PlayerResolver } from "../player/resolver.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
@@ -26,7 +28,11 @@ export function createDartsResearchAgent(options: CreateAgentOptions = {}): Dart
     sources: [new OfficialModusSource({ resolver: fixtureNameResolver }), new DartsNerdModusSource({ resolver: fixtureNameResolver })],
     cache: new FileCache({ directory: path.join(rootCache, "modus"), logger }), logger,
   });
-  const toolExecutor = new DartsAgentToolExecutor({ modusService, playerMatchesService });
+  const modusResultsService = new OfficialModusResultsService({
+    source: new OfficialModusResultsSource(),
+    cache: new FileCache({ directory: path.join(rootCache, "modus-results"), logger }),
+  });
+  const toolExecutor = new DartsAgentToolExecutor({ modusService, modusResultsService, playerMatchesService });
   return new DartsResearchAgent({
     client: new OllamaClient(options.ollamaBaseUrl === undefined ? {} : { baseUrl: options.ollamaBaseUrl }), toolExecutor,
     model: options.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL, logger,

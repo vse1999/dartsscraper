@@ -68,5 +68,30 @@ export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js
 export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";
 export { FixtureNameResolver } from "./modus/fixture-name-resolver.js";
 export { OfficialModusSource } from "./modus/official-source.js";
+export {
+  OfficialModusResultsSource,
+  OfficialModusResultsSourceError,
+  parseModusResultsContext,
+  parseModusWeekAverages,
+} from "./modus/official-results-source.js";
+export type {
+  OfficialModusResultsSourceOptions,
+  ParsedModusResultsContext,
+} from "./modus/official-results-source.js";
+export { OfficialModusResultsService } from "./modus/results-service.js";
+export type { OfficialModusResultsServiceOptions } from "./modus/results-service.js";
+export {
+  ModusIsoDateTimeSchema,
+  ModusResultsContextSchema,
+  ModusResultsSnapshotSchema,
+} from "./modus/results-schemas.js";
+export type {
+  ModusMatch,
+  ModusMatchPlayer,
+  ModusResultsContext,
+  ModusResultsSnapshot,
+  ModusResultsSource,
+  ModusWeekAverage,
+} from "./modus/results-schemas.js";
 export { ModusPlayersService } from "./modus/service.js";
 export type { ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";

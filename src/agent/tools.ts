@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ModusPlayersService } from "../modus/service.js";
+import type { OfficialModusResultsService } from "../modus/results-service.js";
 import type { PlayerMatchesService } from "../services/player-matches.js";
 import { calculateMatchAverage } from "../services/statistics.js";
 import { resolveResearchDate } from "./date.js";
@@ -15,6 +16,7 @@ export type AgentToolResult =
   | { ok: false; error: { code: AgentToolErrorCode; message: string } };
 export interface DartsAgentToolDependencies {
   modusService: Pick<ModusPlayersService, "getModusPlayers">;
+  modusResultsService?: Pick<OfficialModusResultsService, "getResults">;
   playerMatchesService: Pick<PlayerMatchesService, "getLastMatches">;
   now?: () => Date;
   timeZone?: string;
@@ -23,6 +25,7 @@ export interface DartsAgentToolDependencies {
 export const AGENT_TOOL_DEFINITIONS: readonly Readonly<Record<string, unknown>>[] = [
   { type: "function", function: { name: "resolveDate", description: "Resolve an explicit or relative English/Hungarian date expression to an ISO date in Europe/Budapest.", parameters: { type: "object", additionalProperties: false, required: ["expression"], properties: { expression: { type: "string" } } } } },
   { type: "function", function: { name: "getModusPlayers", description: "Get the confirmed MODUS Super Series players scheduled on an ISO date.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
+  { type: "function", function: { name: "getModusResults", description: "Get the authoritative official MODUS Super Series daily matches, scores, per-match three-dart averages, and cumulative weekly player averages for an ISO date. Use this for current/latest MODUS results instead of DartsOrakel.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
   { type: "function", function: { name: "getPlayerMatches", description: "Get a player's latest completed DartsOrakel matches.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
   { type: "function", function: { name: "getPlayerMatchAverage", description: "Deterministically calculate a player's mean three-dart average over their latest completed matches.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
 ];
@@ -30,7 +33,7 @@ export const AGENT_TOOL_DEFINITIONS: readonly Readonly<Record<string, unknown>>[
 export class DartsAgentToolExecutor {
   private readonly dependencies: DartsAgentToolDependencies;
   public constructor(dependencies: DartsAgentToolDependencies) { this.dependencies = dependencies; }
-  public async execute(call: AgentToolCall): Promise<AgentToolResult> {
+  public async execute(call: AgentToolCall, signal?: AbortSignal): Promise<AgentToolResult> {
     try {
       switch (call.name) {
         case "resolveDate": {
@@ -42,6 +45,11 @@ export class DartsAgentToolExecutor {
         case "getModusPlayers": {
           const args = ModusPlayersArgumentsSchema.parse(normalizeArguments(call.arguments));
           return { ok: true, data: await this.dependencies.modusService.getModusPlayers(args.date) };
+        }
+        case "getModusResults": {
+          const args = ModusPlayersArgumentsSchema.parse(normalizeArguments(call.arguments));
+          if (this.dependencies.modusResultsService === undefined) throw new Error("The official MODUS results service is not configured.");
+          return { ok: true, data: await this.dependencies.modusResultsService.getResults(args.date, signal) };
         }
         case "getPlayerMatches": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
