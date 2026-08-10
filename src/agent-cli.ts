@@ -1,6 +1,8 @@
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { createDartsResearchAgent } from "./agent/factory.js";
+import { DEFAULT_OLLAMA_MODEL } from "./agent/config.js";
+import type { AgentConversationMessage } from "./agent/harness.js";
 
 interface AgentCliArguments { query: string | undefined; debug: boolean; model: string | undefined; }
 async function main(): Promise<void> {
@@ -12,15 +14,18 @@ async function main(): Promise<void> {
     return;
   }
   const readline = createInterface({ input, output });
-  process.stdout.write("Local darts research agent. Type exit to quit.\n");
+  const history: AgentConversationMessage[] = [];
+  process.stdout.write(`Local darts research agent (${args.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL}). Type exit to quit.\n`);
   try {
     while (true) {
       const query = (await readline.question("darts> ")).trim();
       if (query === "exit" || query === "quit") break;
       if (query === "") continue;
       try {
-        const result = await agent.run(query);
+        const result = await agent.run(query, { history });
         process.stdout.write(`${result.answer}\n`);
+        history.push({ role: "user", content: query }, { role: "assistant", content: result.answer });
+        if (history.length > 20) history.splice(0, history.length - 20);
       } catch (error: unknown) {
         process.stderr.write(`${error instanceof Error ? error.message : "Unexpected agent error."}\n`);
       }
@@ -40,7 +45,7 @@ function parseArguments(args: readonly string[]): AgentCliArguments {
       index += 1; continue;
     }
     if (argument === "--help") {
-      process.stdout.write('Usage: npm run agent -- [--debug] [--model gemma3:4b] ["research request"]\n');
+      process.stdout.write(`Usage: npm run agent -- [--debug] [--model ${DEFAULT_OLLAMA_MODEL}] ["research request"]\n`);
       return { query: undefined, debug, model };
     }
     if (argument !== undefined) queryParts.push(argument);

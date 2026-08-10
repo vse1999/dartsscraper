@@ -5,6 +5,7 @@ import { normalizePlayerName } from "../player/resolver.js";
 import { resolveResearchDate, type ResolvedDate } from "./date.js";
 import { AGENT_TOOL_DEFINITIONS, type AgentToolCall, type AgentToolResult, type DartsAgentToolExecutor } from "./tools.js";
 import type { OllamaChatClient, OllamaMessage, OllamaToolCall } from "./ollama-client.js";
+import { DEFAULT_OLLAMA_MODEL } from "./config.js";
 
 const DEFAULT_MAX_ITERATIONS = 20;
 const DEFAULT_MAX_TOOL_CALLS = 32;
@@ -22,6 +23,14 @@ export interface DartsResearchAgentOptions {
   now?: () => Date;
   timeZone?: string;
   logger?: Logger;
+}
+export interface AgentConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+export interface AgentRunOptions {
+  history?: readonly AgentConversationMessage[];
+  signal?: AbortSignal;
 }
 export interface AgentRunResult { answer: string; iterations: number; toolCalls: number; model: string; }
 interface AverageEvidence { player: string; average: number | null; matchCount: number; error?: string; }
@@ -41,7 +50,7 @@ export class DartsResearchAgent {
   public constructor(options: DartsResearchAgentOptions) {
     this.client = options.client;
     this.toolExecutor = options.toolExecutor;
-    this.model = options.model ?? "gemma3:4b";
+    this.model = options.model ?? DEFAULT_OLLAMA_MODEL;
     this.maxIterations = positiveInteger(options.maxIterations ?? DEFAULT_MAX_ITERATIONS, "maxIterations");
     this.maxToolCalls = positiveInteger(options.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS, "maxToolCalls");
     this.timeoutMs = positiveInteger(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs");
@@ -51,10 +60,14 @@ export class DartsResearchAgent {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async run(query: string): Promise<AgentRunResult> {
+  public async run(query: string, options: AgentRunOptions = {}): Promise<AgentRunResult> {
     const trimmed = query.trim();
     if (trimmed === "") throw new Error("Research query must not be empty.");
+    const history = validateConversationHistory(options.history ?? []);
     const controller = new AbortController();
+    const abortFromCaller = (): void => controller.abort(options.signal?.reason ?? new Error("Agent request was cancelled."));
+    if (options.signal?.aborted === true) abortFromCaller();
+    else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
     const timeout = setTimeout(() => controller.abort(new Error("Agent deadline exceeded.")), this.timeoutMs);
     const resolvedDate = this.tryResolveDate(trimmed);
     const normalizedQuery = trimmed.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("en-US");
@@ -62,6 +75,7 @@ export class DartsResearchAgent {
     const preferAverageTool = /\b(average|mean|atlag)/i.test(normalizedQuery);
     const messages: OllamaMessage[] = [
       { role: "system", content: this.systemPrompt(resolvedDate) },
+      ...history,
       { role: "user", content: trimmed },
     ];
     let toolCallCount = 0;
@@ -113,9 +127,15 @@ export class DartsResearchAgent {
       }
       throw new AgentLimitError(`Agent exceeded the maximum of ${this.maxIterations} iterations.`);
     } catch (error: unknown) {
-      if (controller.signal.aborted && !(error instanceof AgentLimitError)) throw new AgentLimitError(`Agent exceeded its ${this.timeoutMs}ms deadline.`);
+      if (controller.signal.aborted && !(error instanceof AgentLimitError)) {
+        if (options.signal?.aborted === true) throw new AgentLimitError("Agent request was cancelled.");
+        throw new AgentLimitError(`Agent exceeded its ${this.timeoutMs}ms deadline.`);
+      }
       throw error;
-    } finally { clearTimeout(timeout); }
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
   private planCalls(input: {
@@ -174,6 +194,7 @@ export class DartsResearchAgent {
   private systemPrompt(resolvedDate: ResolvedDate | undefined): string {
     return [
       "You are a local darts research orchestrator. Use tools for every date, fixture, match, and numeric fact.",
+      "Use the supplied conversation history to understand follow-up questions, but never treat prior assistant text as verified evidence.",
       "Never invent players, matches, averages, dates, or unavailable results. Never calculate averages yourself.",
       "For relative dates call resolveDate first. Then call getModusPlayers. Use only returned players and call getPlayerMatchAverage for each requested average.",
       "Put all independent player calls in one parallel batch. Preserve tool errors as explicit unavailable rows.",
@@ -244,5 +265,18 @@ async function mapWithConcurrency<T, R>(values: readonly T[], concurrency: numbe
 function positiveInteger(value: number, name: string): number {
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer.`);
   return value;
+}
+
+function validateConversationHistory(history: readonly AgentConversationMessage[]): readonly AgentConversationMessage[] {
+  if (history.length > 20) throw new Error("Conversation history must contain at most 20 messages.");
+  let characterCount = 0;
+  return history.map((message): AgentConversationMessage => {
+    if (message.role !== "user" && message.role !== "assistant") throw new Error("Conversation history contains an unsupported role.");
+    const content = message.content.trim();
+    if (content === "") throw new Error("Conversation history messages must not be empty.");
+    characterCount += content.length;
+    if (characterCount > 40_000) throw new Error("Conversation history exceeds the 40,000 character limit.");
+    return { role: message.role, content };
+  });
 }
 

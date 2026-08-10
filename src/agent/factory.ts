@@ -12,6 +12,7 @@ import { PlayerMatchesService } from "../services/player-matches.js";
 import { DartsResearchAgent } from "./harness.js";
 import { OllamaClient } from "./ollama-client.js";
 import { DartsAgentToolExecutor } from "./tools.js";
+import { DEFAULT_OLLAMA_MODEL } from "./config.js";
 
 export interface CreateAgentOptions { model?: string; debug?: boolean; cacheDirectory?: string; ollamaBaseUrl?: string; }
 export function createDartsResearchAgent(options: CreateAgentOptions = {}): DartsResearchAgent {
@@ -28,7 +29,7 @@ export function createDartsResearchAgent(options: CreateAgentOptions = {}): Dart
   const toolExecutor = new DartsAgentToolExecutor({ modusService, playerMatchesService });
   return new DartsResearchAgent({
     client: new OllamaClient(options.ollamaBaseUrl === undefined ? {} : { baseUrl: options.ollamaBaseUrl }), toolExecutor,
-    model: options.model ?? process.env.OLLAMA_MODEL ?? "gemma3:4b", logger,
+    model: options.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL, logger,
   });
 }
 

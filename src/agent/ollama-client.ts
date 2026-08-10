@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { OllamaRequestError } from "../errors.js";
+import { DEFAULT_OLLAMA_BASE_URL } from "./config.js";
 
 const ToolCallSchema = z.object({ function: z.object({ name: z.string().min(1), arguments: z.unknown() }) });
 const ChatResponseSchema = z.object({ message: z.object({ role: z.literal("assistant"), content: z.string().default(""), tool_calls: z.array(ToolCallSchema).optional() }) });
@@ -34,7 +35,7 @@ export class OllamaClient implements OllamaChatClient {
   private readonly timeoutMs: number;
   private toolMode: ToolMode = "unknown";
   public constructor(options: OllamaClientOptions = {}) {
-    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? "http://127.0.0.1:11434");
+    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 90_000;
   }
