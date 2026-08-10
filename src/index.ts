@@ -57,6 +57,8 @@ export { createDartsResearchAgent } from "./agent/factory.js";
 export { DartsResearchAgent } from "./agent/harness.js";
 export type { AgentConversationMessage, AgentRunOptions, AgentRunResult } from "./agent/harness.js";
 export { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from "./agent/config.js";
+export { ChatSessionStore } from "./chat/session-store.js";
+export type { ChatSessionStoreOptions } from "./chat/session-store.js";
 export { OllamaClient } from "./agent/ollama-client.js";
 export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js";
 export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";
