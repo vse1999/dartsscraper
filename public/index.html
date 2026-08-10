@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#07110e">
+    <meta name="description" content="Private local Gemma 4 darts research chatbot">
+    <title>Darts Research — Local Gemma 4</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <main class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="Darts Research home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 44 44" role="img">
+              <circle cx="22" cy="22" r="17"></circle>
+              <circle cx="22" cy="22" r="10"></circle>
+              <circle cx="22" cy="22" r="3"></circle>
+              <path d="M22 5v34M5 22h34"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>Darts Research</strong>
+            <small>Evidence-first local agent</small>
+          </span>
+        </a>
+
+        <div class="topbar-actions">
+          <div id="model-badge" class="model-badge" title="Configured Ollama model">
+            <span class="spark" aria-hidden="true">✦</span>
+            <span id="model-name">Gemma 4 · 12B</span>
+          </div>
+          <div id="status-badge" class="status-badge is-checking" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="status-label">Checking Ollama</span>
+          </div>
+          <button id="clear-button" class="icon-button" type="button" title="Start a new conversation" aria-label="Start a new conversation">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"></path></svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="chat-panel" class="chat-panel" aria-label="Chat conversation">
+        <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions">
+          <section id="welcome" class="welcome">
+            <div class="eyebrow"><span></span> LOCAL DARTS INTELLIGENCE</div>
+            <h1>Ask the board.<br><em>Get sourced answers.</em></h1>
+            <p>Gemma 4 plans the research. Deterministic tools resolve players, inspect DartsOrakel matches, and calculate the numbers.</p>
+
+            <div class="suggestions" aria-label="Example questions">
+              <button class="suggestion" type="button" data-prompt="Show Rob Cross's last 10 matches and calculate his match average.">
+                <span class="suggestion-icon">01</span>
+                <span><strong>Player form</strong><small>Rob Cross · last 10 matches</small></span>
+                <span class="arrow" aria-hidden="true">↗</span>
+              </button>
+              <button class="suggestion" type="button" data-prompt="Who plays in the next MODUS Super Series round? Show every player's last-10 match average.">
+                <span class="suggestion-icon">02</span>
+                <span><strong>MODUS research</strong><small>Next round · player comparison</small></span>
+                <span class="arrow" aria-hidden="true">↗</span>
+              </button>
+              <button class="suggestion" type="button" data-prompt="Explain how a three-dart average differs from the match averages shown by this app.">
+                <span class="suggestion-icon">03</span>
+                <span><strong>Ask a follow-up</strong><small>Rules, metrics, and context</small></span>
+                <span class="arrow" aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <footer class="composer-wrap">
+        <form id="chat-form" class="composer">
+          <label class="sr-only" for="message-input">Ask a darts research question</label>
+          <textarea id="message-input" name="message" rows="1" maxlength="4000" placeholder="Ask about a player, match history, average, or MODUS field…" autocomplete="off" required disabled></textarea>
+          <div class="composer-actions">
+            <span class="keyboard-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd> + <kbd>Enter</kbd> new line</span>
+            <button id="stop-button" class="stop-button" type="button" hidden>Stop</button>
+            <button id="send-button" class="send-button" type="submit" aria-label="Send message" disabled>
+              <span>Send</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Zm7 1 7-8"></path></svg>
+            </button>
+          </div>
+        </form>
+        <p class="privacy-note"><span aria-hidden="true">●</span> Private by design — prompts and model inference stay on this machine.</p>
+      </footer>
+    </main>
+
+    <template id="message-template">
+      <article class="message">
+        <div class="message-avatar" aria-hidden="true"></div>
+        <div class="message-body">
+          <div class="message-label"></div>
+          <pre class="message-content"></pre>
+          <div class="message-meta"></div>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

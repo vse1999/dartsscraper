@@ -23,6 +23,7 @@ const STATIC_FILES: Readonly<Record<string, { file: string; contentType: string 
   "/index.html": { file: "index.html", contentType: "text/html; charset=utf-8" },
   "/styles.css": { file: "styles.css", contentType: "text/css; charset=utf-8" },
   "/app.js": { file: "app.js", contentType: "text/javascript; charset=utf-8" },
+  "/favicon.svg": { file: "favicon.svg", contentType: "image/svg+xml" },
 };
 
 interface ChatAgent {
@@ -157,7 +158,11 @@ async function handleChat(context: {
     const history = context.sessions.getHistory(parsed.data.sessionId);
     const abortController = new AbortController();
     const onAborted = (): void => abortController.abort(new Error("Browser disconnected."));
+    const onResponseClosed = (): void => {
+      if (!context.response.writableEnded) abortController.abort(new Error("Browser disconnected."));
+    };
     context.request.once("aborted", onAborted);
+    context.response.once("close", onResponseClosed);
     try {
       const result = await context.agent.run(parsed.data.message, { history, signal: abortController.signal });
       context.sessions.appendExchange(parsed.data.sessionId, parsed.data.message, result.answer);
@@ -169,6 +174,7 @@ async function handleChat(context: {
       });
     } finally {
       context.request.removeListener("aborted", onAborted);
+      context.response.removeListener("close", onResponseClosed);
     }
   } finally {
     release();
