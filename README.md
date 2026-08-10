@@ -20,7 +20,7 @@ The web app provides:
 - deterministic DartsOrakel and MODUS tools selected by Gemma;
 - multi-turn follow-up context per browser session;
 - local health/model checks and actionable setup errors;
-- cancellation, bounded request concurrency, conversation limits, and safe plain-text rendering;
+- cancellation, bounded request concurrency, conversation limits, and safe table/text rendering;
 - a same-origin local API with restrictive browser security headers.
 
 Prompts, chat history, and inference remain on this machine. Current darts data still comes from the configured public sources.
@@ -75,16 +75,19 @@ npm run audit:prod
 ## Caching
 
 - `.cache/dartsorakel`: long-lived player directory and five-minute match responses
-- `.cache/modus`: six-hour fixture discovery results
+- `.cache/modus-results`: official MODUS results cached for 15 seconds
+- `.cache/modus`: fixture discovery cached for 30 seconds for today and six hours for other dates
 
 Cache failures are non-fatal. Delete `.cache` manually only when intentionally forcing a complete live refresh.
 
 ## Documentation
 
-- [Full chatbot and extension manual](./docs/CHATBOT_MANUAL.md)
+- [Full local user manual](./manual.md)
+- [Original chatbot extension guide](./docs/CHATBOT_MANUAL.md)
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md)
+- [Official MODUS optimization plan](./docs/MODUS_OPTIMIZATION_PLAN.md)
 - [MODUS source investigation](./docs/MODUS_SOURCE_INVESTIGATION.md)
 - [Tool contracts](./docs/TOOL_CONTRACTS.md)
 - [DartsOrakel investigation](./INVESTIGATION.md)
 
-The MODUS source chain reads the official public daily JSON first and falls back to the allowed public Darts Nerd season page. It does not bypass anti-bot controls or use private APIs.
+Current MODUS results come from the official daily JSON and exact official weekly-average page. Participant-only discovery can fall back to the allowed public Darts Nerd season page. PDC and explicit last-N history remain on DartsOrakel. The app does not bypass anti-bot controls or use private APIs.

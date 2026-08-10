@@ -1,4 +1,6 @@
-# Darts chatbot manual: Ollama + Gemma + deterministic tools
+# Darts chatbot extension guide: Ollama + Gemma + deterministic tools
+
+> **Current user manual:** use [`../manual.md`](../manual.md). It includes the official MODUS result tool, same-day match averages, cumulative weekly averages, current cache behavior, and updated troubleshooting. This older document remains as a detailed extension/design guide.
 
 This document explains the current local browser chatbot, how its Ollama/Gemma agent works, how to operate it, and how to extend it into a broader darts research assistant instead of a single hardcoded scraping workflow.
 
@@ -62,6 +64,7 @@ The available tools are:
 | Tool | Purpose |
 |---|---|
 | `resolveDate` | Convert a date expression into an ISO date. |
+| `getModusResults` | Fetch official current MODUS matches, scores, per-match averages, and cumulative weekly averages in one validated snapshot. |
 | `getModusPlayers` | Discover confirmed MODUS players for a date. |
 | `getPlayerMatches` | Return validated match rows and their deterministic mean. |
 | `getPlayerMatchAverage` | Return a compact last-N average result. |
