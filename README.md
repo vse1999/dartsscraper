@@ -47,6 +47,7 @@ Cache failures are non-fatal. Delete `.cache` manually only when intentionally f
 
 ## Documentation
 
+- [Full chatbot and extension manual](./docs/CHATBOT_MANUAL.md)
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md)
 - [MODUS source investigation](./docs/MODUS_SOURCE_INVESTIGATION.md)
 - [Tool contracts](./docs/TOOL_CONTRACTS.md)
