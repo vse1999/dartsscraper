@@ -180,6 +180,19 @@ button { color: inherit; }
 .message.is-error .message-avatar::after { content: "!"; }
 .message-label { margin: 1px 0 9px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
 .message-content { margin: 0; overflow: visible; color: #dce9e3; font-family: inherit; font-size: 14px; line-height: 1.72; white-space: pre-wrap; word-break: break-word; }
+.message-content p { margin: 0 0 12px; }
+.message-content p:last-child { margin-bottom: 0; }
+.message-content strong { color: #f3faf6; font-weight: 700; }
+.message-content em { color: #b9cec4; }
+.answer-list { margin: 4px 0 14px; padding-left: 20px; }
+.answer-list li { margin: 3px 0; }
+.answer-table-wrap { max-width: 100%; margin: 10px 0 16px; overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; scrollbar-color: #29473b transparent; scrollbar-width: thin; }
+.answer-table { width: 100%; min-width: 560px; border-collapse: collapse; white-space: nowrap; }
+.answer-table th, .answer-table td { padding: 9px 11px; text-align: left; border-bottom: 1px solid rgba(172, 214, 195, 0.08); }
+.answer-table th { color: var(--green); font-size: 10px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; background: rgba(101,230,168,.055); }
+.answer-table td { color: #d7e5de; font-size: 12px; }
+.answer-table tbody tr:last-child td { border-bottom: 0; }
+.answer-table tbody tr:hover { background: rgba(101,230,168,.025); }
 .message.is-user .message-content { color: #f4f7f5; }
 .message.is-error .message-content { color: #ffb6b4; }
 .message-meta { min-height: 16px; margin-top: 10px; color: #698177; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; }

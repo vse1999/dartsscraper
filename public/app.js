@@ -136,7 +136,8 @@ function appendMessage(role, content, meta = "") {
   const metadata = fragment.querySelector(".message-meta");
   article.classList.add(`is-${role}`);
   label.textContent = role === "assistant" ? "Gemma 4 · Research agent" : role === "user" ? "You" : "Local error";
-  body.textContent = content;
+  if (role === "assistant") renderSafeAnswer(body, content);
+  else body.textContent = content;
   metadata.textContent = meta;
   elements.messages.append(fragment);
   scrollToBottom();
@@ -155,6 +156,97 @@ function appendThinkingMessage() {
   }
   article.querySelector(".message-meta").textContent = "Resolving tools and checking evidence…";
   return article;
+}
+
+function renderSafeAnswer(container, content) {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length) {
+    if (lines[index].trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (index + 1 < lines.length && isTableRow(lines[index]) && isTableDivider(lines[index + 1])) {
+      const tableLines = [lines[index]];
+      index += 2;
+      while (index < lines.length && isTableRow(lines[index]) && lines[index].trim() !== "") {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      container.append(createSafeTable(tableLines));
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(lines[index])) {
+      const list = document.createElement("ul");
+      list.className = "answer-list";
+      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
+        const item = document.createElement("li");
+        appendInlineFormatting(item, lines[index].replace(/^\s*[-*]\s+/, ""));
+        list.append(item);
+        index += 1;
+      }
+      container.append(list);
+      continue;
+    }
+    const paragraphLines = [];
+    while (index < lines.length && lines[index].trim() !== "" && !(index + 1 < lines.length && isTableRow(lines[index]) && isTableDivider(lines[index + 1])) && !/^\s*[-*]\s+/.test(lines[index])) {
+      paragraphLines.push(lines[index].trim());
+      index += 1;
+    }
+    const paragraph = document.createElement("p");
+    appendInlineFormatting(paragraph, paragraphLines.join(" "));
+    container.append(paragraph);
+  }
+}
+
+function createSafeTable(lines) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "answer-table-wrap";
+  const table = document.createElement("table");
+  table.className = "answer-table";
+  const head = document.createElement("thead");
+  const body = document.createElement("tbody");
+  const rows = lines.map(parseTableCells);
+  rows.forEach((cells, rowIndex) => {
+    const row = document.createElement("tr");
+    cells.forEach((cell) => {
+      const element = document.createElement(rowIndex === 0 ? "th" : "td");
+      appendInlineFormatting(element, cell);
+      row.append(element);
+    });
+    (rowIndex === 0 ? head : body).append(row);
+  });
+  table.append(head, body);
+  wrapper.append(table);
+  return wrapper;
+}
+
+function appendInlineFormatting(parent, value) {
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+  let cursor = 0;
+  for (const match of value.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    if (start > cursor) parent.append(document.createTextNode(value.slice(cursor, start)));
+    const token = match[0];
+    const element = document.createElement(token.startsWith("**") ? "strong" : "em");
+    element.textContent = token.startsWith("**") ? token.slice(2, -2) : token.slice(1, -1);
+    parent.append(element);
+    cursor = start + token.length;
+  }
+  if (cursor < value.length) parent.append(document.createTextNode(value.slice(cursor)));
+}
+
+function isTableRow(line) {
+  return line.includes("|") && parseTableCells(line).length >= 2;
+}
+
+function isTableDivider(line) {
+  const cells = parseTableCells(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+}
+
+function parseTableCells(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
 }
 
 function restoreTranscript() {
