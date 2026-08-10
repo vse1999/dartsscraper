@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc --noEmit",
+    "audit:prod": "npm audit --omit=dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "player": "tsx src/cli.ts",

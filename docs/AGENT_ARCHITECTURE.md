@@ -18,7 +18,9 @@ Natural language -> Gemma planner -> validated tool calls -> deterministic sourc
 
 ## Model protocol
 
-Ollama native tool calling is used when the selected model supports it. Ollama's current `gemma3:4b` model reports that native tools are unsupported, so `OllamaClient` automatically switches to a Zod-validated structured JSON action protocol. Both modes expose the same tool semantics. No chain-of-thought or `thinking` field is requested, logged, or printed.
+The default `gemma4:12b` model uses Ollama native tool calling. `OllamaClient` retains a Zod-validated structured JSON action fallback for older models that reject the native `tools` field. Both modes expose the same tool semantics. No chain-of-thought or `thinking` field is requested, logged, or printed.
+
+The browser chatbot adds a same-origin Node HTTP layer around one shared agent. `ChatSessionStore` retains at most 20 recent user/assistant messages per session, expires inactive sessions after six hours, and passes validated history into each run. `/api/health` verifies both Ollama and the selected model before chat work begins.
 
 ## Safety and bounds
 
@@ -31,5 +33,8 @@ Ollama native tool calling is used when the selected model supports it. Ollama's
 - MODUS average guard permits only players returned by `getModusPlayers`
 - player failures are returned as per-player structured failures
 - debug logging includes tool names, arguments, timing, success, and error code; it never prints model thinking
+- one concurrent browser generation by default, with explicit HTTP 429 backpressure
+- 4,000-character user messages, 16 KiB request bodies, session TTL/size limits, and browser cancellation
+- local binding, same-origin API checks, restrictive CSP, and plain-text answer rendering
 
 The current workflow intentionally supports one target date per research query. Multi-date comparative research should be added as a separate explicit workflow rather than guessed.

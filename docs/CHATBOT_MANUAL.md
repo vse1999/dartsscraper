@@ -1,6 +1,6 @@
 # Darts chatbot manual: Ollama + Gemma + deterministic tools
 
-This document explains the current application, how to run it as a local question-answering agent, how to place it behind a chatbot, and how to extend it into a general darts research assistant instead of a single hardcoded scraping workflow.
+This document explains the current local browser chatbot, how its Ollama/Gemma agent works, how to operate it, and how to extend it into a broader darts research assistant instead of a single hardcoded scraping workflow.
 
 ## 1. What the application is
 
@@ -51,6 +51,11 @@ The current agent can:
 - prevent a model from replacing discovered MODUS players with invented names;
 - validate that a MODUS-average answer contains the requested date, players, and exact calculated values;
 - use a deterministic answer formatter if Gemma repeatedly produces an unsupported final draft.
+- serve a responsive local browser chatbot at `http://127.0.0.1:3210`;
+- verify that Ollama and the configured model are ready before accepting a prompt;
+- retain bounded multi-turn history for pronouns and follow-up questions;
+- cancel browser requests and reject concurrent generations with backpressure;
+- render all model output as safe plain text under a restrictive Content Security Policy.
 
 The available tools are:
 
@@ -61,10 +66,9 @@ The available tools are:
 | `getPlayerMatches` | Return validated match rows and their deterministic mean. |
 | `getPlayerMatchAverage` | Return a compact last-N average result. |
 
-The current agent is still a **specialized darts research agent**, not yet a fully general chatbot. In particular:
+The current agent is still a **specialized darts research agent**, not an unrestricted web assistant. In particular:
 
-- every `run()` call starts a new model conversation;
-- the interactive CLI does not preserve semantic conversation history between questions;
+- history contains final user/assistant turns, not persisted raw tool payloads;
 - the strongest evidence guard is specialized for MODUS-average questions;
 - no tool currently provides rankings, arbitrary tournament fields, head-to-head summaries, form trends, or general web search;
 - Gemma can reason only over facts that an available tool returns.
@@ -81,6 +85,11 @@ These are extension points, not reasons to let Gemma guess.
 | `src/agent/ollama-client.ts` | Ollama `/api/chat` client and Gemma JSON-action fallback. |
 | `src/agent/tools.ts` | Tool definitions, Zod argument validation, and dispatch. |
 | `src/agent/date.ts` | Deterministic English/Hungarian date resolution. |
+| `src/chat-server.ts` | Validates environment configuration and starts the local server. |
+| `src/chat/server.ts` | Same-origin API, security headers, static UI, limits, and cancellation. |
+| `src/chat/session-store.ts` | Bounded in-memory multi-turn session history with TTL and LRU eviction. |
+| `src/chat/ollama-health.ts` | Checks Ollama version, availability, and configured model installation. |
+| `public/*` | Responsive browser chat interface. |
 | `src/modus/*` | Official and fallback MODUS fixture discovery. |
 | `src/dartsorakel/*` | DartsOrakel HTTP client, parsing, and scraping. |
 | `src/services/*` | Player-match orchestration and statistics. |
@@ -110,20 +119,12 @@ npm run build
 npm test
 ```
 
-### Install Gemma
+### Install Gemma 4
 
-The existing default is Gemma 3 4B:
-
-```bash
-ollama pull gemma3:4b
-```
-
-Larger Gemma models usually follow complex instructions more reliably but require more memory:
+The application default is Gemma 4 12B. It supports Ollama native tools and requires a current Ollama release:
 
 ```bash
-ollama pull gemma3:12b
-# or
-ollama pull gemma3:27b
+ollama pull gemma4:12b
 ```
 
 Confirm that Ollama is reachable:
@@ -138,22 +139,30 @@ On Windows PowerShell:
 Invoke-RestMethod http://127.0.0.1:11434/api/tags
 ```
 
-### Select a model
+### Start the browser chatbot
+
+```bash
+npm run chat
+```
+
+Open `http://127.0.0.1:3210`. The green **Ollama ready** badge confirms that both Ollama and `gemma4:12b` are available.
+
+### Select a different model
 
 For one command:
 
 ```bash
-npm run agent -- --model gemma3:12b "Show Rob Cross's last 10 matches."
+npm run agent -- --model gemma4:12b "Show Rob Cross's last 10 matches."
 ```
 
 For the current shell:
 
 ```powershell
-$env:OLLAMA_MODEL = "gemma3:12b"
-npm run agent
+$env:OLLAMA_MODEL = "gemma4:12b"
+npm run chat
 ```
 
-The fallback default is `gemma3:4b`.
+The fallback default is `gemma4:12b`.
 
 ## 5. Use the existing agent
 
@@ -281,7 +290,7 @@ The application validates the function name and arguments, executes the tool, ap
 
 ### Gemma JSON-action mode
 
-The standard local `gemma3:4b` used during implementation rejected Ollama's native `tools` field. The client detects that response and automatically switches to structured JSON actions:
+Older models may reject Ollama's native `tools` field. The client detects that response and automatically switches to structured JSON actions:
 
 ```json
 {
@@ -313,13 +322,12 @@ The response is constrained by an Ollama JSON schema and then parsed again with 
 
 ### Which Gemma model to use
 
-- `gemma3:4b`: easiest local option; adequate for simple planning, but more likely to need answer repair.
-- `gemma3:12b`: recommended when the machine can run it; better instruction following and answer composition.
-- `gemma3:27b`: strongest Gemma 3 option, but requires substantially more memory.
+- `gemma4:12b`: project default; native tool support and strong instruction following for this agent workflow.
+- Older or smaller local models can be selected explicitly, but may use the JSON-action fallback and need more answer repair.
 
 Model size does not replace validation. Keep the same tool and evidence boundaries for every model.
 
-## 8. Put the agent behind a chatbot
+## 8. Browser chatbot and API
 
 A chatbot needs two parts:
 
@@ -328,7 +336,7 @@ A chatbot needs two parts:
 
 Do not call Ollama directly from a public browser. That would expose the local endpoint, remove server-side validation, and let clients bypass tool policies.
 
-### Recommended API contract
+### Implemented API contract
 
 Request:
 
@@ -345,17 +353,17 @@ Response:
 {
   "sessionId": "8d28f9be-...",
   "answer": "...",
-  "model": "gemma3:12b",
-  "iterations": 3,
-  "toolCalls": 2,
-  "sources": ["https://dartsorakel.com/..."],
-  "partialFailures": []
+  "model": "gemma4:12b",
+  "metrics": {
+    "iterations": 3,
+    "toolCalls": 2
+  }
 }
 ```
 
-Validate this request with Zod before it reaches the agent. Apply a maximum message length and reject empty input.
+The server validates this request with Zod, limits messages to 4,000 characters and bodies to 16 KiB, and rejects empty or cross-origin input. Additional routes are `GET /api/health` and `DELETE /api/sessions/:sessionId`.
 
-### Minimal backend integration
+### Library integration
 
 The current library can already be called from another TypeScript service:
 
@@ -377,11 +385,11 @@ export interface ChatResponse {
   toolCalls: number;
 }
 
-const agent = createDartsResearchAgent({ model: "gemma3:12b" });
+const agent = createDartsResearchAgent({ model: "gemma4:12b" });
 
 export async function handleChatRequest(input: unknown): Promise<ChatResponse> {
   const request = ChatRequestSchema.parse(input);
-  const result = await agent.run(request.message);
+  const result = await agent.run(request.message, { history: [] });
   return {
     sessionId: request.sessionId,
     answer: result.answer,
@@ -392,7 +400,7 @@ export async function handleChatRequest(input: unknown): Promise<ChatResponse> {
 }
 ```
 
-Connect `handleChatRequest` to a local HTTP framework such as Fastify, Express, Hono, or a Next.js route handler. Keep the agent instance on the server so caches and the Ollama mode detection can be reused.
+The included `src/chat/server.ts` already implements this boundary with Node's HTTP server and keeps one agent instance alive so caches and Ollama mode detection are reused.
 
 ### Frontend behavior
 
@@ -409,35 +417,35 @@ The chatbot UI should:
 
 For the first chatbot version, non-streaming responses are simpler and match the existing client. Add streaming only after tool-call and cancellation behavior are covered by tests.
 
-## 9. Add real conversation memory
+## 9. Conversation memory
 
-The current `run(query)` method creates a fresh `messages` array. A real chatbot needs session history.
+`run(query, { history, signal })` accepts validated prior turns. The browser backend owns a `ChatSessionStore` that retains complete user/assistant exchanges, limits each session to 20 messages and 32,000 characters, expires inactive sessions after six hours, and evicts least-recently-used sessions above 100.
 
-### Required refactor
+### Public shape
 
 Change the public API conceptually to:
 
 ```ts
-export interface ChatTurn {
+export interface AgentConversationMessage {
   role: "user" | "assistant";
   content: string;
 }
 
-export interface AgentRunContext {
-  history: readonly ChatTurn[];
-  sessionId: string;
+export interface AgentRunOptions {
+  history?: readonly AgentConversationMessage[];
+  signal?: AbortSignal;
 }
 
-public async run(query: string, context: AgentRunContext): Promise<AgentRunResult>
+public async run(query: string, options?: AgentRunOptions): Promise<AgentRunResult>
 ```
 
-The backend should own a `ChatSessionStore`:
+The backend owns a synchronous local `ChatSessionStore` with these operations:
 
 ```ts
-export interface ChatSessionStore {
-  get(sessionId: string): Promise<readonly ChatTurn[]>;
-  append(sessionId: string, turns: readonly ChatTurn[]): Promise<void>;
-  clear(sessionId: string): Promise<void>;
+export class ChatSessionStore {
+  getHistory(sessionId: string): readonly AgentConversationMessage[];
+  appendExchange(sessionId: string, userContent: string, assistantContent: string): void;
+  delete(sessionId: string): boolean;
 }
 ```
 
@@ -876,14 +884,14 @@ Start Ollama, then retry.
 ### Model not found
 
 ```bash
-ollama pull gemma3:4b
+ollama pull gemma4:12b
 ```
 
 Or pass an installed model with `--model`.
 
 ### Model reports that tools are unsupported
 
-This is expected for the standard Gemma setup tested by this project. `OllamaClient` should detect the HTTP 400 response and switch to the structured JSON-action protocol. Run with `--debug` and verify that subsequent actions are valid.
+`gemma4:12b` supports native tools. If an explicitly selected older model rejects tools, `OllamaClient` detects the HTTP 400 response and switches to the structured JSON-action protocol. Run with `--debug` and verify that subsequent actions are valid.
 
 ### Gemma invents a player or statistic
 
@@ -902,22 +910,22 @@ The safe response is a deterministic formatter or an explicit inability message.
 
 Test the deterministic CLI/tool without Gemma. Inspect the live source and response schema. Update source code and fixtures only after verifying the public contract. The LLM is not part of scraper correctness.
 
-### Interactive follow-ups are forgotten
+### Follow-ups are forgotten after a restart
 
-That is the current expected behavior. Implement the session store and pass validated history/context into `run()`.
+Browser backend history is intentionally in memory and is cleared when `npm run chat` restarts. The visible transcript remains in that browser, but start a new conversation after a server restart so visible and backend state agree. Add SQLite only if durable local history is required.
 
 ## 18. Recommended implementation roadmap
 
-### Phase 1: chatbot backend
+### Phase 1: chatbot backend — implemented
 
 Deliver:
 
-- validated `/chat` endpoint;
+- validated `/api/chat` endpoint;
 - one shared agent instance;
 - request cancellation;
-- local rate limit;
-- Markdown-safe response;
-- structured source and partial-failure fields.
+- local concurrency backpressure;
+- plain-text-safe response rendering;
+- Ollama/model health endpoint and actionable errors.
 
 Acceptance criteria:
 
@@ -926,13 +934,12 @@ Acceptance criteria:
 - timeouts return an actionable error;
 - Ollama is never exposed directly to the browser.
 
-### Phase 2: session memory
+### Phase 2: session memory — implemented for local use
 
 Deliver:
 
 - session store;
 - recent-turn history;
-- validated entity/date summary;
 - clear-session operation;
 - context-size limits.
 
@@ -1022,6 +1029,6 @@ That design lets the chatbot answer new combinations of darts questions without 
 - Chat API: https://docs.ollama.com/api/chat
 - Tool calling and agent loops: https://docs.ollama.com/capabilities/tool-calling
 - Structured outputs and JSON schemas: https://docs.ollama.com/capabilities/structured-outputs
-- Gemma 3 model variants and requirements: https://ollama.com/library/gemma3
+- Gemma 4 model and requirements: https://ollama.com/library/gemma4
 
 The implementation intentionally uses the local Ollama API rather than Ollama Cloud because the application depends on local models, local source policies, and structured tool orchestration.

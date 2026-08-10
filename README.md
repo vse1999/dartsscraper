@@ -1,41 +1,75 @@
-# DartsOrakel scraper and local Gemma research agent
+# DartsOrakel scraper and local Gemma 4 chatbot
 
-Production-oriented TypeScript tooling for DartsOrakel player matches plus a bounded local Ollama/Gemma agent for natural-language darts research. The LLM only plans tool use and formats evidence; fixture discovery, player resolution, match scraping, and averages are deterministic.
+Production-oriented TypeScript tooling for DartsOrakel player matches plus a browser chatbot powered locally by Ollama and `gemma4:12b`. Gemma plans tool use and explains results; fixture discovery, player resolution, match scraping, and averages stay deterministic and validated.
 
-## Setup
+## Start the chatbot
 
-```bash
+Requirements: Node.js 18+, npm, a current Ollama installation, and enough memory to run the 7.6 GB Gemma 4 model.
+
+```powershell
 npm install
-ollama pull gemma3:4b
-npm test
-npm run build
+ollama pull gemma4:12b
+npm run chat
 ```
 
-Ollama must be running at `http://127.0.0.1:11434`. Override the model with `OLLAMA_MODEL` or `--model`.
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210). The header must show **Ollama ready** before a question can be sent.
 
-## Natural-language agent
+The web app provides:
+
+- natural-language English and Hungarian darts research;
+- deterministic DartsOrakel and MODUS tools selected by Gemma;
+- multi-turn follow-up context per browser session;
+- local health/model checks and actionable setup errors;
+- cancellation, bounded request concurrency, conversation limits, and safe plain-text rendering;
+- a same-origin local API with restrictive browser security headers.
+
+Prompts, chat history, and inference remain on this machine. Current darts data still comes from the configured public sources.
+
+## Configuration
+
+Defaults are listed in [`.env.example`](./.env.example). The app reads shell environment variables; it does not load `.env` automatically.
+
+```powershell
+$env:OLLAMA_MODEL = "gemma4:12b"
+$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+$env:CHAT_HOST = "127.0.0.1"
+$env:CHAT_PORT = "3210"
+npm run chat
+```
+
+Keep `CHAT_HOST=127.0.0.1` unless you intentionally add authentication and network controls. Conversation memory is in-process with a six-hour inactivity TTL, so restarting the server clears backend context.
+
+## Terminal agent
 
 One shot:
 
-```bash
-npm run agent -- "Keresd meg, kik játszanak a hétfői MODUS Super Series fordulóban, és számold ki minden játékos utolsó 10 meccsének átlagát."
-npm run agent -- --debug --model gemma3:4b "Who plays MODUS on 2026-08-10? Show each player's last-10 average."
+```powershell
+npm run agent -- "Show Rob Cross's last 10 matches and calculate his match average."
+npm run agent -- --debug "Who plays MODUS on 2026-08-10? Show each player's last-10 average."
 ```
 
-Interactive:
+Interactive, with follow-up history:
 
-```bash
+```powershell
 npm run agent
 ```
 
-`--debug` writes structured tool calls, arguments, timing, and failure codes to stderr. It never prints hidden reasoning.
+`--debug` writes structured tool calls, timing, and failure codes to stderr. It never prints hidden model reasoning.
 
 ## Direct player CLI
 
-```bash
+```powershell
 npm run player -- "Damon Heta" 10
 npm run player -- "Damon Heta" 10 --json
 npm run player -- "Robert Thornton" 10
+```
+
+## Validation
+
+```powershell
+npm run build
+npm test
+npm run audit:prod
 ```
 
 ## Caching
