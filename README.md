@@ -1,6 +1,6 @@
 # DartsOrakel scraper and local Gemma 4 chatbot
 
-Production-oriented TypeScript tooling for DartsOrakel player matches plus a browser chatbot powered locally by Ollama and `gemma4:12b`. Gemma plans tool use and explains results; fixture discovery, player resolution, match scraping, and averages stay deterministic and validated.
+Production-oriented TypeScript tooling for DartsOrakel player matches plus a browser chatbot powered locally by Ollama and `gemma4:12b`. Supported live-stat questions use a near-instant deterministic path with no model call; Gemma plans tools and explains open-ended questions.
 
 ## Start the chatbot
 
@@ -12,13 +12,14 @@ ollama pull gemma4:12b
 npm run chat
 ```
 
-Or simply double-click `start-chatbot.cmd`; it starts Ollama/model setup, launches the chatbot, and opens the browser automatically.
+Or simply double-click `start-chatbot.cmd`; it starts Ollama, preloads Gemma for 30 minutes, preloads live MODUS/player data, launches the chatbot, and opens the browser automatically.
 
-Open [http://127.0.0.1:3210](http://127.0.0.1:3210). The header must show **Ollama ready** before a question can be sent.
+Open [http://127.0.0.1:3210](http://127.0.0.1:3210). **Stats ready** can answer supported factual lookups without Ollama; **Ollama ready** also supports explanations and open-ended research.
 
 The web app provides:
 
 - natural-language English and Hungarian darts research;
+- deterministic fast-path answers for latest MODUS and named-player last-N facts;
 - deterministic DartsOrakel and MODUS tools selected by Gemma;
 - multi-turn follow-up context per browser session;
 - local health/model checks and actionable setup errors;
@@ -34,6 +35,7 @@ Defaults are listed in [`.env.example`](./.env.example). The app reads shell env
 ```powershell
 $env:OLLAMA_MODEL = "gemma4:12b"
 $env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+$env:OLLAMA_KEEP_ALIVE = "30m"
 $env:CHAT_HOST = "127.0.0.1"
 $env:CHAT_PORT = "3210"
 npm run chat
@@ -76,15 +78,16 @@ npm run audit:prod
 
 ## Caching
 
-- `.cache/dartsorakel`: long-lived player directory and five-minute match responses
-- `.cache/modus-results`: official MODUS results cached for 15 seconds
+- memory L1: MODUS refreshes every 10 seconds; player results stay fresh for 15 seconds; identical requests are single-flight
+- `.cache/dartsorakel`: 30-day player directory and 10-second bounded-history HTTP responses
+- `.cache/modus-results`: validated process-restart fallback, rejected after five minutes
 - `.cache/modus`: fixture discovery cached for 30 seconds for today and six hours for other dates
 
 Cache failures are non-fatal. Delete `.cache` manually only when intentionally forcing a complete live refresh.
 
 ## Documentation
 
-- [Full local user manual](./manual.md)
+- [Full local user manual](./MANUAL.md)
 - [Original chatbot extension guide](./docs/CHATBOT_MANUAL.md)
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md)
 - [Official MODUS optimization plan](./docs/MODUS_OPTIMIZATION_PLAN.md)

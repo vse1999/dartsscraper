@@ -4,12 +4,19 @@ This manual explains how to install, start, use, verify, troubleshoot, and exten
 
 ## 1. What the application does
 
-The chatbot supports two evidence paths:
+The chatbot supports two evidence sources and two execution modes:
 
 1. **Official MODUS Super Series results** for today/current/latest MODUS questions.
 2. **DartsOrakel player history** for PDC players and explicitly requested last-N match research.
 
-For a prompt such as:
+Supported factual questions use an **instant deterministic fast path** and do not call Gemma:
+
+- today's/latest MODUS matches, scores, match averages, and weekly averages;
+- a named player's last N completed matches;
+- a named player's latest opponent/result;
+- a named player's last-N mean match average.
+
+Open-ended questions, explanations, comparisons, and predictions still use `gemma4:12b` with validated tools. For a prompt such as:
 
 ```text
 today darts modus all matches and player averages
@@ -35,7 +42,7 @@ Double-click:
 start-chatbot.cmd
 ```
 
-It starts Ollama if needed, downloads `gemma4:12b` on the first run, starts the local chatbot, and opens the browser. Then ask:
+It starts Ollama if needed, downloads and preloads `gemma4:12b` on the first run, preloads the player directory and current MODUS snapshot, starts the local chatbot, and then opens the browser. Then ask:
 
 ```text
 today MODUS all matches and player averages
@@ -49,7 +56,9 @@ today MODUS all matches and player averages
 - Node.js 18 or newer;
 - npm;
 - Ollama installed and running;
-- enough RAM/VRAM for `gemma4:12b` (the local model download is several GB);
+- at least 16 GB system RAM; 24–32 GB is preferred;
+- about 10–12 GB GPU memory is recommended to keep `gemma4:12b` fully on the GPU (CPU inference also works but is slower);
+- an SSD is recommended for fast process-restart cache reads;
 - internet access for the public darts sources.
 
 ### First installation
@@ -90,7 +99,10 @@ Press `Ctrl+C` in the terminal that runs `npm run chat`. Ollama can remain runni
 
 ```mermaid
 flowchart LR
-    U["User question"] --> G["Gemma 4 intent and tool planning"]
+    U["User question"] --> R["Typed fast-intent router"]
+    R -->|"supported fact"| F["Memory snapshot and deterministic renderer"]
+    F --> A["Answer"]
+    R -->|"open ended"| G["Gemma 4 intent and tool planning"]
     G --> V["Validated tool call"]
     V --> M["Official MODUS sources"]
     V --> D["DartsOrakel services"]
@@ -103,7 +115,7 @@ flowchart LR
     R --> A
 ```
 
-Gemma is genuinely involved. It:
+Gemma is genuinely involved when language reasoning is useful. It:
 
 - understands English or Hungarian wording;
 - identifies the requested scope;
@@ -112,7 +124,7 @@ Gemma is genuinely involved. It:
 - organizes and explains validated evidence;
 - answers conceptual questions when no current fact lookup is needed.
 
-Gemma is not trusted to scrape HTML, invent a result, or calculate an official statistic. Tool arguments and results are schema-validated. Current MODUS result intent also has a deterministic routing guard, so a mistaken model plan cannot fan out to old per-player DartsOrakel averages.
+Gemma is not used merely to format known factual tables. It is not trusted to scrape HTML, invent a result, or calculate an official statistic. Tool arguments and results are schema-validated. Current MODUS result intent has a deterministic routing guard, so a mistaken model plan cannot fan out to old per-player DartsOrakel averages.
 
 ## 4. Data-source selection
 
@@ -132,7 +144,7 @@ Official pages used by the result tool:
 
 The daily feed is used for the date, scores, statuses, and per-match averages. The results page supplies the selected series/week/group IDs. The weekly page supplies official cumulative totals. The normal production path uses three bulk requests and does not crawl every match-detail page.
 
-Before accepting the weekly table, the adapter verifies that the results page's complete fixture-card matchup set matches the daily feed. A stale or unrelated week therefore fails closed instead of being attached to current matches.
+Before accepting the weekly table, the adapter verifies that every daily-feed matchup is present in the selected current-week fixture cards. The results page may legitimately contain cumulative cards from multiple days. A stale or unrelated week still fails closed instead of being attached to current matches.
 
 ## 5. The three meanings of “average”
 
@@ -207,11 +219,11 @@ Factual follow-ups are revalidated with tools; previous assistant prose is conte
 - **Send** submits the question.
 - **Stop** cancels the current generation.
 - **Clear conversation** creates a clean session and removes visible history.
-- The status badge reports whether Ollama and `gemma4:12b` are ready.
+- **Stats ready** means deterministic source questions work even if Ollama is offline. **Ollama ready** means open-ended Gemma questions also work.
 - Long result tables scroll horizontally on small screens.
 - Assistant formatting is rendered with safe DOM operations; source content is never inserted with `innerHTML`.
 
-Only one browser generation is accepted at a time by default. A second simultaneous request receives backpressure instead of starting an unbounded model job.
+Only one Gemma generation is accepted at a time by default. Deterministic fast-path requests bypass that model gate and never wait for Ollama.
 
 ## 8. Terminal usage
 
@@ -254,6 +266,7 @@ Defaults:
 ```text
 OLLAMA_MODEL=gemma4:12b
 OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_KEEP_ALIVE=30m
 CHAT_HOST=127.0.0.1
 CHAT_PORT=3210
 ```
@@ -265,6 +278,7 @@ Example PowerShell override:
 ```powershell
 $env:OLLAMA_MODEL = "gemma4:12b"
 $env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+$env:OLLAMA_KEEP_ALIVE = "30m"
 $env:CHAT_HOST = "127.0.0.1"
 $env:CHAT_PORT = "3210"
 npm run chat
@@ -276,11 +290,13 @@ Keep `CHAT_HOST=127.0.0.1`. The app has no user authentication and is designed f
 
 | Directory | Data | Typical freshness |
 |---|---|---|
-| `.cache/modus-results` | Official result snapshot | 15 seconds |
+| Memory | Current official MODUS snapshot | refresh every 10 seconds; stale warning after 10 seconds |
+| Memory | Recently requested player/limit/date result | 15 seconds |
+| `.cache/modus-results` | Validated MODUS process-restart fallback | never accepted after five minutes |
 | `.cache/modus` | MODUS participant discovery | 30 seconds for today; 6 hours for other dates |
-| `.cache/dartsorakel` | Player directory and completed match pages | source-specific, longer lived |
+| `.cache/dartsorakel` | Player directory and bounded match windows | directory 30 days; match HTTP cache 10 seconds |
 
-The daily official request itself uses `cache: no-store`. The short local result cache prevents duplicate requests from rapid repeated questions while remaining suitable for live play.
+The daily official request itself uses `cache: no-store`. Identical simultaneous requests share one in-flight promise. Stale-while-revalidate returns the last valid snapshot immediately with its age, but data older than five minutes is rejected. Player history starts with 90 days, expands through 180/365/730 days only when needed, and uses complete history as the final fallback.
 
 To force a complete refresh, stop the chatbot and delete only the relevant cache directory. This is normally unnecessary.
 
@@ -292,10 +308,10 @@ The app fails explicitly instead of silently substituting a different metric.
 - **Official structure changed:** the source parser reports the URL and failed contract.
 - **Daily/results context mismatch:** weekly averages are withheld because the selected results page could not be proven to match the daily slate.
 - **Missing live average:** the value remains unavailable (`—`); it is not copied from DartsOrakel.
-- **Ollama unavailable:** start Ollama and verify `http://127.0.0.1:11434`.
+- **Ollama unavailable:** instant supported stats still work; start Ollama for explanations and other open-ended questions.
 - **Model missing:** run `ollama pull gemma4:12b` and restart the chatbot.
 - **Port already used:** stop the old process or set another `CHAT_PORT`.
-- **Slow first answer:** the model may be loading into memory. Later prompts are usually faster.
+- **Slow open-ended answer:** Gemma generation is much slower than scraping. The launcher preloads it and keeps it warm for 30 minutes, but generation still depends on CPU/GPU speed.
 
 Useful checks:
 
@@ -348,8 +364,10 @@ Examples of useful future tools are head-to-head summaries, rankings, tournament
 | `src/agent/tools.ts` | tool definitions and validated execution |
 | `src/modus/official-results-source.ts` | official JSON/HTML adapters and parsers |
 | `src/modus/results-schemas.ts` | strict official result snapshot schemas |
-| `src/modus/results-service.ts` | 15-second validated cache |
+| `src/modus/results-service.ts` | 10-second background refresh and disk fallback |
 | `src/services/player-matches.ts` | DartsOrakel match service |
+| `src/services/snapshot-store.ts` | single-flight memory SWR and five-minute safety cutoff |
+| `src/services/fast-research.ts` | typed intent routing and deterministic factual renderers |
 | `src/chat/server.ts` | local browser HTTP/API server |
 | `public/app.js` | browser interaction and safe answer rendering |
 | `tests/modus-results.test.ts` | official source/parser/cache regression tests |

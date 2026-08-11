@@ -59,8 +59,12 @@ async function refreshHealth() {
     if (model !== undefined) elements.modelName.textContent = prettyModelName(model);
     const status = readString(payload, "status");
     const message = readString(payload, "message") ?? "Ollama is unavailable.";
-    isReady = response.ok && status === "ready";
-    setStatus(isReady ? "ready" : "error", isReady ? "Ollama ready" : message, message);
+    const fastPathReady = payload.fastPathReady === true;
+    const ollamaReady = response.ok && status === "ready";
+    isReady = ollamaReady || fastPathReady;
+    const label = ollamaReady ? "Ollama ready" : fastPathReady ? "Stats ready" : message;
+    const title = ollamaReady ? message : fastPathReady ? `Instant stats are ready. Open-ended answers need Ollama. ${message}` : message;
+    setStatus(isReady ? "ready" : "error", label, title);
   } catch {
     isReady = false;
     setStatus("error", "Ollama offline", "The local chatbot server could not reach Ollama.");
@@ -86,6 +90,7 @@ async function sendMessage(rawMessage) {
   saveState();
   const thinking = appendThinkingMessage();
   updateControls();
+  const requestStartedAt = performance.now();
 
   try {
     const response = await fetch("/api/chat", {
@@ -99,7 +104,10 @@ async function sendMessage(rawMessage) {
     const answer = readString(payload, "answer");
     if (answer === undefined || answer.trim() === "") throw new Error("The model returned an empty answer.");
     thinking.remove();
-    appendMessage("assistant", answer, formatMetrics(payload.metrics));
+    const executionMode = readString(payload, "executionMode");
+    const label = executionMode === "fast-path" ? "Verified stats · Direct source" : "Gemma 4 · Research agent";
+    const browserLatencyMs = Math.max(0, Math.round(performance.now() - requestStartedAt));
+    appendMessage("assistant", answer, formatMetrics(payload, browserLatencyMs), label);
     state.messages.push({ role: "assistant", content: answer });
     saveState();
   } catch (error) {
@@ -128,14 +136,14 @@ async function clearConversation() {
   window.location.reload();
 }
 
-function appendMessage(role, content, meta = "") {
+function appendMessage(role, content, meta = "", customLabel = "") {
   const fragment = elements.template.content.cloneNode(true);
   const article = fragment.querySelector(".message");
   const label = fragment.querySelector(".message-label");
   const body = fragment.querySelector(".message-content");
   const metadata = fragment.querySelector(".message-meta");
   article.classList.add(`is-${role}`);
-  label.textContent = role === "assistant" ? "Gemma 4 · Research agent" : role === "user" ? "You" : "Local error";
+  label.textContent = customLabel !== "" ? customLabel : role === "assistant" ? "Gemma 4 · Research agent" : role === "user" ? "You" : "Local error";
   if (role === "assistant") renderSafeAnswer(body, content);
   else body.textContent = content;
   metadata.textContent = meta;
@@ -148,13 +156,13 @@ function appendThinkingMessage() {
   const article = appendMessage("assistant", "");
   article.classList.add("is-thinking");
   const content = article.querySelector(".message-content");
-  content.setAttribute("aria-label", "Gemma 4 is researching");
+  content.setAttribute("aria-label", "The research agent is checking available sources");
   for (let index = 0; index < 3; index += 1) {
     const dot = document.createElement("span");
     dot.className = "thinking-dot";
     content.append(dot);
   }
-  article.querySelector(".message-meta").textContent = "Resolving tools and checking evidence…";
+  article.querySelector(".message-meta").textContent = "Checking cache, official sources, and tools…";
   return article;
 }
 
@@ -306,12 +314,20 @@ function prettyModelName(model) {
   return model;
 }
 
-function formatMetrics(value) {
+function formatMetrics(value, browserLatencyMs) {
   if (!isRecord(value)) return "Verified locally";
-  const iterations = typeof value.iterations === "number" ? value.iterations : undefined;
-  const toolCalls = typeof value.toolCalls === "number" ? value.toolCalls : undefined;
+  const executionMode = readString(value, "executionMode");
+  if (executionMode === "fast-path") {
+    const latency = typeof value.sourceLatencyMs === "number" ? Math.max(0, Math.round(value.sourceLatencyMs)) : undefined;
+    const age = typeof value.dataAgeMs === "number" ? Math.max(0, Math.round(value.dataAgeMs / 1000)) : undefined;
+    const stale = value.stale === true ? " · cached refresh running" : "";
+    return `direct source${latency === undefined ? "" : ` · ${latency} ms source`}${browserLatencyMs === undefined ? "" : ` · ${browserLatencyMs} ms total`}${age === undefined ? "" : ` · data age ${age}s`}${stale}`;
+  }
+  const metrics = isRecord(value.metrics) ? value.metrics : value;
+  const iterations = typeof metrics.iterations === "number" ? metrics.iterations : undefined;
+  const toolCalls = typeof metrics.toolCalls === "number" ? metrics.toolCalls : undefined;
   if (iterations === undefined || toolCalls === undefined) return "Verified locally";
-  return `${toolCalls} tool call${toolCalls === 1 ? "" : "s"} · ${iterations} agent step${iterations === 1 ? "" : "s"} · local inference`;
+  return `${toolCalls} tool call${toolCalls === 1 ? "" : "s"} · ${iterations} agent step${iterations === 1 ? "" : "s"} · local inference${browserLatencyMs === undefined ? "" : ` · ${browserLatencyMs} ms total`}`;
 }
 
 async function readJsonObject(response) {
