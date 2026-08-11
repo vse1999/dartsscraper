@@ -9,6 +9,7 @@ import {
 
 export class PlayerResolver {
   private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
+  private directoryPromise: Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> | undefined;
 
   public constructor(client: Pick<DartsOrakelClient, "getPlayerStats">) {
     this.client = client;
@@ -20,26 +21,72 @@ export class PlayerResolver {
       throw new PlayerNotFoundError(name);
     }
 
-    const response = await this.client.getPlayerStats();
-    const candidates = response.data.filter(
-      (row) => normalizePlayerName(row.player_name) === normalizedRequestedName,
-    );
+    const directory = await this.directory();
+    const candidates = directory.get(normalizedRequestedName) ?? [];
     if (candidates.length === 0) {
       throw new PlayerNotFoundError(name);
     }
     if (candidates.length > 1) {
-      throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.player_name));
+      throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.name));
     }
     const candidate = candidates[0];
     if (candidate === undefined) {
       throw new PlayerNotFoundError(name);
     }
-    return playerIdentityFromStatsRow(candidate);
+    return candidate;
+  }
+
+  public async findMention(text: string): Promise<PlayerIdentity | undefined> {
+    return (await this.findMentions(text))[0];
+  }
+
+  public async findMentions(text: string): Promise<readonly PlayerIdentity[]> {
+    const searchableText = searchable(text);
+    if (searchableText === "") return [];
+    const directory = await this.directory();
+    const matches: PlayerIdentity[] = [];
+    for (const candidates of directory.values()) {
+      if (candidates.length !== 1) continue;
+      const player = candidates[0];
+      if (player !== undefined && ` ${searchableText} `.includes(` ${searchable(player.name)} `)) matches.push(player);
+    }
+    matches.sort((left, right) => right.name.length - left.name.length || left.name.localeCompare(right.name));
+    return matches;
+  }
+
+  public async preload(): Promise<void> {
+    await this.directory();
+  }
+
+  private directory(): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
+    if (this.directoryPromise !== undefined) return this.directoryPromise;
+    const request = this.client.getPlayerStats().then((response) => {
+      const directory = new Map<string, PlayerIdentity[]>();
+      for (const row of response.data) {
+        const player = playerIdentityFromStatsRow(row);
+        const key = normalizePlayerName(player.name);
+        directory.set(key, [...(directory.get(key) ?? []), player]);
+      }
+      return directory as ReadonlyMap<string, readonly PlayerIdentity[]>;
+    }).catch((error: unknown) => {
+      if (this.directoryPromise === request) this.directoryPromise = undefined;
+      throw error;
+    });
+    this.directoryPromise = request;
+    return request;
   }
 }
 
 export function normalizePlayerName(name: string): string {
   return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
+
+function searchable(value: string): string {
+  return normalizePlayerName(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 export function playerIdentityFromStatsRow(row: PlayerStatsRow): PlayerIdentity {

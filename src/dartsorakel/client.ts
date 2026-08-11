@@ -22,7 +22,7 @@ const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_BACKOFF_MS = 300;
 const DEFAULT_MIN_REQUEST_INTERVAL_MS = 250;
 const DEFAULT_PLAYER_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const DEFAULT_MATCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_MATCH_CACHE_TTL_MS = 10_000;
 const HISTORICAL_START_DATE = "1900-01-01";
 
 export interface DartsOrakelClientOptions {
@@ -39,6 +39,11 @@ export interface DartsOrakelClientOptions {
   fetchImpl?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
   now?: () => number;
+}
+
+export interface DartsOrakelMatchRequestOptions {
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export class DartsOrakelClient {
@@ -93,14 +98,16 @@ export class DartsOrakelClient {
     );
   }
 
-  public async getPlayerMatches(playerId: number): Promise<DartsOrakelMatchesResponse> {
+  public async getPlayerMatches(playerId: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> {
     if (!Number.isInteger(playerId) || playerId <= 0) {
       throw new Error("playerId must be a positive integer.");
     }
 
-    const dateTo = this.isoDate(this.now() + 24 * 60 * 60 * 1000);
+    const dateFrom = this.isoCalendarDate(options.dateFrom ?? HISTORICAL_START_DATE, "dateFrom");
+    const dateTo = this.isoCalendarDate(options.dateTo ?? this.isoDate(this.now() + 24 * 60 * 60 * 1000), "dateTo");
+    if (dateFrom > dateTo) throw new Error("dateFrom must not be later than dateTo.");
     const url = this.urlFor(DartsOrakelApiPath.playerMatches(playerId), {
-      [DartsOrakelMatchQuery.dateFrom]: HISTORICAL_START_DATE,
+      [DartsOrakelMatchQuery.dateFrom]: dateFrom,
       [DartsOrakelMatchQuery.dateTo]: dateTo,
       [DartsOrakelMatchQuery.rankKey]: DartsOrakelMatchDefaults.rankKey,
       [DartsOrakelMatchQuery.organStat]: DartsOrakelMatchDefaults.organStat,
@@ -109,9 +116,9 @@ export class DartsOrakelClient {
     return this.getJson(
       url,
       [
-        "player-matches-v2",
+        "player-matches-v3",
         playerId,
-        HISTORICAL_START_DATE,
+        dateFrom,
         dateTo,
         DartsOrakelMatchDefaults.rankKey,
         DartsOrakelMatchDefaults.organStat,
@@ -262,6 +269,15 @@ export class DartsOrakelClient {
 
   private isoDate(milliseconds: number): string {
     return new Date(milliseconds).toISOString().slice(0, 10);
+  }
+
+  private isoCalendarDate(value: string, name: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) throw new Error(`${name} must be an ISO date (YYYY-MM-DD).`);
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+      throw new Error(`${name} must be a valid calendar date.`);
+    }
+    return value;
   }
 
   private positiveInteger(value: number, name: string): number {
