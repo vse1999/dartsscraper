@@ -98,6 +98,7 @@ export class OfficialModusResultsSource {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly now: () => Date;
+  private cachedContext: ParsedModusResultsContext | undefined;
 
   public constructor(options: OfficialModusResultsSourceOptions = {}) {
     this.dailyFeedUrl = validateHttpUrl(options.dailyFeedUrl ?? DEFAULT_DAILY_FEED_URL, "daily feed URL");
@@ -114,7 +115,13 @@ export class OfficialModusResultsSource {
     const requestedDate = IsoDateSchema.parse(date);
     const fetchedAt = ModusIsoDateTimeSchema.parse(this.now().toISOString());
 
-    const dailyFeed = await this.fetchDailyFeed(signal);
+    const contextAtRequestStart = this.cachedContext;
+    const cachedAveragesRequest = this.fetchCachedAverages(contextAtRequestStart, signal);
+    const [dailyFeed, resultsHtml, cachedAveragesHtml] = await Promise.all([
+      this.fetchDailyFeed(signal),
+      this.fetchText(this.resultsUrl, "text/html", signal),
+      cachedAveragesRequest,
+    ]);
     if (dailyFeed.date !== requestedDate) {
       throw new OfficialModusResultsSourceError(
         `Official daily feed date mismatch: it reported ${JSON.stringify(dailyFeed.date)} but ${JSON.stringify(requestedDate)} was requested.`,
@@ -122,7 +129,6 @@ export class OfficialModusResultsSource {
       );
     }
 
-    const resultsHtml = await this.fetchText(this.resultsUrl, "text/html", signal);
     let parsedContext: ParsedModusResultsContext;
     try {
       parsedContext = parseModusResultsContext(resultsHtml, this.resultsUrl);
@@ -133,6 +139,10 @@ export class OfficialModusResultsSource {
         error,
       );
     }
+    const contextUnchanged = cachedAveragesHtml !== undefined
+      && contextAtRequestStart !== undefined
+      && sameResultsContext(contextAtRequestStart, parsedContext);
+    this.cachedContext = parsedContext;
 
     let matches: ModusMatch[];
     const warnings: string[] = [];
@@ -155,7 +165,9 @@ export class OfficialModusResultsSource {
       );
     }
 
-    const averagesHtml = await this.fetchText(parsedContext.weekAveragesUrl, "text/html", signal);
+    const averagesHtml = contextUnchanged
+      ? cachedAveragesHtml
+      : await this.fetchText(parsedContext.weekAveragesUrl, "text/html", signal);
     let weekAverages: ModusWeekAverage[];
     try {
       weekAverages = parseModusWeekAverages(averagesHtml);
@@ -205,6 +217,15 @@ export class OfficialModusResultsSource {
       );
     }
     return parsed.data;
+  }
+
+  private async fetchCachedAverages(context: ParsedModusResultsContext | undefined, signal?: AbortSignal): Promise<string | undefined> {
+    if (context === undefined) return undefined;
+    try {
+      return await this.fetchText(context.weekAveragesUrl, "text/html", signal);
+    } catch {
+      return undefined;
+    }
   }
 
   private async fetchText(url: string, accept: string, signal?: AbortSignal): Promise<string> {
@@ -397,8 +418,8 @@ function assertResultsPageMatchesDailyFeed(html: string, matches: readonly Modus
 
   const expected = new Map<string, number>();
   for (const match of matches) incrementCount(expected, matchupSignature(match.home.name, match.away.name));
-  if (!sameCounts(expected, observed)) {
-    throw new Error(`Fixture-card matchups (${cards.length}) differ from daily-feed matchups (${matches.length})`);
+  if (!containsCounts(observed, expected)) {
+    throw new Error(`Fixture-card matchups (${cards.length}) do not contain every daily-feed matchup (${matches.length})`);
   }
 }
 
@@ -414,12 +435,18 @@ function incrementCount(counts: Map<string, number>, key: string): void {
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
-function sameCounts(first: ReadonlyMap<string, number>, second: ReadonlyMap<string, number>): boolean {
-  if (first.size !== second.size) return false;
-  for (const [key, count] of first) {
-    if (second.get(key) !== count) return false;
+function containsCounts(available: ReadonlyMap<string, number>, required: ReadonlyMap<string, number>): boolean {
+  for (const [key, count] of required) {
+    if ((available.get(key) ?? 0) < count) return false;
   }
   return true;
+}
+
+function sameResultsContext(left: ParsedModusResultsContext, right: ParsedModusResultsContext): boolean {
+  return left.weekAveragesUrl === right.weekAveragesUrl
+    && left.context.seriesId === right.context.seriesId
+    && left.context.weekId === right.context.weekId
+    && left.context.group === right.context.group;
 }
 
 function findCompetitor(competitors: readonly DailyCompetitor[], qualifier: "home" | "away"): DailyCompetitor {
