@@ -58,7 +58,7 @@ describe("DartsOrakelClient", () => {
     expect(url.searchParams.get("dateFrom")).toBe("1900-01-01");
     expect(url.searchParams.get("dateTo")).toBe("2026-08-09");
     expect(writtenCacheKeys).toEqual([
-      "player-matches-v2-29-1900-01-01-2026-08-09-25-All-all-tournaments",
+      "player-matches-v3-29-1900-01-01-2026-08-09-25-All-all-tournaments",
     ]);
   });
 
@@ -74,6 +74,30 @@ describe("DartsOrakelClient", () => {
 
     await expect(client.getPlayerMatches(13)).rejects.toBeInstanceOf(DartsOrakelRequestError);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("scopes recent-history requests and cache keys by both date boundaries", async () => {
+    let requestedUrl: string | undefined;
+    const cacheSet = vi.fn<(key: string, value: unknown, ttlMs: number) => Promise<void>>().mockResolvedValue(undefined);
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      minRequestIntervalMs: 0,
+      fetchImpl: async (input): Promise<Response> => {
+        requestedUrl = String(input);
+        return new Response(JSON.stringify(readMatchFixture("rob-cross-matches.json")), { status: 200 });
+      },
+      cache: { get: async () => null, set: cacheSet },
+    });
+
+    await client.getPlayerMatches(29, { dateFrom: "2026-05-14", dateTo: "2026-08-12" });
+
+    expect(new URL(requestedUrl ?? "https://invalid.test").searchParams.get("dateFrom")).toBe("2026-05-14");
+    expect(new URL(requestedUrl ?? "https://invalid.test").searchParams.get("dateTo")).toBe("2026-08-12");
+    expect(cacheSet).toHaveBeenCalledWith(
+      "player-matches-v3-29-2026-05-14-2026-08-12-25-All-all-tournaments",
+      expect.any(Object),
+      expect.any(Number),
+    );
   });
 
   it("detects an unexpected JSON shape", async () => {

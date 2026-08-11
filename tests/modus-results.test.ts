@@ -158,6 +158,23 @@ describe("official MODUS result fixtures", () => {
     }
   });
 
+  it("accepts 30 cumulative fixture cards when all 15 daily matchups are represented", async () => {
+    const dailyBody = cumulativeDailyFeed(5);
+    const resultsBody = cumulativeResultsPage(10);
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("week-averages.php")) return textResponse(readTextFixture("modus-week-averages.html"));
+      if (url.includes("results.php")) return textResponse(resultsBody);
+      if (url.includes("live-scores-json.php")) return new Response(dailyBody, { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const source = new OfficialModusResultsSource({ fetchImpl });
+
+    await expect(source.getResults(date)).resolves.toMatchObject({ matches: expect.arrayContaining([]) });
+    const snapshot = await source.getResults(date);
+    expect(snapshot.matches).toHaveLength(15);
+  });
+
   it("rejects a daily payload for a different requested date", async () => {
     const mismatchedBody = readTextFixture("modus-live-results.json").replace(
       '"date": "2026-08-10"',
@@ -222,6 +239,25 @@ describe("official MODUS result fixtures", () => {
   });
 });
 
+function cumulativeDailyFeed(repetitions: number): string {
+  const payload: unknown = JSON.parse(readTextFixture("modus-live-results.json"));
+  if (typeof payload !== "object" || payload === null || !("summaries" in payload) || !Array.isArray(payload.summaries)) {
+    throw new Error("MODUS daily fixture must contain summaries.");
+  }
+  return JSON.stringify({
+    ...payload,
+    summaries: Array.from({ length: repetitions }, () => payload.summaries).flat(),
+  });
+}
+
+function cumulativeResultsPage(repetitions: number): string {
+  const html = readTextFixture("modus-results-context.html");
+  const cards = html.match(/<article class="fixture-card">[\s\S]*?<\/article>/gu) ?? [];
+  if (cards.length !== 3) throw new Error("MODUS context fixture must contain three fixture cards.");
+  const replacement = Array.from({ length: repetitions - 1 }, () => cards.join("\n")).join("\n");
+  return html.replace("</main>", `${replacement}\n</main>`);
+}
+
 describe("official MODUS result service cache contract", () => {
   it("returns a valid cached snapshot without calling the source", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error("source must not be called"));
@@ -231,7 +267,12 @@ describe("official MODUS result service cache contract", () => {
       get: cacheGet,
       set: vi.fn<CacheStore["set"]>(),
     };
-    const service = new OfficialModusResultsService({ source, cache, cacheTtlMs: 15_000 });
+    const service = new OfficialModusResultsService({
+      source,
+      cache,
+      cacheTtlMs: 15_000,
+      now: () => Date.parse("2026-08-10T10:12:03Z"),
+    });
 
     await expect(service.getResults(date)).resolves.toMatchObject({ date });
     expect(cacheGet).toHaveBeenCalledWith(expect.stringMatching(/^modus-official-results-v\d+-2026-08-10$/));

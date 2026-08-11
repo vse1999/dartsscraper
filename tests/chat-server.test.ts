@@ -1,6 +1,6 @@
 import type { Server } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRunOptions, AgentRunResult } from "../src/agent/harness.js";
 import type { ChatAgent } from "../src/chat/server.js";
@@ -96,6 +96,50 @@ describe("local chat server", () => {
     const result = await postChat(started.url, "hello");
     expect(result.response.status).toBe(503);
     expect(result.payload).toEqual({ error: "Run: ollama pull gemma4:12b" });
+    expect(agent.requests).toHaveLength(0);
+  });
+
+  it("answers supported stats through the fast path without checking or calling Ollama", async () => {
+    const agent = new RecordingAgent();
+    const healthCheck = vi.fn().mockRejectedValue(new Error("Ollama must not be checked"));
+    const fastResearchService = {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn(),
+      tryAnswer: vi.fn().mockResolvedValue({
+        answer: "Official MODUS results — 2026-08-11",
+        intent: "modus-current-results" as const,
+        executionMode: "fast-path" as const,
+        sourceLatencyMs: 7,
+        dataAgeMs: 2_000,
+        fetchedAt: "2026-08-11T12:00:00.000Z",
+        stale: false,
+      }),
+    };
+    const started = await startChatServer({
+      host: "127.0.0.1",
+      port: 0,
+      agent,
+      fastResearchService,
+      model: "gemma4:12b",
+      logger: noopLogger,
+      staticDirectory: path.resolve(process.cwd(), "public"),
+      healthChecker: { check: healthCheck },
+    });
+    servers.push(started.server);
+
+    const result = await postChat(started.url, "today MODUS results and averages");
+
+    expect(result.response.status).toBe(200);
+    expect(result.payload).toMatchObject({
+      answer: "Official MODUS results — 2026-08-11",
+      executionMode: "fast-path",
+      sourceLatencyMs: 7,
+      dataAgeMs: 2_000,
+      metrics: { iterations: 0, toolCalls: 0 },
+    });
+    expect(fastResearchService.initialize).toHaveBeenCalledTimes(1);
+    expect(fastResearchService.tryAnswer).toHaveBeenCalledTimes(1);
+    expect(healthCheck).not.toHaveBeenCalled();
     expect(agent.requests).toHaveLength(0);
   });
 });

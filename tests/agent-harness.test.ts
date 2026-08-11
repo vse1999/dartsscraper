@@ -237,14 +237,29 @@ describe("bounded agent harness", () => {
       requestCount += 1;
       if (requestCount === 1) return new Response(JSON.stringify({ error: "gemma does not support tools" }), { status: 400 });
       const body: unknown = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({ model: "gemma3:4b", format: { type: "object" } });
+      expect(body).toMatchObject({ model: "gemma3:4b", keep_alive: "30m", format: { type: "object" } });
       return new Response(JSON.stringify({ message: { role: "assistant", content: JSON.stringify({ action: "tools", calls: [{ name: "resolveDate", arguments: { expression: "Monday" } }] }) } }), { status: 200 });
     };
     const client = new OllamaClient({ fetchImpl });
     const response = await client.chat({ model: "gemma3:4b", messages: [{ role: "user", content: "Monday" }], tools: [] });
     expect(response.message.tool_calls?.[0]?.function).toEqual({ name: "resolveDate", arguments: { expression: "Monday" } });
     expect(requestCount).toBe(2);
-  });  it("rejects malformed Ollama responses", async () => {
+  });
+  it("sends the configured keep-alive duration to Ollama", async () => {
+    let requestBody: unknown;
+    const client = new OllamaClient({
+      keepAlive: "45m",
+      fetchImpl: async (_input, init): Promise<Response> => {
+        requestBody = JSON.parse(String(init?.body)) as unknown;
+        return new Response(JSON.stringify({ message: { role: "assistant", content: "ready" } }), { status: 200 });
+      },
+    });
+
+    await client.chat({ model: "gemma4:12b", messages: [{ role: "user", content: "hello" }], tools: [] });
+
+    expect(requestBody).toMatchObject({ keep_alive: "45m" });
+  });
+  it("rejects malformed Ollama responses", async () => {
     const client = new OllamaClient({ fetchImpl: async () => new Response(JSON.stringify({ message: { role: "assistant", tool_calls: [{ function: {} }] } }), { status: 200 }) });
     await expect(client.chat({ model: "gemma", messages: [], tools: [] })).rejects.toBeInstanceOf(OllamaRequestError);
   });

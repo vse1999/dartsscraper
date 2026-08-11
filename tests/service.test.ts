@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { InsufficientMatchDataError } from "../src/errors.js";
 import { PlayerMatchesService } from "../src/services/player-matches.js";
@@ -29,5 +29,30 @@ describe("player match service", () => {
     });
 
     await expect(service.getLastMatches("Example", 10)).rejects.toBeInstanceOf(InsufficientMatchDataError);
+  });
+
+  it("shares one player scrape across simultaneous identical requests", async () => {
+    const getPlayerMatches = vi.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      return matches;
+    });
+    const service = new PlayerMatchesService({
+      resolver: { resolvePlayer: async () => ({ id: 1, name: "Example", slug: "example" }) },
+      scraper: { getPlayerMatches },
+      now: () => new Date("2026-08-11T12:00:00Z"),
+    });
+
+    const [first, second] = await Promise.all([
+      service.getLastMatches("Example", 2),
+      service.getLastMatches("Example", 2),
+    ]);
+
+    expect(first).toEqual(second);
+    expect(getPlayerMatches).toHaveBeenCalledTimes(1);
+    expect(getPlayerMatches).toHaveBeenCalledWith(
+      { id: 1, name: "Example", slug: "example" },
+      2,
+      "2026-08-12",
+    );
   });
 });

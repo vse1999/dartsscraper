@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PlayerNotFoundError } from "../src/errors.js";
 import { PlayerResolver, normalizePlayerName, playerIdentityFromStatsRow } from "../src/player/resolver.js";
@@ -52,5 +52,20 @@ describe("player resolver", () => {
       player_name: "Robert Thornton",
       player_profile_url: "https://dartsorakel.com/player/details/73/robert-thornton",
     })).toEqual({ id: 73, name: "Robert Thornton", slug: "robert-thornton" });
+  });
+
+  it("loads the player directory once and finds names inside natural-language questions", async () => {
+    const getPlayerStats = vi.fn().mockResolvedValue(readPlayerStatsFixture());
+    const resolver = new PlayerResolver({ getPlayerStats });
+
+    await resolver.preload();
+    await expect(resolver.findMentions("Show Damon Heta's last 10 matches")).resolves.toContainEqual({
+      id: 13,
+      name: "Damon Heta",
+      slug: "damon-heta",
+    });
+    await resolver.resolvePlayer("Damon Heta");
+
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
   });
 });
