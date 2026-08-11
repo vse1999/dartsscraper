@@ -10,7 +10,9 @@ export type { Match, MatchResult } from "./schemas/match.js";
 export type { PlayerIdentity } from "./schemas/player.js";
 export { calculateMatchAverage } from "./services/statistics.js";
 export { DartsOrakelClient } from "./dartsorakel/client.js";
+export type { DartsOrakelClientOptions, DartsOrakelMatchRequestOptions } from "./dartsorakel/client.js";
 export { DartsOrakelScraper } from "./dartsorakel/scraper.js";
+export type { RecentPlayerMatchesOptions } from "./dartsorakel/scraper.js";
 export { PlayerResolver, normalizePlayerName } from "./player/resolver.js";
 export { PlayerMatchesService } from "./services/player-matches.js";
 export * from "./errors.js";
@@ -53,14 +55,15 @@ function createResolver(options: DefaultServiceOptions): PlayerResolver {
   return new PlayerResolver(client);
 }
 export { resolveResearchDate, IsoDateSchema } from "./agent/date.js";
-export { createDartsResearchAgent } from "./agent/factory.js";
+export { createDartsResearchAgent, createDartsResearchRuntime } from "./agent/factory.js";
+export type { CreateAgentOptions, DartsResearchRuntime } from "./agent/factory.js";
 export { DartsResearchAgent } from "./agent/harness.js";
 export type { AgentConversationMessage, AgentRunOptions, AgentRunResult } from "./agent/harness.js";
-export { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from "./agent/config.js";
+export { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_KEEP_ALIVE, DEFAULT_OLLAMA_MODEL } from "./agent/config.js";
 export { ChatSessionStore } from "./chat/session-store.js";
 export type { ChatSessionStoreOptions } from "./chat/session-store.js";
 export { createChatServer, startChatServer } from "./chat/server.js";
-export type { ChatAgent, ChatServerOptions, StartChatServerOptions, StartedChatServer } from "./chat/server.js";
+export type { ChatAgent, ChatServerOptions, FastChatService, StartChatServerOptions, StartedChatServer } from "./chat/server.js";
 export { createOllamaHealthChecker } from "./chat/ollama-health.js";
 export type { OllamaHealthChecker, OllamaHealthCheckerOptions, OllamaHealthResult, OllamaHealthStatus } from "./chat/ollama-health.js";
 export { OllamaClient } from "./agent/ollama-client.js";
@@ -95,3 +98,7 @@ export type {
 } from "./modus/results-schemas.js";
 export { ModusPlayersService } from "./modus/service.js";
 export type { ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
+export { FastResearchService } from "./services/fast-research.js";
+export type { FastResearchAnswer, FastResearchServiceDependencies, ResearchIntent } from "./services/fast-research.js";
+export { SnapshotStore } from "./services/snapshot-store.js";
+export type { SnapshotRead, SnapshotStoreOptions } from "./services/snapshot-store.js";

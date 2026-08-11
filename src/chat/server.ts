@@ -5,10 +5,11 @@ import path from "node:path";
 import { z } from "zod";
 
 import { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from "../agent/config.js";
-import { createDartsResearchAgent } from "../agent/factory.js";
-import type { AgentRunOptions, AgentRunResult, DartsResearchAgent } from "../agent/harness.js";
+import { createDartsResearchRuntime } from "../agent/factory.js";
+import type { AgentConversationMessage, AgentRunOptions, AgentRunResult } from "../agent/harness.js";
 import { AgentLimitError, OllamaRequestError } from "../errors.js";
 import { ConsoleLogger, type Logger } from "../logger.js";
+import type { FastResearchAnswer } from "../services/fast-research.js";
 import { createOllamaHealthChecker, type OllamaHealthChecker, type OllamaHealthResult } from "./ollama-health.js";
 import { ChatSessionStore } from "./session-store.js";
 
@@ -30,12 +31,20 @@ interface ChatAgent {
   run(query: string, options?: AgentRunOptions): Promise<AgentRunResult>;
 }
 
+export interface FastChatService {
+  initialize(): Promise<void>;
+  tryAnswer(query: string, history?: readonly AgentConversationMessage[], signal?: AbortSignal): Promise<FastResearchAnswer | null>;
+  close(): void;
+}
+
 export interface ChatServerOptions {
   agent?: ChatAgent;
+  fastResearchService?: FastChatService;
   sessionStore?: ChatSessionStore;
   healthChecker?: OllamaHealthChecker;
   model?: string;
   ollamaBaseUrl?: string;
+  ollamaKeepAlive?: string;
   staticDirectory?: string;
   maxBodyBytes?: number;
   maxConcurrentChats?: number;
@@ -55,26 +64,23 @@ export interface StartedChatServer {
 }
 
 export function createChatServer(options: ChatServerOptions = {}): Server {
-  const model = options.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
-  const ollamaBaseUrl = options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
-  const logger = options.logger ?? new ConsoleLogger({ minimumLevel: "info" });
-  const agent: ChatAgent = options.agent ?? createDartsResearchAgent({ model, ollamaBaseUrl });
-  const sessions = options.sessionStore ?? new ChatSessionStore();
-  const health = options.healthChecker ?? createOllamaHealthChecker({ model, baseUrl: ollamaBaseUrl });
-  const staticDirectory = options.staticDirectory ?? path.resolve(process.cwd(), "public");
-  const maxBodyBytes = positiveInteger(options.maxBodyBytes ?? 16_384, "maxBodyBytes");
-  const chatGate = new RequestGate(positiveInteger(options.maxConcurrentChats ?? 1, "maxConcurrentChats"));
-
-  return createServer((request, response) => {
-    applySecurityHeaders(response);
-    void routeRequest({ request, response, agent, sessions, health, staticDirectory, maxBodyBytes, chatGate, logger, model });
-  });
+  const dependencies = resolveChatDependencies(options);
+  if (dependencies.fastResearchService !== undefined) {
+    void dependencies.fastResearchService.initialize().catch((error: unknown) => {
+      dependencies.logger.warn("Fast-path startup preload failed; requests will retry on demand.", {
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+    });
+  }
+  return createResolvedChatServer(options, dependencies);
 }
 
 export async function startChatServer(options: StartChatServerOptions = {}): Promise<StartedChatServer> {
   const host = options.host ?? "127.0.0.1";
   const port = validPort(options.port ?? 3_210);
-  const server = createChatServer(options);
+  const dependencies = resolveChatDependencies(options);
+  await dependencies.fastResearchService?.initialize();
+  const server = createResolvedChatServer(options, dependencies);
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
@@ -89,10 +95,67 @@ export async function startChatServer(options: StartChatServerOptions = {}): Pro
   return { server, host, port: actualPort, url: `http://${browserHost}:${actualPort}` };
 }
 
+interface ResolvedChatDependencies {
+  agent: ChatAgent;
+  fastResearchService: FastChatService | undefined;
+  logger: Logger;
+  model: string;
+  ollamaBaseUrl: string;
+}
+
+function resolveChatDependencies(options: ChatServerOptions): ResolvedChatDependencies {
+  const model = options.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL;
+  const ollamaBaseUrl = options.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL;
+  const logger = options.logger ?? new ConsoleLogger({ minimumLevel: "info" });
+  if (options.agent !== undefined) {
+    return { agent: options.agent, fastResearchService: options.fastResearchService, logger, model, ollamaBaseUrl };
+  }
+  const runtime = createDartsResearchRuntime({
+    model,
+    ollamaBaseUrl,
+    ...(options.ollamaKeepAlive === undefined ? {} : { ollamaKeepAlive: options.ollamaKeepAlive }),
+  });
+  return {
+    agent: runtime.agent,
+    fastResearchService: options.fastResearchService ?? runtime.fastResearchService,
+    logger,
+    model,
+    ollamaBaseUrl,
+  };
+}
+
+function createResolvedChatServer(options: ChatServerOptions, dependencies: ResolvedChatDependencies): Server {
+  const sessions = options.sessionStore ?? new ChatSessionStore();
+  const health = options.healthChecker ?? createOllamaHealthChecker({ model: dependencies.model, baseUrl: dependencies.ollamaBaseUrl });
+  const staticDirectory = options.staticDirectory ?? path.resolve(process.cwd(), "public");
+  const maxBodyBytes = positiveInteger(options.maxBodyBytes ?? 16_384, "maxBodyBytes");
+  const chatGate = new RequestGate(positiveInteger(options.maxConcurrentChats ?? 1, "maxConcurrentChats"));
+
+  const server = createServer((request, response) => {
+    applySecurityHeaders(response);
+    void routeRequest({
+      request,
+      response,
+      agent: dependencies.agent,
+      fastResearchService: dependencies.fastResearchService,
+      sessions,
+      health,
+      staticDirectory,
+      maxBodyBytes,
+      chatGate,
+      logger: dependencies.logger,
+      model: dependencies.model,
+    });
+  });
+  server.once("close", () => dependencies.fastResearchService?.close());
+  return server;
+}
+
 async function routeRequest(context: {
   request: IncomingMessage;
   response: ServerResponse;
   agent: ChatAgent;
+  fastResearchService: FastChatService | undefined;
   sessions: ChatSessionStore;
   health: OllamaHealthChecker;
   staticDirectory: string;
@@ -109,7 +172,10 @@ async function routeRequest(context: {
 
     if (request.method === "GET" && requestUrl.pathname === "/api/health") {
       const result = await context.health.check();
-      writeJson(response, result.status === "ready" ? 200 : 503, result);
+      writeJson(response, result.status === "ready" ? 200 : 503, {
+        ...result,
+        fastPathReady: context.fastResearchService !== undefined,
+      });
       return;
     }
     if (request.method === "POST" && requestUrl.pathname === "/api/chat") {
@@ -139,6 +205,7 @@ async function handleChat(context: {
   request: IncomingMessage;
   response: ServerResponse;
   agent: ChatAgent;
+  fastResearchService: FastChatService | undefined;
   sessions: ChatSessionStore;
   health: OllamaHealthChecker;
   maxBodyBytes: number;
@@ -147,37 +214,70 @@ async function handleChat(context: {
 }): Promise<void> {
   const contentType = context.request.headers["content-type"]?.split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
   if (contentType !== "application/json") throw new HttpError(415, "Content-Type must be application/json.");
-  const release = context.chatGate.tryAcquire();
-  if (release === undefined) throw new HttpError(429, "The local model is busy. Please wait for the current answer to finish.");
+  const body = await readJsonBody(context.request, context.maxBodyBytes);
+  const parsed = ChatRequestSchema.safeParse(body);
+  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? "Invalid chat request.");
+  const history = context.sessions.getHistory(parsed.data.sessionId);
+  const abortController = new AbortController();
+  const onAborted = (): void => abortController.abort(new Error("Browser disconnected."));
+  const onResponseClosed = (): void => {
+    if (!context.response.writableEnded) abortController.abort(new Error("Browser disconnected."));
+  };
+  context.request.once("aborted", onAborted);
+  context.response.once("close", onResponseClosed);
   try {
-    const health = await context.health.check();
-    if (health.status !== "ready") throw healthError(health);
-    const body = await readJsonBody(context.request, context.maxBodyBytes);
-    const parsed = ChatRequestSchema.safeParse(body);
-    if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? "Invalid chat request.");
-    const history = context.sessions.getHistory(parsed.data.sessionId);
-    const abortController = new AbortController();
-    const onAborted = (): void => abortController.abort(new Error("Browser disconnected."));
-    const onResponseClosed = (): void => {
-      if (!context.response.writableEnded) abortController.abort(new Error("Browser disconnected."));
-    };
-    context.request.once("aborted", onAborted);
-    context.response.once("close", onResponseClosed);
+    const fastAnswer = await tryFastAnswer(context.fastResearchService, parsed.data.message, history, abortController.signal);
+    if (fastAnswer !== null) {
+      context.sessions.appendExchange(parsed.data.sessionId, parsed.data.message, fastAnswer.answer);
+      writeJson(context.response, 200, {
+        sessionId: parsed.data.sessionId,
+        answer: fastAnswer.answer,
+        model: context.model,
+        executionMode: fastAnswer.executionMode,
+        sourceLatencyMs: fastAnswer.sourceLatencyMs,
+        dataAgeMs: fastAnswer.dataAgeMs,
+        fetchedAt: fastAnswer.fetchedAt,
+        stale: fastAnswer.stale,
+        metrics: { iterations: 0, toolCalls: 0 },
+      });
+      return;
+    }
+
+    const release = context.chatGate.tryAcquire();
+    if (release === undefined) throw new HttpError(429, "The local model is busy. Please wait for the current answer to finish.");
     try {
+      const health = await context.health.check();
+      if (health.status !== "ready") throw healthError(health);
       const result = await context.agent.run(parsed.data.message, { history, signal: abortController.signal });
       context.sessions.appendExchange(parsed.data.sessionId, parsed.data.message, result.answer);
       writeJson(context.response, 200, {
         sessionId: parsed.data.sessionId,
         answer: result.answer,
         model: result.model,
+        executionMode: "llm",
         metrics: { iterations: result.iterations, toolCalls: result.toolCalls },
       });
     } finally {
-      context.request.removeListener("aborted", onAborted);
-      context.response.removeListener("close", onResponseClosed);
+      release();
     }
   } finally {
-    release();
+    context.request.removeListener("aborted", onAborted);
+    context.response.removeListener("close", onResponseClosed);
+  }
+}
+
+async function tryFastAnswer(
+  service: FastChatService | undefined,
+  query: string,
+  history: readonly AgentConversationMessage[],
+  signal: AbortSignal,
+): Promise<FastResearchAnswer | null> {
+  if (service === undefined) return null;
+  try {
+    return await service.tryAnswer(query, history, signal);
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message.slice(0, 500) : "unknown source error";
+    throw new HttpError(502, `The live darts source could not provide safe current data: ${detail}`);
   }
 }
 
