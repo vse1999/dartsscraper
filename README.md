@@ -12,6 +12,8 @@ ollama pull gemma4:12b
 npm run chat
 ```
 
+Or simply double-click `start-chatbot.cmd`; it starts Ollama/model setup, launches the chatbot, and opens the browser automatically.
+
 Open [http://127.0.0.1:3210](http://127.0.0.1:3210). The header must show **Ollama ready** before a question can be sent.
 
 The web app provides:

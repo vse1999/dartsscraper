@@ -27,6 +27,22 @@ It does **not** replace current MODUS results with older DartsOrakel rows.
 
 ## 2. Quick start
 
+### Easiest way
+
+Double-click:
+
+```text
+start-chatbot.cmd
+```
+
+It starts Ollama if needed, downloads `gemma4:12b` on the first run, starts the local chatbot, and opens the browser. Then ask:
+
+```text
+today MODUS all matches and player averages
+```
+
+### Manual way
+
 ### Requirements
 
 - Windows, macOS, or Linux;
