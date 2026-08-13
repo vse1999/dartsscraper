@@ -71,6 +71,9 @@ export class OllamaClient implements OllamaChatClient {
     return { message: { role: "assistant", content: "", tool_calls: (action.data.calls ?? []).map((call) => ({ function: call })) } };
   }
   private async request(body: unknown, signal: AbortSignal | undefined, allowUnsupportedTools: boolean): Promise<{ ok: boolean; status: number; text: string }> {
+    if (signal?.aborted === true) {
+      throw new OllamaRequestError("Ollama request was cancelled.", undefined, { cause: signal.reason });
+    }
     const controller = new AbortController();
     const abort = (): void => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });

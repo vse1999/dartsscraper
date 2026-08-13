@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentLimitError, OllamaRequestError } from "../src/errors.js";
 import { DartsResearchAgent } from "../src/agent/harness.js";
 import { OllamaClient, type OllamaChatClient, type OllamaChatRequest, type OllamaChatResponse } from "../src/agent/ollama-client.js";
@@ -262,6 +262,16 @@ describe("bounded agent harness", () => {
   it("rejects malformed Ollama responses", async () => {
     const client = new OllamaClient({ fetchImpl: async () => new Response(JSON.stringify({ message: { role: "assistant", tool_calls: [{ function: {} }] } }), { status: 200 }) });
     await expect(client.chat({ model: "gemma", messages: [], tools: [] })).rejects.toBeInstanceOf(OllamaRequestError);
+  });
+  it("does not issue Ollama requests after caller cancellation", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const client = new OllamaClient({ fetchImpl });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled by test"));
+
+    await expect(client.chat({ model: "gemma", messages: [], tools: [] }, controller.signal))
+      .rejects.toMatchObject({ message: "Ollama request was cancelled." });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("enforces the overall deadline", async () => {
     const client: OllamaChatClient = { chat: async (_request, signal) => new Promise<OllamaChatResponse>((_resolve, reject) => {
