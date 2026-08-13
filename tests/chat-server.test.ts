@@ -71,6 +71,20 @@ describe("local chat server", () => {
     expect(crossOrigin.status).toBe(403);
   });
 
+  it("rejects a declared oversized body before parsing it", async () => {
+    const agent = new RecordingAgent();
+    const { url } = await startTestServer(agent, 100);
+    const response = await fetch(`${url}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "101" },
+      body: "x".repeat(101),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "Request body exceeds 100 bytes." });
+    expect(agent.requests).toHaveLength(0);
+  });
+
   it("clears server-side conversation memory", async () => {
     const agent = new RecordingAgent();
     const { url } = await startTestServer(agent);
@@ -144,7 +158,7 @@ describe("local chat server", () => {
   });
 });
 
-async function startTestServer(agent: ChatAgent): Promise<{ url: string }> {
+async function startTestServer(agent: ChatAgent, maxBodyBytes = 16_384): Promise<{ url: string }> {
   const started = await startChatServer({
     host: "127.0.0.1",
     port: 0,
@@ -152,6 +166,7 @@ async function startTestServer(agent: ChatAgent): Promise<{ url: string }> {
     model: "gemma4:12b",
     logger: noopLogger,
     staticDirectory: path.resolve(process.cwd(), "public"),
+    maxBodyBytes,
     healthChecker: { check: async () => ({ status: "ready", model: "gemma4:12b", message: "ready", ollamaVersion: "test" }) },
   });
   servers.push(started.server);

@@ -283,6 +283,12 @@ async function tryFastAnswer(
 
 async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
+    const declaredLength = declaredBodyLength(request);
+    if (declaredLength !== undefined && declaredLength > maxBodyBytes) {
+      request.resume();
+      reject(new HttpError(413, `Request body exceeds ${maxBodyBytes} bytes.`));
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
@@ -326,6 +332,13 @@ async function readJsonBody(request: IncomingMessage, maxBodyBytes: number): Pro
     request.once("error", onError);
     request.once("aborted", onAborted);
   });
+}
+
+function declaredBodyLength(request: IncomingMessage): number | undefined {
+  const header = request.headers["content-length"];
+  if (typeof header !== "string") return undefined;
+  const length = Number(header);
+  return Number.isSafeInteger(length) && length >= 0 ? length : undefined;
 }
 
 async function serveStaticFile(response: ServerResponse, method: string, pathname: string, staticDirectory: string): Promise<void> {
