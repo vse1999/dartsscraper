@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
@@ -60,10 +60,15 @@ export class FileCache implements CacheStore {
       expiresAt: this.now() + ttlMs,
       value,
     };
+    const filePath = this.filePath(key);
+    let temporaryPath: string | undefined;
     try {
       await mkdir(this.directory, { recursive: true });
-      await writeFile(this.filePath(key), JSON.stringify(envelope), "utf8");
+      temporaryPath = `${filePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, JSON.stringify(envelope), "utf8");
+      await rename(temporaryPath, filePath);
     } catch (error: unknown) {
+      if (temporaryPath !== undefined) await unlink(temporaryPath).catch(() => undefined);
       this.logger.warn("Unable to write cache entry; continuing without cache.", {
         key,
         error: error instanceof Error ? error.message : "unknown error",
