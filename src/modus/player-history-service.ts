@@ -47,6 +47,7 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
   private readonly failureTtlMs: number;
   private readonly now: () => number;
   private readonly logger: Logger;
+  private readonly currentSeriesPlayerKeys: ReadonlySet<string>;
   private cataloguePromise: Promise<CatalogueRead> | undefined;
   private catalogueExpiresAt = 0;
   private readonly detailsCache = new Map<string, Promise<ModusHistoricalMatch>>();
@@ -58,10 +59,14 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
     this.failureTtlMs = positiveFinite(options.failureTtlMs ?? DEFAULT_FAILURE_TTL_MS, "failureTtlMs");
     this.now = options.now ?? Date.now;
     this.logger = options.logger ?? noopLogger;
+    this.currentSeriesPlayerKeys = buildCurrentSeriesPlayerKeys(this.index);
   }
 
   public async findPlayerHistory(playerName: string, limit: number): Promise<ModusPlayerHistoryResult | null> {
     validatePlayerRequest(playerName, limit);
+    // Source selection must be local: PDC lookups should not pay for four
+    // official MODUS page requests before reaching DartsOrakel.
+    if (!this.isCurrentModusPlayer(playerName)) return null;
     const catalogue = await this.readCatalogue();
     const candidates = referencesForPlayer(catalogue.references, playerName);
     if (candidates.length === 0) {
@@ -106,6 +111,11 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
       evidenceUrls: selected.map((item) => item.sourceUrl),
       sourceUrl: MODUS_RESULTS_URL,
     };
+  }
+
+  private isCurrentModusPlayer(playerName: string): boolean {
+    return this.currentSeriesPlayerKeys.has(`exact:${identityKey(playerName)}`)
+      || this.currentSeriesPlayerKeys.has(`tokens:${tokenIdentityKey(playerName)}`);
   }
 
   private async readCatalogue(): Promise<CatalogueRead> {
@@ -237,6 +247,23 @@ export function identityKey(value: string): string {
 
 export function tokenIdentityKey(value: string): string {
   return identityKey(value).split(" ").filter((token) => token !== "").sort().join(" ");
+}
+
+function buildCurrentSeriesPlayerKeys(index: ModusResultsIndex): ReadonlySet<string> {
+  const currentSeries = index.series.reduce<ModusResultsIndex["series"][number] | undefined>((latest, series) => {
+    return latest === undefined || series.order > latest.order ? series : latest;
+  }, undefined);
+  if (currentSeries === undefined) throw new Error("The bundled official MODUS index contains no series.");
+  const keys = new Set<string>();
+  for (const match of index.matches) {
+    if (match.seriesId !== currentSeries.id) continue;
+    for (const name of [match.homeName, match.awayName]) {
+      keys.add(`exact:${identityKey(name)}`);
+      keys.add(`tokens:${tokenIdentityKey(name)}`);
+    }
+  }
+  if (keys.size === 0) throw new Error("The bundled official MODUS current series contains no players.");
+  return keys;
 }
 
 function mergeReferences(

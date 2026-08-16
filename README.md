@@ -14,7 +14,7 @@ Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOra
 4. Create a Vercel Hobby project from this directory and add `BOT_TOKEN`, `ALLOWED_USER_ID`, and `WEBHOOK_SECRET` as encrypted project environment variables.
 5. Deploy, then register `https://<deployment-domain>/api/telegram-webhook` with Telegram's `setWebhook`, passing the same value as `secret_token`.
 
-Send the bot a private message such as `Jack Drayton last 10 match averages` or `Rob Cross last 10 match averages`. The bot checks its official MODUS catalogue first and returns only official MODUS match-detail statistics when the exact player exists there; otherwise it uses DartsOrakel. MODUS rows include their official proof URL. `/start` and `/help` show the exact grammar; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
+Send the bot a private message such as `Jack Drayton last 10 match averages` or `Rob Cross last 10 match averages`. Source selection is a local lookup: players in the bundled current MODUS series use official MODUS match details, while every other player goes immediately to DartsOrakel without a MODUS network request. MODUS rows include their official proof URL. `/start` and `/help` show the exact grammar; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
 
 `npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
 

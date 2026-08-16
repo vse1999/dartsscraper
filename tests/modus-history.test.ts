@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { ModusHistoryUnavailableError } from "../src/errors.js";
 import {
   MODUS_RESULTS_URL,
   type ModusHistoricalMatch,
@@ -160,13 +159,18 @@ describe("MODUS player history and routing", () => {
     expect(result?.evidenceUrls).toHaveLength(2);
   });
 
-  it("does not misroute an unknown player when the live official catalogue could not be checked", async () => {
+  it("routes a non-current player immediately without making a live MODUS request", async () => {
+    const getLiveReferences = vi.fn<OfficialModusHistoryReader["getLiveReferences"]>().mockRejectedValue(new Error("must not be called"));
     const source: OfficialModusHistoryReader = {
-      getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => { throw new Error("offline"); },
+      getLiveReferences,
       getMatchDetails: async (): Promise<ModusHistoricalMatch> => { throw new Error("not expected"); },
     };
-    const service = new ModusPlayerHistoryService({ source, index: index([]) });
-    await expect(service.findPlayerHistory("New Player", 10)).rejects.toBeInstanceOf(ModusHistoryUnavailableError);
+    const service = new ModusPlayerHistoryService({
+      source,
+      index: index([reference("19003", 1, ["Jack Drayton", "Zvonimir Lesic"])]),
+    });
+    await expect(service.findPlayerHistory("PDC Player", 10)).resolves.toBeNull();
+    expect(getLiveReferences).not.toHaveBeenCalled();
   });
 
   it("prefers official MODUS and calls DartsOrakel only when MODUS confirms no match", async () => {
