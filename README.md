@@ -2,6 +2,20 @@
 
 Production-oriented TypeScript tooling for DartsOrakel player matches plus a browser chatbot powered locally by Ollama and `gemma4:12b`. Supported live-stat questions use a near-instant deterministic path with no model call; Gemma plans tools and explains open-ended questions.
 
+## Private Telegram bot
+
+The bot is an owner-only, free-tier webhook around the existing deterministic DartsOrakel scraper. It needs no database, paid API, queue, Redis, or language model.
+
+1. Use Node.js 24 and run `npm install`.
+2. Copy the three Telegram settings from [`.env.example`](./.env.example) to `.env.local`. Generate `WEBHOOK_SECRET` yourself; it is not supplied by Telegram.
+3. Run `npm run build`, `npm test`, and `npm run audit:prod`.
+4. Create a Vercel Hobby project from this directory and add `BOT_TOKEN`, `ALLOWED_USER_ID`, and `WEBHOOK_SECRET` as encrypted project environment variables.
+5. Deploy, then register `https://<deployment-domain>/api/telegram-webhook` with Telegram's `setWebhook`, passing the same value as `secret_token`.
+
+Send the bot a private message such as `Rob Cross last 10 match averages`. `/start` and `/help` show the exact grammar; `/health` verifies Telegram delivery without calling the statistics source. Updates from every other user, group, or channel are silently ignored.
+
+`npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
+
 ## Start the chatbot
 
 Requirements: Node.js 18+, npm, a current Ollama installation, and enough memory to run the 7.6 GB Gemma 4 model.
