@@ -65,6 +65,13 @@ export class ModusSourceUnavailableError extends Error {
   }
 }
 
+export class ModusHistoryUnavailableError extends Error {
+  public constructor(message: string, cause?: unknown) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = new.target.name;
+  }
+}
+
 export class AgentLimitError extends Error {
   public constructor(message: string) {
     super(message);

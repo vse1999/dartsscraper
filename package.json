@@ -13,6 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "telegram:smoke": "tsx scripts/telegram-smoke.ts",
+    "modus:index": "tsx scripts/refresh-modus-index.ts",
+    "modus:smoke": "tsx scripts/modus-smoke.ts",
     "player": "tsx src/cli.ts",
     "agent": "tsx src/agent-cli.ts",
     "chat": "tsx src/chat-server.ts"

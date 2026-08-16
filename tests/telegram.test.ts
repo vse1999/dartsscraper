@@ -4,6 +4,7 @@ import {
   DartsOrakelRequestError,
   DartsOrakelStructureChangedError,
   InsufficientMatchDataError,
+  ModusHistoryUnavailableError,
   PlayerAmbiguousError,
   PlayerNotFoundError,
 } from "../src/errors.js";
@@ -73,6 +74,9 @@ function result(overrides: Partial<PlayerStatsResult> = {}): PlayerStatsResult {
     meanAverage: 95.5,
     availableAverageCount: 1,
     sourceUrl: "https://dartsorakel.com/player/details/1/rob-cross",
+    sourceLabel: "DartsOrakel",
+    provider: "dartsorakel",
+    evidenceUrls: [],
     ...overrides,
   };
 }
@@ -139,6 +143,7 @@ describe("Telegram statistics service and formatting", () => {
     expect(stats.availableAverageCount).toBe(2);
     expect(stats.requestedCount).toBe(3);
     expect(stats.sourceUrl).toBe("https://dartsorakel.com/player/details/7/rob-cross");
+    expect(stats.provider).toBe("dartsorakel");
   });
 
   it("formats transparent missing-data and denominator evidence", () => {
@@ -147,7 +152,21 @@ describe("Telegram statistics service and formatting", () => {
     expect(message).toContain("2. 2026-07-31 vs Michael van Gerwen: —");
     expect(message).toContain("Mean match average: 95.50");
     expect(message).toContain("Available averages: 1/2");
-    expect(message).toContain("Source: https://dartsorakel.com/");
+    expect(message).toContain("Source: DartsOrakel — https://dartsorakel.com/");
+  });
+
+  it("shows an official proof URL for every MODUS row", () => {
+    const message = formatPlayerStats(result({
+      provider: "modus-official",
+      sourceLabel: "Official MODUS Super Series",
+      sourceUrl: "https://modussuperseries.com/results.php",
+      evidenceUrls: [
+        "https://modussuperseries.com/match-db-stats.php?match_id=19003",
+        "https://modussuperseries.com/match-db-stats.php?match_id=18819",
+      ],
+    }));
+    expect(message.match(/Proof: https:\/\/modussuperseries\.com\/match-db-stats\.php\?match_id=/gu)).toHaveLength(2);
+    expect(message).toContain("Source: Official MODUS Super Series");
   });
 
   it("keeps a worst-case permitted response inside Telegram's limit", () => {
@@ -335,6 +354,7 @@ describe("Telegram request handler", () => {
     [new DartsOrakelRequestError("private upstream detail", { url: "https://secret", retryable: true }), "upstream-timeout", "timed out"],
     [new DartsOrakelRequestError("private upstream detail", { url: "https://secret", status: 503, retryable: true }), "upstream-unavailable", "temporarily unavailable"],
     [new DartsOrakelStructureChangedError("private HTML detail"), "upstream-unavailable", "temporarily unavailable"],
+    [new ModusHistoryUnavailableError("private MODUS detail"), "upstream-unavailable", "official MODUS"],
     [new Error("private stack detail"), "internal-error", "unexpectedly"],
   ] as const)("maps failures to safe public responses", async (failure, expectedOutcome, expectedText) => {
     const service: PlayerStatsReader = {

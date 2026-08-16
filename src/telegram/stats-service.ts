@@ -2,6 +2,12 @@ import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
 import { ConsoleLogger, type Logger } from "../logger.js";
+import bundledModusIndex from "../../data/modus-results-index.json" with { type: "json" };
+import { OfficialModusHistorySource } from "../modus/history-source.js";
+import {
+  ModusPlayerHistoryService,
+  type ModusPlayerHistoryReader,
+} from "../modus/player-history-service.js";
 import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
@@ -16,6 +22,9 @@ export interface PlayerStatsResult {
   readonly meanAverage: number | null;
   readonly availableAverageCount: number;
   readonly sourceUrl: string;
+  readonly sourceLabel: string;
+  readonly provider: "dartsorakel" | "modus-official";
+  readonly evidenceUrls: readonly string[];
 }
 
 export interface PlayerStatsReader {
@@ -47,6 +56,39 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
       meanAverage: calculateMatchAverage(result.matches),
       availableAverageCount,
       sourceUrl: `https://dartsorakel.com/player/details/${result.player.id}/${encodeURIComponent(result.player.slug)}`,
+      sourceLabel: "DartsOrakel",
+      provider: "dartsorakel",
+      evidenceUrls: [],
+    };
+  }
+}
+
+export class ModusFirstPlayerStatsService implements PlayerStatsReader {
+  private readonly modusHistory: ModusPlayerHistoryReader;
+  private readonly dartsStats: PlayerStatsReader;
+
+  public constructor(modusHistory: ModusPlayerHistoryReader, dartsStats: PlayerStatsReader) {
+    this.modusHistory = modusHistory;
+    this.dartsStats = dartsStats;
+  }
+
+  public async getPlayerStats(playerName: string, matchCount: number): Promise<PlayerStatsResult> {
+    const modus = await this.modusHistory.findPlayerHistory(playerName, matchCount);
+    if (modus === null) return this.dartsStats.getPlayerStats(playerName, matchCount);
+    const availableAverageCount = modus.matches.reduce(
+      (count: number, match: Match): number => count + (match.average === null ? 0 : 1),
+      0,
+    );
+    return {
+      playerName: modus.playerName,
+      requestedCount: matchCount,
+      matches: modus.matches,
+      meanAverage: calculateMatchAverage(modus.matches),
+      availableAverageCount,
+      sourceUrl: modus.sourceUrl,
+      sourceLabel: "Official MODUS Super Series",
+      provider: "modus-official",
+      evidenceUrls: modus.evidenceUrls,
     };
   }
 }
@@ -67,5 +109,11 @@ export function createDefaultPlayerStatsService(
     scraper: new DartsOrakelScraper(client),
     logger: serviceLogger,
   });
-  return new DartsPlayerStatsService(matchesService);
+  const dartsStats = new DartsPlayerStatsService(matchesService);
+  const modusHistory = new ModusPlayerHistoryService({
+    source: new OfficialModusHistorySource({ logger: serviceLogger }),
+    index: bundledModusIndex,
+    logger: serviceLogger,
+  });
+  return new ModusFirstPlayerStatsService(modusHistory, dartsStats);
 }

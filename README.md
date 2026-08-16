@@ -4,7 +4,7 @@ Production-oriented TypeScript tooling for DartsOrakel player matches plus a bro
 
 ## Private Telegram bot
 
-The bot is an owner-only, free-tier webhook around the existing deterministic DartsOrakel scraper. It needs no database, paid API, queue, Redis, or language model.
+The bot is an owner-only, free-tier webhook around deterministic official MODUS history and DartsOrakel readers. It needs no database, paid API, queue, Redis, or language model.
 
 Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOrakel. The bot therefore retrieves only the public DartsOrakel JSON through Jina Reader's free public-URL service; no Telegram identity, token, or message metadata is sent to Jina.
 
@@ -14,9 +14,11 @@ Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOra
 4. Create a Vercel Hobby project from this directory and add `BOT_TOKEN`, `ALLOWED_USER_ID`, and `WEBHOOK_SECRET` as encrypted project environment variables.
 5. Deploy, then register `https://<deployment-domain>/api/telegram-webhook` with Telegram's `setWebhook`, passing the same value as `secret_token`.
 
-Send the bot a private message such as `Rob Cross last 10 match averages`. `/start` and `/help` show the exact grammar; `/health` verifies Telegram delivery without calling the statistics source. Updates from every other user, group, or channel are silently ignored.
+Send the bot a private message such as `Jack Drayton last 10 match averages` or `Rob Cross last 10 match averages`. The bot checks its official MODUS catalogue first and returns only official MODUS match-detail statistics when the exact player exists there; otherwise it uses DartsOrakel. MODUS rows include their official proof URL. `/start` and `/help` show the exact grammar; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
 
 `npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
+
+`npm run modus:smoke -- "Jack Drayton" 10` performs a read-only live contract test against the official MODUS results and match-detail pages without sending a Telegram message. `npm run modus:index` rebuilds the bundled official historical catalogue; run it before a production deployment. The runtime still refreshes the current official week, so newly completed matches do not require a redeploy.
 
 ## Start the chatbot
 
@@ -111,4 +113,4 @@ Cache failures are non-fatal. Delete `.cache` manually only when intentionally f
 - [Tool contracts](./docs/TOOL_CONTRACTS.md)
 - [DartsOrakel investigation](./INVESTIGATION.md)
 
-Current MODUS results come from the official daily JSON and exact official weekly-average page. Participant-only discovery can fall back to the allowed public Darts Nerd season page. PDC and explicit last-N history remain on DartsOrakel. The app does not bypass anti-bot controls or use private APIs.
+Current MODUS results and Telegram MODUS history come from the public official results, match-detail, daily JSON, and weekly-average pages. Participant-only discovery in the local research app can fall back to the allowed public Darts Nerd season page. The Telegram bot never uses that fallback for MODUS statistics: each MODUS match is backed by its official match-detail URL. The app does not bypass anti-bot controls or use private APIs.

@@ -5,6 +5,7 @@ import {
   DartsOrakelRequestError,
   DartsOrakelStructureChangedError,
   InsufficientMatchDataError,
+  ModusHistoryUnavailableError,
   PlayerAmbiguousError,
   PlayerNotFoundError,
 } from "../errors.js";
@@ -147,10 +148,12 @@ export async function handleStatsText(
   let outcome: Exclude<StatsHandlerOutcome, "invalid-query">;
   let finalMessage: string;
   let returnedCount: number | undefined;
+  let provider: string | undefined;
   try {
     const result = await statsService.getPlayerStats(query.playerName, query.matchCount);
     finalMessage = formatPlayerStats(result);
     returnedCount = result.matches.length;
+    provider = result.provider;
     outcome = "success";
   } catch (error: unknown) {
     const failure = publicFailure(error);
@@ -190,6 +193,7 @@ export async function handleStatsText(
       durationMs: Date.now() - startedAt,
       requestedCount: query.matchCount,
       returnedCount,
+      provider,
     });
   }
   return outcome;
@@ -215,6 +219,9 @@ function publicFailure(error: unknown): {
   }
   if (error instanceof DartsOrakelStructureChangedError) {
     return { outcome: "upstream-unavailable", message: "The statistics source is temporarily unavailable. Please try again later." };
+  }
+  if (error instanceof ModusHistoryUnavailableError) {
+    return { outcome: "upstream-unavailable", message: "The official MODUS statistics source is temporarily unavailable. Please try again later." };
   }
   return { outcome: "internal-error", message: "The lookup failed unexpectedly. Please try again later." };
 }
