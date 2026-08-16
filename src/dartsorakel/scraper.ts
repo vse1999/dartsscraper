@@ -4,6 +4,7 @@ import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
 
 const RECENT_LOOKBACK_DAYS = [90, 180, 365, 730] as const;
+const MINIMUM_REQUEST_ROWS = 50;
 
 export interface RecentPlayerMatchesOptions {
   limit: number;
@@ -30,15 +31,21 @@ export class DartsOrakelScraper {
   public async getRecentPlayerMatches(player: PlayerIdentity, options: RecentPlayerMatchesOptions): Promise<Match[]> {
     validateLimit(options.limit);
     const dateTo = options.dateTo ?? addDays(this.now().toISOString().slice(0, 10), 1);
+    const requestRows = Math.min(1_000, Math.max(MINIMUM_REQUEST_ROWS, options.limit * 5));
     for (const lookbackDays of RECENT_LOOKBACK_DAYS) {
       const response = await this.client.getPlayerMatches(player.id, {
         dateFrom: addDays(dateTo, -lookbackDays),
         dateTo,
+        limit: requestRows,
       });
       const matches = parseDartsOrakelMatches(player, response);
       if (matches.length >= options.limit) return matches;
     }
-    const response = await this.client.getPlayerMatches(player.id, { dateFrom: "1900-01-01", dateTo });
+    const response = await this.client.getPlayerMatches(player.id, {
+      dateFrom: "1900-01-01",
+      dateTo,
+      limit: requestRows,
+    });
     return parseDartsOrakelMatches(player, response);
   }
 }

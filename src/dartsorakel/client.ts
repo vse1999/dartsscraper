@@ -44,6 +44,7 @@ export interface DartsOrakelClientOptions {
 export interface DartsOrakelMatchRequestOptions {
   dateFrom?: string;
   dateTo?: string;
+  limit?: number;
 }
 
 export class DartsOrakelClient {
@@ -105,6 +106,8 @@ export class DartsOrakelClient {
 
     const dateFrom = this.isoCalendarDate(options.dateFrom ?? HISTORICAL_START_DATE, "dateFrom");
     const dateTo = this.isoCalendarDate(options.dateTo ?? this.isoDate(this.now() + 24 * 60 * 60 * 1000), "dateTo");
+    const limit = options.limit === undefined ? undefined : this.positiveInteger(options.limit, "limit");
+    if (limit !== undefined && limit > 1_000) throw new Error("limit must not exceed 1000.");
     if (dateFrom > dateTo) throw new Error("dateFrom must not be later than dateTo.");
     const url = this.urlFor(DartsOrakelApiPath.playerMatches(playerId), {
       [DartsOrakelMatchQuery.dateFrom]: dateFrom,
@@ -112,6 +115,7 @@ export class DartsOrakelClient {
       [DartsOrakelMatchQuery.rankKey]: DartsOrakelMatchDefaults.rankKey,
       [DartsOrakelMatchQuery.organStat]: DartsOrakelMatchDefaults.organStat,
       [DartsOrakelMatchQuery.tournaments]: DartsOrakelMatchDefaults.tournaments,
+      ...(limit === undefined ? {} : { start: "0", length: String(limit) }),
     });
     return this.getJson(
       url,
@@ -123,6 +127,7 @@ export class DartsOrakelClient {
         DartsOrakelMatchDefaults.rankKey,
         DartsOrakelMatchDefaults.organStat,
         DartsOrakelMatchDefaults.tournaments || "all-tournaments",
+        limit ?? "all-rows",
       ].join("-"),
       DartsOrakelMatchesResponseSchema,
       this.matchCacheTtlMs,

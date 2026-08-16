@@ -6,6 +6,8 @@ Production-oriented TypeScript tooling for DartsOrakel player matches plus a bro
 
 The bot is an owner-only, free-tier webhook around the existing deterministic DartsOrakel scraper. It needs no database, paid API, queue, Redis, or language model.
 
+Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOrakel. The bot therefore retrieves only the public DartsOrakel JSON through Jina Reader's free public-URL service; no Telegram identity, token, or message metadata is sent to Jina.
+
 1. Use Node.js 24 and run `npm install`.
 2. Copy the three Telegram settings from [`.env.example`](./.env.example) to `.env.local`. Generate `WEBHOOK_SECRET` yourself; it is not supplied by Telegram.
 3. Run `npm run build`, `npm test`, and `npm run audit:prod`.

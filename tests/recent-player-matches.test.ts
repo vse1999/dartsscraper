@@ -26,8 +26,8 @@ describe("bounded DartsOrakel player history", () => {
 
     expect(matches).toHaveLength(5);
     expect(requests).toEqual([
-      { dateFrom: "2026-05-14", dateTo: "2026-08-12" },
-      { dateFrom: "2026-02-13", dateTo: "2026-08-12" },
+      { dateFrom: "2026-05-14", dateTo: "2026-08-12", limit: 50 },
+      { dateFrom: "2026-02-13", dateTo: "2026-08-12", limit: 50 },
     ]);
   });
 
@@ -65,6 +65,7 @@ describe("bounded DartsOrakel player history", () => {
     expect(getPlayerMatches).toHaveBeenLastCalledWith(29, {
       dateFrom: "1900-01-01",
       dateTo: "2026-08-12",
+      limit: 1_000,
     });
   });
 });

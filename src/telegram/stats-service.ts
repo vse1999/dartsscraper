@@ -1,12 +1,13 @@
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
+import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
 import { ConsoleLogger, type Logger } from "../logger.js";
 import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
 import { calculateMatchAverage } from "../services/statistics.js";
 
-const DARTSORAKEL_TIMEOUT_MS = 8_000;
+const DARTSORAKEL_TIMEOUT_MS = 15_000;
 
 export interface PlayerStatsResult {
   readonly playerName: string;
@@ -50,13 +51,16 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
   }
 }
 
-export function createDefaultPlayerStatsService(logger?: Logger): PlayerStatsReader {
+export function createDefaultPlayerStatsService(
+  logger?: Logger,
+): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
   const client = new DartsOrakelClient({
     timeoutMs: DARTSORAKEL_TIMEOUT_MS,
     maxRetries: 0,
     minRequestIntervalMs: 250,
     logger: serviceLogger,
+    fetchImpl: createJinaReaderFetch(),
   });
   const matchesService = new PlayerMatchesService({
     resolver: new PlayerResolver(client),

@@ -27,6 +27,8 @@ const configuration = readBotConfiguration(process.env);
 const expectedSecret = readWebhookSecret(process.env);
 const bot = createConfiguredBot(process.env, logger);
 await bot.init();
+const requestedText = process.argv.slice(2).join(" ").trim();
+const queryText = requestedText === "" ? "Rob Cross last 10 match averages" : requestedText;
 
 const timestamp = Math.floor(Date.now() / 1_000);
 const update: Update = {
@@ -36,7 +38,7 @@ const update: Update = {
     date: timestamp,
     from: { id: configuration.allowedUserId, is_bot: false, first_name: "Owner" },
     chat: { id: configuration.allowedUserId, type: "private", first_name: "Owner" },
-    text: "Rob Cross last 10 match averages",
+    text: queryText,
   },
 };
 let processingFailure: unknown;
