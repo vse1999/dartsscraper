@@ -16,6 +16,7 @@ import {
   createBot,
   handleStatsText,
   readBotConfiguration,
+  TELEGRAM_BOT_RELEASE,
   type StatsMessageResponder,
 } from "../src/telegram/bot.js";
 import { formatPlayerStats, TELEGRAM_MAX_TEXT_LENGTH } from "../src/telegram/formatter.js";
@@ -147,6 +148,21 @@ describe("Telegram query parser", () => {
   ])("accepts the exact failed Telegram request: %s", (request: string) => {
     expect(parseStatsQuery(request)).toEqual({
       playerName: "Dylan Slevin",
+      matchCount: 10,
+      source: "modus",
+    });
+  });
+
+  it.each([
+    "Andy Baetens",
+    "Arne Spee",
+    "Dylan Slevin",
+    "Jose de Sousa",
+    "Killian Heffernan",
+    "Paul Krohne",
+  ])("accepts the current official MODUS player %s", (playerName: string) => {
+    expect(parseStatsQuery(`${playerName} last 10 matches from MODUS`)).toEqual({
+      playerName,
       matchCount: 10,
       source: "modus",
     });
@@ -307,6 +323,7 @@ describe("Telegram request handler", () => {
     expect(callCount).toBe(0);
     expect(responder.replies).toHaveLength(1);
     expect(responder.replies[0]).toContain("Dylan Slevin last 10 match");
+    expect(responder.replies[0]).toContain(`Release: ${TELEGRAM_BOT_RELEASE}`);
   });
 
   it("passes an explicit source override to the statistics router", async () => {

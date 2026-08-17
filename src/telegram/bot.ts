@@ -16,6 +16,7 @@ import { parseStatsQuery, statsQueryUsage } from "./query.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
+export const TELEGRAM_BOT_RELEASE = "modus-live-v2";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
@@ -87,15 +88,15 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
   });
 
   bot.command("start", async (ctx: Context): Promise<void> => {
-    await ctx.reply(`Private darts statistics bot ready.\n\n${statsQueryUsage()}`);
+    await ctx.reply(`Private darts statistics bot ready.\n\n${botHelpText()}`);
   });
 
   bot.command("help", async (ctx: Context): Promise<void> => {
-    await ctx.reply(statsQueryUsage());
+    await ctx.reply(botHelpText());
   });
 
   bot.command("health", async (ctx: Context): Promise<void> => {
-    await ctx.reply("Bot online. Telegram delivery is working.");
+    await ctx.reply(`Bot online. Telegram delivery is working.\nRelease: ${TELEGRAM_BOT_RELEASE}`);
   });
 
   bot.on("message:text", async (ctx: Context): Promise<void> => {
@@ -139,7 +140,12 @@ export async function handleStatsText(
 ): Promise<StatsHandlerOutcome> {
   const query = parseStatsQuery(text);
   if (query === null) {
-    await responder.reply(`I could not understand that request.\n\n${statsQueryUsage()}`);
+    logger.info("Telegram statistics query rejected.", {
+      updateId,
+      code: "INVALID_QUERY",
+      release: TELEGRAM_BOT_RELEASE,
+    });
+    await responder.reply(`I could not understand that request.\n\n${botHelpText()}`);
     return "invalid-query";
   }
 
@@ -198,6 +204,10 @@ export async function handleStatsText(
     });
   }
   return outcome;
+}
+
+function botHelpText(): string {
+  return `${statsQueryUsage()}\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
 function publicFailure(error: unknown): {

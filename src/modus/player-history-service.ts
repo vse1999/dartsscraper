@@ -10,7 +10,7 @@ import {
 } from "./history-schemas.js";
 import type { OfficialModusHistoryReader } from "./history-source.js";
 
-const DEFAULT_LIVE_TTL_MS = 5 * 60_000;
+const DEFAULT_LIVE_TTL_MS = 30_000;
 const DEFAULT_FAILURE_TTL_MS = 15_000;
 const MAX_DETAILS_CACHE_ENTRIES = 1_000;
 const MATCH_DETAILS_CONCURRENCY = 4;

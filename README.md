@@ -18,6 +18,8 @@ Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayt
 
 `npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
 
+`npm run modus:players:smoke` discovers every player in the current official MODUS series/week and validates each player sequentially through the forced official-history route. It fails if any player cannot return official match rows with aligned MODUS proof URLs.
+
 `npm run modus:smoke -- "Jack Drayton" 10` performs a read-only live contract test against the official MODUS results and match-detail pages without sending a Telegram message. `npm run modus:index` rebuilds the bundled official historical catalogue; run it before a production deployment. The runtime still refreshes the current official week, so newly completed matches do not require a redeploy.
 
 ## Start the chatbot
