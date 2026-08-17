@@ -113,10 +113,42 @@ describe("Telegram query parser", () => {
     expect(parseStatsQuery("  Rob   Cross LAST 10 match averages!  ")).toEqual({
       playerName: "Rob Cross",
       matchCount: 10,
+      source: "auto",
     });
     expect(parseStatsQuery("Luke Littler last 1 matches average")).toEqual({
       playerName: "Luke Littler",
       matchCount: 1,
+      source: "auto",
+    });
+  });
+
+  it("infers statistics from natural last-match wording and accepts explicit providers", () => {
+    expect(parseStatsQuery("Dylan Slevin last 10 match")).toEqual({
+      playerName: "Dylan Slevin",
+      matchCount: 10,
+      source: "auto",
+    });
+    expect(parseStatsQuery("Show me Dylan Slevin's last 10 matches from MODUS")).toEqual({
+      playerName: "Dylan Slevin",
+      matchCount: 10,
+      source: "modus",
+    });
+    expect(parseStatsQuery("Darts Orakel: what are Dylan Slevin's latest 5 match stats?")).toEqual({
+      playerName: "Dylan Slevin",
+      matchCount: 5,
+      source: "dartsorakel",
+    });
+  });
+
+  it.each([
+    "Dylan Slevin last 10 match averages from modus",
+    "Dylan Slevin last 10 matches from modus",
+    "Dylan Slevin last 10 matches from MODUS",
+  ])("accepts the exact failed Telegram request: %s", (request: string) => {
+    expect(parseStatsQuery(request)).toEqual({
+      playerName: "Dylan Slevin",
+      matchCount: 10,
+      source: "modus",
     });
   });
 
@@ -274,7 +306,27 @@ describe("Telegram request handler", () => {
     expect(outcome).toBe("invalid-query");
     expect(callCount).toBe(0);
     expect(responder.replies).toHaveLength(1);
-    expect(responder.replies[0]).toContain("Example: Rob Cross");
+    expect(responder.replies[0]).toContain("Dylan Slevin last 10 match");
+  });
+
+  it("passes an explicit source override to the statistics router", async () => {
+    const calls: Array<{ playerName: string; matchCount: number; source: string | undefined }> = [];
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (playerName, matchCount, source): Promise<PlayerStatsResult> => {
+        calls.push({ playerName, matchCount, source });
+        return result({ playerName, requestedCount: matchCount });
+      },
+    };
+
+    await handleStatsText(
+      "Dylan Slevin last 10 matches from MODUS",
+      service,
+      new MemoryResponder(),
+      new MemoryLogger(),
+      2,
+    );
+
+    expect(calls).toEqual([{ playerName: "Dylan Slevin", matchCount: 10, source: "modus" }]);
   });
 
   it("replaces the status message with a successful result", async () => {

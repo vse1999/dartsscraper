@@ -1,6 +1,7 @@
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
+import { InsufficientMatchDataError } from "../errors.js";
 import { ConsoleLogger, type Logger } from "../logger.js";
 import bundledModusIndex from "../../data/modus-results-index.json" with { type: "json" };
 import { OfficialModusHistorySource } from "../modus/history-source.js";
@@ -12,6 +13,7 @@ import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
 import { calculateMatchAverage } from "../services/statistics.js";
+import type { PlayerStatsSource } from "./query.js";
 
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
 
@@ -28,7 +30,7 @@ export interface PlayerStatsResult {
 }
 
 export interface PlayerStatsReader {
-  getPlayerStats(playerName: string, matchCount: number): Promise<PlayerStatsResult>;
+  getPlayerStats(playerName: string, matchCount: number, source?: PlayerStatsSource): Promise<PlayerStatsResult>;
 }
 
 export interface PlayerMatchesReader {
@@ -72,9 +74,23 @@ export class ModusFirstPlayerStatsService implements PlayerStatsReader {
     this.dartsStats = dartsStats;
   }
 
-  public async getPlayerStats(playerName: string, matchCount: number): Promise<PlayerStatsResult> {
-    const modus = await this.modusHistory.findPlayerHistory(playerName, matchCount);
-    if (modus === null) return this.dartsStats.getPlayerStats(playerName, matchCount);
+  public async getPlayerStats(
+    playerName: string,
+    matchCount: number,
+    source: PlayerStatsSource = "auto",
+  ): Promise<PlayerStatsResult> {
+    if (source === "dartsorakel") {
+      return this.dartsStats.getPlayerStats(playerName, matchCount, source);
+    }
+    const modus = await this.modusHistory.findPlayerHistory(
+      playerName,
+      matchCount,
+      { forceLiveLookup: source === "modus" },
+    );
+    if (modus === null) {
+      if (source === "modus") throw new InsufficientMatchDataError(matchCount, 0);
+      return this.dartsStats.getPlayerStats(playerName, matchCount, source);
+    }
     const availableAverageCount = modus.matches.reduce(
       (count: number, match: Match): number => count + (match.average === null ? 0 : 1),
       0,

@@ -150,7 +150,7 @@ export async function handleStatsText(
   let returnedCount: number | undefined;
   let provider: string | undefined;
   try {
-    const result = await statsService.getPlayerStats(query.playerName, query.matchCount);
+    const result = await statsService.getPlayerStats(query.playerName, query.matchCount, query.source);
     finalMessage = formatPlayerStats(result);
     returnedCount = result.matches.length;
     provider = result.provider;
@@ -194,6 +194,7 @@ export async function handleStatsText(
       requestedCount: query.matchCount,
       returnedCount,
       provider,
+      requestedSource: query.source,
     });
   }
   return outcome;

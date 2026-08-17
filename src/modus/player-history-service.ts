@@ -23,7 +23,15 @@ export interface ModusPlayerHistoryResult {
 }
 
 export interface ModusPlayerHistoryReader {
-  findPlayerHistory(playerName: string, limit: number): Promise<ModusPlayerHistoryResult | null>;
+  findPlayerHistory(
+    playerName: string,
+    limit: number,
+    options?: ModusPlayerHistoryReadOptions,
+  ): Promise<ModusPlayerHistoryResult | null>;
+}
+
+export interface ModusPlayerHistoryReadOptions {
+  readonly forceLiveLookup?: boolean;
 }
 
 export interface ModusPlayerHistoryServiceOptions {
@@ -62,11 +70,17 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
     this.currentSeriesPlayerKeys = buildCurrentSeriesPlayerKeys(this.index);
   }
 
-  public async findPlayerHistory(playerName: string, limit: number): Promise<ModusPlayerHistoryResult | null> {
+  public async findPlayerHistory(
+    playerName: string,
+    limit: number,
+    options: ModusPlayerHistoryReadOptions = {},
+  ): Promise<ModusPlayerHistoryResult | null> {
     validatePlayerRequest(playerName, limit);
     // Source selection must be local: PDC lookups should not pay for four
-    // official MODUS page requests before reaching DartsOrakel.
-    if (!this.isCurrentModusPlayer(playerName)) return null;
+    // official MODUS page requests before reaching DartsOrakel. An explicit
+    // MODUS request bypasses this optimization so today's new player catalogue
+    // can be checked before the bundled index is refreshed.
+    if (!this.isCurrentModusPlayer(playerName) && options.forceLiveLookup !== true) return null;
     const catalogue = await this.readCatalogue();
     const candidates = referencesForPlayer(catalogue.references, playerName);
     if (candidates.length === 0) {

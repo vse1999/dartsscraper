@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { InsufficientMatchDataError } from "../src/errors.js";
 import {
   MODUS_RESULTS_URL,
   type ModusHistoricalMatch,
@@ -173,6 +174,38 @@ describe("MODUS player history and routing", () => {
     expect(getLiveReferences).not.toHaveBeenCalled();
   });
 
+  it("checks the live catalogue for an explicitly requested unindexed MODUS player", async () => {
+    const liveReference = reference("19004", 1, ["Dylan Slevin", "Other Player"]);
+    const getLiveReferences = vi.fn<OfficialModusHistoryReader["getLiveReferences"]>()
+      .mockResolvedValue([liveReference]);
+    const source: OfficialModusHistoryReader = {
+      getLiveReferences,
+      getMatchDetails: async (): Promise<ModusHistoricalMatch> => ({
+        matchId: "19004",
+        playedAtLocal: "2026-08-17T12:30",
+        date: "2026-08-17",
+        seriesName: "Series 15",
+        weekName: "Week 2",
+        group: "Final Group 1",
+        home: { name: "Dylan Slevin", score: 4, average: 96.25 },
+        away: { name: "Other Player", score: 2, average: 88.5 },
+        sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=19004",
+      }),
+    };
+    const service = new ModusPlayerHistoryService({
+      source,
+      index: index([reference("19003", 1, ["Jack Drayton", "Zvonimir Lesic"])]),
+    });
+
+    const result = await service.findPlayerHistory("Dylan Slevin", 1, { forceLiveLookup: true });
+
+    expect(getLiveReferences).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      playerName: "Dylan Slevin",
+      matches: [{ date: "2026-08-17", opponent: "Other Player", average: 96.25 }],
+    });
+  });
+
   it("prefers official MODUS and calls DartsOrakel only when MODUS confirms no match", async () => {
     const modusResult = {
       playerName: "Jack Drayton",
@@ -201,6 +234,35 @@ describe("MODUS player history and routing", () => {
 
     vi.mocked(modus.findPlayerHistory).mockResolvedValueOnce(null);
     await expect(router.getPlayerStats("Darts Player", 1)).resolves.toBe(dartsResult);
+    expect(darts.getPlayerStats).toHaveBeenCalledOnce();
+  });
+
+  it("honors explicit source overrides without silently falling back", async () => {
+    const modus: ModusPlayerHistoryReader = { findPlayerHistory: vi.fn().mockResolvedValue(null) };
+    const dartsResult: PlayerStatsResult = {
+      playerName: "Dylan Slevin",
+      requestedCount: 10,
+      matches: [],
+      meanAverage: null,
+      availableAverageCount: 0,
+      sourceUrl: "https://dartsorakel.com/",
+      sourceLabel: "DartsOrakel",
+      provider: "dartsorakel",
+      evidenceUrls: [],
+    };
+    const darts: PlayerStatsReader = { getPlayerStats: vi.fn().mockResolvedValue(dartsResult) };
+    const router = new ModusFirstPlayerStatsService(modus, darts);
+
+    await expect(router.getPlayerStats("Dylan Slevin", 10, "dartsorakel")).resolves.toBe(dartsResult);
+    expect(modus.findPlayerHistory).not.toHaveBeenCalled();
+
+    await expect(router.getPlayerStats("Dylan Slevin", 10, "modus"))
+      .rejects.toBeInstanceOf(InsufficientMatchDataError);
+    expect(modus.findPlayerHistory).toHaveBeenCalledWith(
+      "Dylan Slevin",
+      10,
+      { forceLiveLookup: true },
+    );
     expect(darts.getPlayerStats).toHaveBeenCalledOnce();
   });
 });
