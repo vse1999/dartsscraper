@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export const MAX_THREE_DART_AVERAGE = 180;
+
 export const MatchSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   tournament: z.string().trim().min(1),
@@ -7,7 +9,7 @@ export const MatchSchema = z.object({
   result: z.string().trim().min(1),
   opponent: z.string().trim().min(1),
   score: z.string().trim().min(1),
-  average: z.number().finite().nonnegative().nullable(),
+  average: z.number().finite().nonnegative().max(MAX_THREE_DART_AVERAGE).nullable(),
 });
 
 export type Match = z.infer<typeof MatchSchema>;

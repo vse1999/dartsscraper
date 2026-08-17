@@ -199,6 +199,8 @@ describe("Telegram statistics service and formatting", () => {
     expect(message).toContain("1. 2026-08-01 vs Luke Littler: 95.50");
     expect(message).toContain("2. 2026-07-31 vs Michael van Gerwen: —");
     expect(message).toContain("Mean match average: 95.50");
+    expect(message).toContain("Record: 2W–0L–0D");
+    expect(message).toContain("Best match average: 95.50");
     expect(message).toContain("Available averages: 1/2");
     expect(message).toContain("Source: DartsOrakel — https://dartsorakel.com/");
   });

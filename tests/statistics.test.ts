@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { calculateMatchAverage } from "../src/services/statistics.js";
+import { calculateMatchAverage, calculateMatchSummary } from "../src/services/statistics.js";
 import type { Match } from "../src/schemas/match.js";
 
 function match(average: number | null): Match {
@@ -14,5 +14,27 @@ describe("calculateMatchAverage", () => {
 
   it("returns null when no average is available", () => {
     expect(calculateMatchAverage([match(null)])).toBeNull();
+  });
+});
+
+describe("calculateMatchSummary", () => {
+  it("derives record and average evidence from already validated matches", () => {
+    const matches: Match[] = [
+      { ...match(91.2), result: "Won" },
+      { ...match(null), result: "Lost" },
+      { ...match(98.4), result: "Draw" },
+      { ...match(88), result: "Abandoned" },
+    ];
+
+    expect(calculateMatchSummary(matches)).toEqual({
+      matchCount: 4,
+      wins: 1,
+      losses: 1,
+      draws: 1,
+      unclassifiedResults: 1,
+      average: 92.53,
+      availableAverageCount: 3,
+      bestAverage: 98.4,
+    });
   });
 });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { IsoDateSchema } from "../agent/date.js";
+import { MAX_THREE_DART_AVERAGE } from "../schemas/match.js";
 
 export const MODUS_RESULTS_URL = "https://modussuperseries.com/results.php";
 export const MODUS_MATCH_DETAILS_URL = "https://modussuperseries.com/match-db-stats.php";
@@ -46,7 +47,7 @@ export const ModusResultsIndexSchema = z.object({
 const ModusMatchSideSchema = z.object({
   name: z.string().trim().min(1),
   score: z.number().int().nonnegative(),
-  average: z.number().finite().nonnegative(),
+  average: z.number().finite().nonnegative().max(MAX_THREE_DART_AVERAGE),
 }).strict();
 
 export const ModusHistoricalMatchSchema = z.object({

@@ -12,7 +12,7 @@ import {
 import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
-import { calculateMatchAverage } from "../services/statistics.js";
+import { calculateMatchSummary } from "../services/statistics.js";
 import type { PlayerStatsSource } from "./query.js";
 
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
@@ -46,17 +46,14 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
 
   public async getPlayerStats(playerName: string, matchCount: number): Promise<PlayerStatsResult> {
     const result = await this.matchesService.getLastMatches(playerName, matchCount);
-    const availableAverageCount = result.matches.reduce(
-      (count: number, match: Match): number => count + (match.average === null ? 0 : 1),
-      0,
-    );
+    const summary = calculateMatchSummary(result.matches);
 
     return {
       playerName: result.player.name,
       requestedCount: matchCount,
       matches: result.matches,
-      meanAverage: calculateMatchAverage(result.matches),
-      availableAverageCount,
+      meanAverage: summary.average,
+      availableAverageCount: summary.availableAverageCount,
       sourceUrl: `https://dartsorakel.com/player/details/${result.player.id}/${encodeURIComponent(result.player.slug)}`,
       sourceLabel: "DartsOrakel",
       provider: "dartsorakel",
@@ -91,16 +88,13 @@ export class ModusFirstPlayerStatsService implements PlayerStatsReader {
       if (source === "modus") throw new InsufficientMatchDataError(matchCount, 0);
       return this.dartsStats.getPlayerStats(playerName, matchCount, source);
     }
-    const availableAverageCount = modus.matches.reduce(
-      (count: number, match: Match): number => count + (match.average === null ? 0 : 1),
-      0,
-    );
+    const summary = calculateMatchSummary(modus.matches);
     return {
       playerName: modus.playerName,
       requestedCount: matchCount,
       matches: modus.matches,
-      meanAverage: calculateMatchAverage(modus.matches),
-      availableAverageCount,
+      meanAverage: summary.average,
+      availableAverageCount: summary.availableAverageCount,
       sourceUrl: modus.sourceUrl,
       sourceLabel: "Official MODUS Super Series",
       provider: "modus-official",

@@ -83,6 +83,17 @@ function snapshotFixture(): ReturnType<typeof ModusResultsSnapshotSchema.parse> 
 }
 
 describe("official MODUS result fixtures", () => {
+  it("rejects impossible official three-dart averages", () => {
+    const snapshot = snapshotFixture();
+    const firstMatch = snapshot.matches[0];
+    if (firstMatch === undefined) throw new Error("Snapshot fixture must contain a match.");
+
+    expect(() => ModusResultsSnapshotSchema.parse({
+      ...snapshot,
+      matches: [{ ...firstMatch, home: { ...firstMatch.home, average: 180.01 } }],
+    })).toThrow();
+  });
+
   it("parses the selected series, week, group, and averages link", () => {
     const parsed = parseModusResultsContext(readTextFixture("modus-results-context.html"), resultsUrl);
 

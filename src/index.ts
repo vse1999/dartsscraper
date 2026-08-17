@@ -8,7 +8,8 @@ import type { PlayerIdentity } from "./schemas/player.js";
 
 export type { Match, MatchResult } from "./schemas/match.js";
 export type { PlayerIdentity } from "./schemas/player.js";
-export { calculateMatchAverage } from "./services/statistics.js";
+export { calculateMatchAverage, calculateMatchSummary } from "./services/statistics.js";
+export type { MatchSummary } from "./services/statistics.js";
 export { DartsOrakelClient } from "./dartsorakel/client.js";
 export type { DartsOrakelClientOptions, DartsOrakelMatchRequestOptions } from "./dartsorakel/client.js";
 export { DartsOrakelScraper } from "./dartsorakel/scraper.js";

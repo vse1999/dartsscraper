@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { IsoDateSchema } from "../agent/date.js";
+import { MAX_THREE_DART_AVERAGE } from "../schemas/match.js";
 
 export const ModusIsoDateTimeSchema = z.string().datetime({ offset: true });
 
@@ -18,7 +19,7 @@ const ModusMatchPlayerSchema = z
   .object({
     name: z.string().trim().min(1),
     score: z.number().int().nonnegative().nullable(),
-    average: z.number().finite().nonnegative().nullable(),
+    average: z.number().finite().nonnegative().max(MAX_THREE_DART_AVERAGE).nullable(),
   })
   .strict();
 
@@ -40,7 +41,7 @@ const ModusWeekAverageSchema = z
     played: z.number().int().nonnegative(),
     points: z.number().int(),
     darts: z.number().int().positive(),
-    average: z.number().finite().nonnegative(),
+    average: z.number().finite().nonnegative().max(MAX_THREE_DART_AVERAGE),
   })
   .strict();
 

@@ -6,7 +6,7 @@ import { DartsOrakelScraper } from "./dartsorakel/scraper.js";
 import { DartsOrakelError } from "./errors.js";
 import { ConsoleLogger } from "./logger.js";
 import { PlayerResolver } from "./player/resolver.js";
-import { calculateMatchAverage } from "./services/statistics.js";
+import { calculateMatchSummary } from "./services/statistics.js";
 import { PlayerMatchesService } from "./services/player-matches.js";
 
 interface CliArguments {
@@ -33,15 +33,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  const mean = calculateMatchAverage(result.matches);
+  const summary = calculateMatchSummary(result.matches);
   const lines = [
     result.player.name,
     "",
     `Last ${result.matches.length} matches:`,
+    ...(result.matches.length === args.limit ? [] : [`Requested ${args.limit}; found ${result.matches.length}.`]),
+    `Record: ${summary.wins}W–${summary.losses}L–${summary.draws}D`,
     "",
-    ...result.matches.map((match) => `${match.date} vs ${match.opponent}   ${formatAverage(match.average)}`),
+    ...result.matches.map((match) => `${match.date} ${match.result} ${match.score} vs ${match.opponent}   ${formatAverage(match.average)}`),
     "",
-    `Mean match average: ${mean === null ? "N/A" : mean.toFixed(2)}`,
+    `Mean match average: ${summary.average === null ? "N/A" : summary.average.toFixed(2)}`,
+    `Best match average: ${summary.bestAverage === null ? "N/A" : summary.bestAverage.toFixed(2)}`,
+    `Available averages: ${summary.availableAverageCount}/${summary.matchCount}`,
   ];
   process.stdout.write(`${lines.join("\n")}\n`);
 }

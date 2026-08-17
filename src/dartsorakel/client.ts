@@ -166,6 +166,7 @@ export class DartsOrakelClient {
     let lastError: DartsOrakelRequestError | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      let retryAfterMs: number | undefined;
       try {
         const response = await this.rateLimitedFetch(url);
         if (response.ok) {
@@ -181,6 +182,7 @@ export class DartsOrakelClient {
         }
 
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+        retryAfterMs = retryable ? this.retryAfterMilliseconds(response.headers.get("retry-after")) : undefined;
         lastError = new DartsOrakelRequestError(
           `DartsOrakel request failed with HTTP ${response.status}.`,
           { url, status: response.status, retryable },
@@ -208,8 +210,13 @@ export class DartsOrakelClient {
         }
       }
 
-      const delay = this.backoffMs * (attempt + 1);
-      this.logger.warn("Retrying DartsOrakel request.", { url, attempt: attempt + 1, delay });
+      const delay = Math.max(this.backoffMs * (attempt + 1), retryAfterMs ?? 0);
+      this.logger.warn("Retrying DartsOrakel request.", {
+        url,
+        attempt: attempt + 1,
+        delay,
+        ...(lastError?.status === undefined ? {} : { status: lastError.status }),
+      });
       await this.sleep(delay);
     }
 
@@ -230,28 +237,40 @@ export class DartsOrakelClient {
         await this.sleep(delay);
       }
       this.nextRequestAt = this.now() + this.minRequestIntervalMs;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-      try {
-        return await this.fetchImpl(url, {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "User-Agent": this.userAgent,
-          },
-          signal: controller.signal,
-        });
-      } catch (error: unknown) {
-        throw new DartsOrakelRequestError(
-          `DartsOrakel request failed: ${this.errorMessage(error)}.`,
-          { url, retryable: true, cause: error },
-        );
-      } finally {
-        clearTimeout(timeout);
-      }
     } finally {
       release();
     }
+
+    // Only request starts need serialization. Keeping the queue locked for the
+    // full network round-trip made independent player lookups run sequentially.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      return await this.fetchImpl(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "User-Agent": this.userAgent,
+        },
+        signal: controller.signal,
+      });
+    } catch (error: unknown) {
+      throw new DartsOrakelRequestError(
+        `DartsOrakel request failed: ${this.errorMessage(error)}.`,
+        { url, retryable: true, cause: error },
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private retryAfterMilliseconds(value: string | null): number | undefined {
+    if (value === null) return undefined;
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1_000);
+    const retryAt = Date.parse(value);
+    if (!Number.isFinite(retryAt)) return undefined;
+    return Math.max(0, retryAt - this.now());
   }
 
   private urlFor(pathname: string, query?: Readonly<Record<string, string>>): string {

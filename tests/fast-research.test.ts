@@ -165,7 +165,9 @@ describe("FastResearchService", () => {
     });
     expect(answer?.answer).toContain("Rob Cross — 2 latest matches");
     expect(answer?.answer).toContain("Danny Noppert");
+    expect(answer?.answer).toContain("Record: 1W–1L–0D");
     expect(answer?.answer).toContain("Mean match average: 95.25");
+    expect(answer?.answer).toContain("Available averages: 2/2");
     expect(playerGetLastMatchesSnapshot).toHaveBeenCalledWith("Rob Cross", 2, undefined);
   });
 

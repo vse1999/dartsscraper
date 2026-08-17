@@ -104,6 +104,17 @@ describe("DartsOrakel match parser", () => {
     expect(parseDartsOrakelMatchRow(damon, row).average).toBeNull();
   });
 
+  it("rejects an impossible three-dart average instead of publishing corrupted data", () => {
+    const fixture = readMatchFixture("damon-heta-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) {
+      throw new Error("Fixture must contain a match.");
+    }
+
+    expect(() => parseDartsOrakelMatchRow(damon, { ...first, stat: 180.01 }))
+      .toThrow(DartsOrakelStructureChangedError);
+  });
+
   it("removes exact duplicate match rows", () => {
     const fixture = readMatchFixture("damon-heta-matches.json");
     const first = fixture.data[0];

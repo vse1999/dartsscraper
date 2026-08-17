@@ -26,6 +26,48 @@ describe("DartsOrakelClient", () => {
     expect(sleep).toHaveBeenCalledWith(10);
   });
 
+  it("honors a longer Retry-After delay from a rate-limited source", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("rate limited", {
+        status: 429,
+        headers: { "retry-after": "2" },
+      }))
+      .mockResolvedValueOnce(Response.json(readMatchFixture("damon-heta-matches.json")));
+    const sleep = vi.fn<(milliseconds: number) => Promise<void>>().mockResolvedValue(undefined);
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      sleep,
+      backoffMs: 10,
+      minRequestIntervalMs: 0,
+    });
+
+    await expect(client.getPlayerMatches(13)).resolves.toHaveProperty("recordsTotal", 640);
+    expect(sleep).toHaveBeenCalledWith(2_000);
+  });
+
+  it("paces request starts without serializing independent network responses", async () => {
+    const fixture = readMatchFixture("damon-heta-matches.json");
+    const releases: Array<() => void> = [];
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (): Promise<Response> => {
+      await new Promise<void>((resolve) => releases.push(resolve));
+      return Response.json(fixture);
+    });
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      minRequestIntervalMs: 0,
+      maxRetries: 0,
+    });
+
+    const first = client.getPlayerMatches(13);
+    const second = client.getPlayerMatches(29);
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    for (const release of releases) release();
+
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
   it("sends the complete live Averages filter and versions the cache key", async () => {
     let requestedUrl: string | undefined;
     const writtenCacheKeys: string[] = [];

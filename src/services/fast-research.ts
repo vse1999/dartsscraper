@@ -8,7 +8,7 @@ import type { PlayerResolver } from "../player/resolver.js";
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
 import type { PlayerMatchesService } from "./player-matches.js";
-import { calculateMatchAverage } from "./statistics.js";
+import { calculateMatchSummary } from "./statistics.js";
 
 export type ResearchIntent =
   | { kind: "modus-current-results"; date: string }
@@ -102,7 +102,15 @@ export class FastResearchService {
       ? renderLatestMatch(query, snapshot.value.player, snapshot.value.matches[0], snapshot.stale, snapshot.dataAgeMs)
       : intent.kind === "player-last-n-average"
         ? renderPlayerAverage(query, snapshot.value.player, snapshot.value.matches, snapshot.stale, snapshot.dataAgeMs)
-        : renderPlayerMatches(query, snapshot.value.player, snapshot.value.matches, intent.includeAverage, snapshot.stale, snapshot.dataAgeMs);
+        : renderPlayerMatches(
+          query,
+          snapshot.value.player,
+          snapshot.value.matches,
+          intent.limit,
+          intent.includeAverage,
+          snapshot.stale,
+          snapshot.dataAgeMs,
+        );
     return {
       answer,
       intent: intent.kind,
@@ -199,17 +207,36 @@ function renderModusResults(query: string, evidence: ModusResultsSnapshot, stale
   ].join("\n");
 }
 
-function renderPlayerMatches(query: string, player: PlayerIdentity, matches: readonly Match[], includeAverage: boolean, stale: boolean, ageMs: number): string {
+function renderPlayerMatches(
+  query: string,
+  player: PlayerIdentity,
+  matches: readonly Match[],
+  requestedLimit: number,
+  includeAverage: boolean,
+  stale: boolean,
+  ageMs: number,
+): string {
   const hungarian = isHungarian(query);
   const header = hungarian
     ? "| Dátum | Verseny | Forduló | Eredmény | Ellenfél | Pontszám | Átlag |\n|---|---|---|---|---|---|---:|"
     : "| Date | Tournament | Round | Result | Opponent | Score | Average |\n|---|---|---|---|---|---|---:|";
   const rows = matches.map((match) => `| ${match.date} | ${match.tournament} | ${match.round ?? "—"} | ${match.result} | ${match.opponent} | ${match.score} | ${formatAverage(match.average)} |`);
-  const mean = calculateMatchAverage(matches);
-  const summary = includeAverage
-    ? `\n${hungarian ? "Átlag" : "Mean match average"}: ${mean === null ? "—" : mean.toFixed(2)}`
-    : "";
-  return `${player.name} — ${matches.length} ${hungarian ? "legutóbbi meccs" : "latest matches"}\n\n${header}\n${rows.join("\n")}${summary}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
+  const summary = calculateMatchSummary(matches);
+  const partialNotice = matches.length === requestedLimit
+    ? ""
+    : `\n${hungarian ? `Kért: ${requestedLimit}; talált: ${matches.length}.` : `Requested ${requestedLimit}; found ${matches.length}.`}`;
+  const record = hungarian ? "Mérleg" : "Record";
+  const insights = [
+    `${record}: ${summary.wins}W–${summary.losses}L–${summary.draws}D`,
+    ...(includeAverage
+      ? [
+        `${hungarian ? "Meccsátlag" : "Mean match average"}: ${summary.average === null ? "—" : summary.average.toFixed(2)}`,
+        `${hungarian ? "Legjobb meccsátlag" : "Best match average"}: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`,
+        `${hungarian ? "Elérhető átlagok" : "Available averages"}: ${summary.availableAverageCount}/${summary.matchCount}`,
+      ]
+      : []),
+  ];
+  return `${player.name} — ${matches.length} ${hungarian ? "legutóbbi meccs" : "latest matches"}${partialNotice}\n\n${header}\n${rows.join("\n")}\n\n${insights.join("\n")}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
 }
 
 function renderLatestMatch(query: string, player: PlayerIdentity, match: Match | undefined, stale: boolean, ageMs: number): string {
@@ -223,9 +250,12 @@ function renderLatestMatch(query: string, player: PlayerIdentity, match: Match |
 
 function renderPlayerAverage(query: string, player: PlayerIdentity, matches: readonly Match[], stale: boolean, ageMs: number): string {
   const hungarian = isHungarian(query);
-  const average = calculateMatchAverage(matches);
+  const summary = calculateMatchSummary(matches);
   const header = hungarian ? "| Játékos | Meccsek | Átlag |\n|---|---:|---:|" : "| Player | Matches | Average |\n|---|---:|---:|";
-  return `${hungarian ? "Ellenőrzött meccsátlag" : "Verified match average"}\n\n${header}\n| ${player.name} | ${matches.length} | ${average === null ? "—" : average.toFixed(2)} |\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
+  const evidence = hungarian
+    ? `Elérhető átlagok: ${summary.availableAverageCount}/${summary.matchCount} · Legjobb: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`
+    : `Available averages: ${summary.availableAverageCount}/${summary.matchCount} · Best: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`;
+  return `${hungarian ? "Ellenőrzött meccsátlag" : "Verified match average"}\n\n${header}\n| ${player.name} | ${matches.length} | ${summary.average === null ? "—" : summary.average.toFixed(2)} |\n\n${evidence}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
 }
 
 function extractLimit(query: string): number | undefined {
