@@ -6,11 +6,16 @@ import { createConfiguredBot, readBotConfiguration } from "../src/telegram/bot.j
 
 class SmokeLogger implements Logger {
   public completedLookup = false;
+  public completedProvider: string | undefined;
   public errorCount = 0;
 
   public debug(_message: string, _context?: LogContext): void {}
-  public info(message: string, _context?: LogContext): void {
-    if (message === "Player statistics lookup completed.") this.completedLookup = true;
+  public info(message: string, context?: LogContext): void {
+    if (message === "Player statistics lookup completed.") {
+      this.completedLookup = true;
+      const provider = context?.provider;
+      if (typeof provider === "string") this.completedProvider = provider;
+    }
   }
   public warn(message: string, context?: LogContext): void {
     console.error(JSON.stringify({ level: "warn", message, context }));
@@ -82,4 +87,5 @@ console.log(JSON.stringify({
   updateCompletedBeforeAcknowledgement: true,
   botUsername: bot.botInfo.username,
   liveMessageDeliveredAndEdited: true,
+  provider: logger.completedProvider,
 }));

@@ -58,7 +58,8 @@ export function statsQueryUsage(): string {
     "Robert Thornton last 10 matches with averages, 180s and checkout percentage from DartsOrakel",
     "DartsOrakel returns average, 180s, and checkout percentage for every available match.",
     "MODUS currently returns match averages only.",
-    "Without a source, the bot chooses automatically.",
+    "Without a source, the bot uses DartsOrakel so all three metrics are available.",
+    "Use 'from MODUS' only when you specifically want official MODUS averages.",
   ].join("\n");
 }
 

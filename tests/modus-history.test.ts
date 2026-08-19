@@ -15,7 +15,7 @@ import {
 import { parseModusResultsPage } from "../src/modus/results-index-source.js";
 import type { OfficialModusHistoryReader } from "../src/modus/history-source.js";
 import {
-  ModusFirstPlayerStatsService,
+  SourceRoutedPlayerStatsService,
   type PlayerStatsReader,
   type PlayerStatsResult,
 } from "../src/telegram/stats-service.js";
@@ -206,7 +206,7 @@ describe("MODUS player history and routing", () => {
     });
   });
 
-  it("prefers official MODUS and calls DartsOrakel only when MODUS confirms no match", async () => {
+  it("uses DartsOrakel by default so Telegram can return all three match metrics", async () => {
     const modusResult = {
       playerName: "Jack Drayton",
       matches: [{ date: "2026-08-15", tournament: "MODUS", round: "Final", result: "Won", opponent: "Opponent", score: "4 V 1", average: 97.29 }],
@@ -226,15 +226,20 @@ describe("MODUS player history and routing", () => {
       evidenceUrls: [],
     };
     const darts: PlayerStatsReader = { getPlayerStats: vi.fn().mockResolvedValue(dartsResult) };
-    const router = new ModusFirstPlayerStatsService(modus, darts);
+    const router = new SourceRoutedPlayerStatsService(modus, darts);
     const selected = await router.getPlayerStats("Jack Drayton", 1);
-    expect(selected.provider).toBe("modus-official");
-    expect(selected.meanAverage).toBe(97.29);
-    expect(darts.getPlayerStats).not.toHaveBeenCalled();
-
-    vi.mocked(modus.findPlayerHistory).mockResolvedValueOnce(null);
-    await expect(router.getPlayerStats("Darts Player", 1)).resolves.toBe(dartsResult);
+    expect(selected).toBe(dartsResult);
+    expect(modus.findPlayerHistory).not.toHaveBeenCalled();
     expect(darts.getPlayerStats).toHaveBeenCalledOnce();
+
+    const official = await router.getPlayerStats("Jack Drayton", 1, "modus");
+    expect(official.provider).toBe("modus-official");
+    expect(official.meanAverage).toBe(97.29);
+    expect(modus.findPlayerHistory).toHaveBeenCalledWith(
+      "Jack Drayton",
+      1,
+      { forceLiveLookup: true },
+    );
   });
 
   it("honors explicit source overrides without silently falling back", async () => {
@@ -251,7 +256,7 @@ describe("MODUS player history and routing", () => {
       evidenceUrls: [],
     };
     const darts: PlayerStatsReader = { getPlayerStats: vi.fn().mockResolvedValue(dartsResult) };
-    const router = new ModusFirstPlayerStatsService(modus, darts);
+    const router = new SourceRoutedPlayerStatsService(modus, darts);
 
     await expect(router.getPlayerStats("Dylan Slevin", 10, "dartsorakel")).resolves.toBe(dartsResult);
     expect(modus.findPlayerHistory).not.toHaveBeenCalled();

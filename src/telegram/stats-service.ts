@@ -62,7 +62,7 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
   }
 }
 
-export class ModusFirstPlayerStatsService implements PlayerStatsReader {
+export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
   private readonly modusHistory: ModusPlayerHistoryReader;
   private readonly dartsStats: PlayerStatsReader;
 
@@ -76,7 +76,7 @@ export class ModusFirstPlayerStatsService implements PlayerStatsReader {
     matchCount: number,
     source: PlayerStatsSource = "auto",
   ): Promise<PlayerStatsResult> {
-    if (source === "dartsorakel") {
+    if (source !== "modus") {
       return this.dartsStats.getPlayerStats(playerName, matchCount, source);
     }
     const modus = await this.modusHistory.findPlayerHistory(
@@ -84,10 +84,7 @@ export class ModusFirstPlayerStatsService implements PlayerStatsReader {
       matchCount,
       { forceLiveLookup: source === "modus" },
     );
-    if (modus === null) {
-      if (source === "modus") throw new InsufficientMatchDataError(matchCount, 0);
-      return this.dartsStats.getPlayerStats(playerName, matchCount, source);
-    }
+    if (modus === null) throw new InsufficientMatchDataError(matchCount, 0);
     const summary = calculateMatchSummary(modus.matches);
     return {
       playerName: modus.playerName,
@@ -125,5 +122,5 @@ export function createDefaultPlayerStatsService(
     index: bundledModusIndex,
     logger: serviceLogger,
   });
-  return new ModusFirstPlayerStatsService(modusHistory, dartsStats);
+  return new SourceRoutedPlayerStatsService(modusHistory, dartsStats);
 }
