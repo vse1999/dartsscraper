@@ -38,7 +38,7 @@ This is the authoritative bulk tool for current/today/latest MODUS results. Miss
 
 Input: `{ "player": string, "limit": integer 1..1000 }`
 
-Output: the existing validated `MatchResult` plus deterministic `meanMatchAverage`. This tool is intended for requests that need individual match rows.
+Output: the existing validated `MatchResult` plus backward-compatible `meanMatchAverage` and a deterministic `summary`. DartsOrakel match rows contain nullable `average`, `oneEighties`, `checkoutPercentage`, `checkoutHits`, and `checkoutAttempts`. `summary` contains record, mean/best average, complete 180 total, weighted checkout conversion, raw checkout counts, and per-metric coverage. This tool is intended for requests that need individual match rows.
 
 ## `getPlayerMatchAverage`
 
@@ -51,11 +51,16 @@ Output:
   "player": "Ryan Branley",
   "requestedLimit": 10,
   "matchCount": 10,
-  "average": 79.16
+  "average": 79.16,
+  "totalOneEighties": 6,
+  "checkoutPercentage": 39.39,
+  "checkoutHits": 26,
+  "checkoutAttempts": 66,
+  "coverage": { "average": 10, "oneEighties": 10, "checkout": 10 }
 }
 ```
 
-`average` is the arithmetic mean of available DartsOrakel match-average values, rounded to two decimals. It is `null` when no returned match has an average. `matchCount` is the actual number of completed matches returned and may be below the requested limit.
+`average` is the arithmetic mean of available DartsOrakel match-average values, rounded to two decimals. `totalOneEighties` is `null` unless every selected match has 180 data. `checkoutPercentage` is the ratio of total successful checkouts to total attempts, rounded once to two decimals; it is never an unweighted mean of match percentages. Zero attempts produce `null`. Coverage makes partial upstream availability explicit. `matchCount` is the actual number of completed matches returned and may be below the requested limit.
 
 ## Error codes
 

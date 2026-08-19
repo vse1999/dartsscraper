@@ -9,6 +9,12 @@ export interface MatchSummary {
   readonly average: number | null;
   readonly availableAverageCount: number;
   readonly bestAverage: number | null;
+  readonly totalOneEighties: number | null;
+  readonly availableOneEightiesCount: number;
+  readonly checkoutPercentage: number | null;
+  readonly checkoutHits: number;
+  readonly checkoutAttempts: number;
+  readonly availableCheckoutCount: number;
 }
 
 export function calculateMatchAverage(matches: readonly Match[]): number | null {
@@ -28,6 +34,10 @@ export function calculateMatchSummary(matches: readonly Match[]): MatchSummary {
   let draws = 0;
   let unclassifiedResults = 0;
   const averages: number[] = [];
+  const oneEighties: number[] = [];
+  let checkoutHits = 0;
+  let checkoutAttempts = 0;
+  let availableCheckoutCount = 0;
 
   for (const match of matches) {
     const result = match.result.trim().toLocaleLowerCase("en-US");
@@ -37,6 +47,18 @@ export function calculateMatchSummary(matches: readonly Match[]): MatchSummary {
     else unclassifiedResults += 1;
 
     if (match.average !== null && Number.isFinite(match.average)) averages.push(match.average);
+    if (match.oneEighties !== null && match.oneEighties !== undefined) oneEighties.push(match.oneEighties);
+    if (
+      match.checkoutHits !== null
+      && match.checkoutHits !== undefined
+      && match.checkoutAttempts !== null
+      && match.checkoutAttempts !== undefined
+      && match.checkoutAttempts > 0
+    ) {
+      checkoutHits += match.checkoutHits;
+      checkoutAttempts += match.checkoutAttempts;
+      availableCheckoutCount += 1;
+    }
   }
 
   return {
@@ -48,5 +70,15 @@ export function calculateMatchSummary(matches: readonly Match[]): MatchSummary {
     average: calculateMatchAverage(matches),
     availableAverageCount: averages.length,
     bestAverage: averages.length === 0 ? null : Math.max(...averages),
+    totalOneEighties: matches.length > 0 && oneEighties.length === matches.length
+      ? oneEighties.reduce((total, count) => total + count, 0)
+      : null,
+    availableOneEightiesCount: oneEighties.length,
+    checkoutPercentage: checkoutAttempts === 0
+      ? null
+      : Number(((checkoutHits / checkoutAttempts) * 100).toFixed(2)),
+    checkoutHits,
+    checkoutAttempts,
+    availableCheckoutCount,
   };
 }

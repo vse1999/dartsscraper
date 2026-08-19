@@ -76,6 +76,10 @@ function playerMatches(): MatchResult {
         opponent: "Danny Noppert",
         score: "4 V 6",
         average: 100.01,
+        oneEighties: 2,
+        checkoutPercentage: 50,
+        checkoutHits: 3,
+        checkoutAttempts: 6,
       },
       {
         date: "2026-08-10",
@@ -85,6 +89,10 @@ function playerMatches(): MatchResult {
         opponent: "Joe Cullen",
         score: "6 V 5",
         average: 90.49,
+        oneEighties: 1,
+        checkoutPercentage: 50,
+        checkoutHits: 2,
+        checkoutAttempts: 4,
       },
     ],
   };
@@ -167,6 +175,8 @@ describe("FastResearchService", () => {
     expect(answer?.answer).toContain("Danny Noppert");
     expect(answer?.answer).toContain("Record: 1W–1L–0D");
     expect(answer?.answer).toContain("Mean match average: 95.25");
+    expect(answer?.answer).toContain("Total 180s: 3");
+    expect(answer?.answer).toContain("Checkout: 50.00% (5/10)");
     expect(answer?.answer).toContain("Available averages: 2/2");
     expect(playerGetLastMatchesSnapshot).toHaveBeenCalledWith("Rob Cross", 2, undefined);
   });

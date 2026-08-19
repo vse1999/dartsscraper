@@ -1,5 +1,9 @@
-import type { DartsOrakelClient } from "./client.js";
-import { parseDartsOrakelMatches } from "./parser.js";
+import type { DartsOrakelClient, DartsOrakelMatchRequestOptions } from "./client.js";
+import {
+  parseDartsOrakelMatches,
+  parseDartsOrakelMatchesWithStatistics,
+  type DartsOrakelMatchesResponse,
+} from "./parser.js";
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
 
@@ -22,8 +26,8 @@ export class DartsOrakelScraper {
 
   public async getPlayerMatches(player: PlayerIdentity, limit?: number, dateTo?: string): Promise<Match[]> {
     if (limit === undefined) {
-      const response = await this.client.getPlayerMatches(player.id);
-      return parseDartsOrakelMatches(player, response);
+      const average = await this.client.getPlayerMatches(player.id);
+      return this.enrichMatches(player, {}, average);
     }
     return this.getRecentPlayerMatches(player, { limit, ...(dateTo === undefined ? {} : { dateTo }) });
   }
@@ -39,14 +43,36 @@ export class DartsOrakelScraper {
         limit: requestRows,
       });
       const matches = parseDartsOrakelMatches(player, response);
-      if (matches.length >= options.limit) return matches;
+      if (matches.length >= options.limit) {
+        return this.enrichMatches(player, {
+          dateFrom: addDays(dateTo, -lookbackDays),
+          dateTo,
+          limit: requestRows,
+        }, response);
+      }
     }
     const response = await this.client.getPlayerMatches(player.id, {
       dateFrom: "1900-01-01",
       dateTo,
       limit: requestRows,
     });
-    return parseDartsOrakelMatches(player, response);
+    return this.enrichMatches(player, {
+      dateFrom: "1900-01-01",
+      dateTo,
+      limit: requestRows,
+    }, response);
+  }
+
+  private async enrichMatches(
+    player: PlayerIdentity,
+    request: Omit<DartsOrakelMatchRequestOptions, "statistic">,
+    average: DartsOrakelMatchesResponse,
+  ): Promise<Match[]> {
+    const [oneEighties, checkoutPercentage] = await Promise.all([
+      this.client.getPlayerMatches(player.id, { ...request, statistic: "oneEighties" }),
+      this.client.getPlayerMatches(player.id, { ...request, statistic: "checkoutPercentage" }),
+    ]);
+    return parseDartsOrakelMatchesWithStatistics(player, { average, oneEighties, checkoutPercentage });
   }
 }
 

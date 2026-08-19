@@ -142,6 +142,19 @@ describe("Telegram query parser", () => {
   });
 
   it.each([
+    "Robert Thornton last 10 matches 180s from DartsOrakel",
+    "Robert Thornton last 10 matches checkout percentage from DartsOrakel",
+    "Robert Thornton last 10 matches with averages, 180s and checkout percentage from DartsOrakel",
+    "DartsOrakel: show me Robert Thornton's latest 10 match stats",
+  ])("accepts explicit DartsOrakel match-metric wording: %s", (request: string) => {
+    expect(parseStatsQuery(request)).toEqual({
+      playerName: "Robert Thornton",
+      matchCount: 10,
+      source: "dartsorakel",
+    });
+  });
+
+  it.each([
     "Dylan Slevin last 10 match averages from modus",
     "Dylan Slevin last 10 matches from modus",
     "Dylan Slevin last 10 matches from MODUS",
@@ -171,6 +184,7 @@ describe("Telegram query parser", () => {
   it("rejects out-of-range and unrelated input", () => {
     expect(parseStatsQuery("Rob Cross last 0 match averages")).toBeNull();
     expect(parseStatsQuery("Rob Cross last 21 match averages")).toBeNull();
+    expect(parseStatsQuery("Rob Cross last 10 matches goals")).toBeNull();
     expect(parseStatsQuery("show Rob Cross statistics")).toBeNull();
     expect(parseStatsQuery(`${"x".repeat(81)} last 10 match averages`)).toBeNull();
     expect(statsQueryUsage()).toContain("1-20");
@@ -203,6 +217,23 @@ describe("Telegram statistics service and formatting", () => {
     expect(message).toContain("Best match average: 95.50");
     expect(message).toContain("Available averages: 1/2");
     expect(message).toContain("Source: DartsOrakel — https://dartsorakel.com/");
+  });
+
+  it("formats 180 totals and weighted checkout evidence", () => {
+    const enrichedMatches: Match[] = [
+      { ...match(95.5, "Luke Littler"), oneEighties: 2, checkoutPercentage: 50, checkoutHits: 3, checkoutAttempts: 6 },
+      { ...match(90.5, "Michael van Gerwen", "2026-07-31"), oneEighties: 1, checkoutPercentage: 50, checkoutHits: 2, checkoutAttempts: 4 },
+    ];
+    const message = formatPlayerStats(result({
+      matches: enrichedMatches,
+      meanAverage: 93,
+      availableAverageCount: 2,
+    }));
+
+    expect(message).toContain("180s 2 · checkout 50.00%");
+    expect(message).toContain("Total 180s: 3");
+    expect(message).toContain("Checkout: 50.00% (5/10)");
+    expect(message).toContain("Coverage (average/180s/checkout): 2/2 · 2/2 · 2/2");
   });
 
   it("shows an official proof URL for every MODUS row", () => {
@@ -367,6 +398,45 @@ describe("Telegram request handler", () => {
     expect(responder.edits[0]?.messageId).toBe(1);
     expect(responder.edits[0]?.text).toContain("Rob Cross");
     expect(logger.entries[0]?.context).toMatchObject({ updateId: 42, requestedCount: 2, returnedCount: 2 });
+  });
+
+  it("delivers per-match 180 and checkout values through the Telegram handler", async () => {
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (): Promise<PlayerStatsResult> => result({
+        matches: [
+          {
+            ...match(95.5, "Luke Littler"),
+            oneEighties: 2,
+            checkoutPercentage: 50,
+            checkoutHits: 3,
+            checkoutAttempts: 6,
+          },
+          {
+            ...match(90.5, "Michael van Gerwen", "2026-07-31"),
+            oneEighties: 1,
+            checkoutPercentage: 50,
+            checkoutHits: 2,
+            checkoutAttempts: 4,
+          },
+        ],
+        meanAverage: 93,
+        availableAverageCount: 2,
+      }),
+    };
+    const responder = new MemoryResponder();
+
+    const outcome = await handleStatsText(
+      "Robert Thornton last 2 matches with 180s and checkout percentage from DartsOrakel",
+      service,
+      responder,
+      new MemoryLogger(),
+      44,
+    );
+
+    expect(outcome).toBe("success");
+    expect(responder.edits[0]?.text).toContain("180s 2 · checkout 50.00%");
+    expect(responder.edits[0]?.text).toContain("Total 180s: 3");
+    expect(responder.edits[0]?.text).toContain("Checkout: 50.00% (5/10)");
   });
 
   it("falls back to a new message if Telegram cannot edit the status", async () => {

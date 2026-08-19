@@ -100,8 +100,31 @@ describe("DartsOrakelClient", () => {
     expect(url.searchParams.get("dateFrom")).toBe("1900-01-01");
     expect(url.searchParams.get("dateTo")).toBe("2026-08-09");
     expect(writtenCacheKeys).toEqual([
-      "player-matches-v3-29-1900-01-01-2026-08-09-25-All-all-tournaments-all-rows",
+      "player-matches-v4-29-1900-01-01-2026-08-09-25-All-all-tournaments-all-rows",
     ]);
+  });
+
+  it.each([
+    ["average", "25"],
+    ["oneEighties", "26"],
+    ["checkoutPercentage", "1053"],
+  ] as const)("maps the %s statistic to rankKey %s and isolates its cache entry", async (statistic, expectedRankKey) => {
+    let requestedUrl: string | undefined;
+    const cacheSet = vi.fn<(key: string, value: unknown, ttlMs: number) => Promise<void>>().mockResolvedValue(undefined);
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      minRequestIntervalMs: 0,
+      fetchImpl: async (input: RequestInfo | URL): Promise<Response> => {
+        requestedUrl = String(input);
+        return Response.json(readMatchFixture("rob-cross-matches.json"));
+      },
+      cache: { get: async (): Promise<null> => null, set: cacheSet },
+    });
+
+    await client.getPlayerMatches(29, { statistic, limit: 10 });
+
+    expect(new URL(requestedUrl ?? "https://invalid.test").searchParams.get("rankKey")).toBe(expectedRankKey);
+    expect(cacheSet.mock.calls[0]?.[0]).toContain(`-${expectedRankKey}-All-`);
   });
 
   it("raises request errors after retry exhaustion", async () => {
@@ -136,7 +159,7 @@ describe("DartsOrakelClient", () => {
     expect(new URL(requestedUrl ?? "https://invalid.test").searchParams.get("dateFrom")).toBe("2026-05-14");
     expect(new URL(requestedUrl ?? "https://invalid.test").searchParams.get("dateTo")).toBe("2026-08-12");
     expect(cacheSet).toHaveBeenCalledWith(
-      "player-matches-v3-29-2026-05-14-2026-08-12-25-All-all-tournaments-all-rows",
+      "player-matches-v4-29-2026-05-14-2026-08-12-25-All-all-tournaments-all-rows",
       expect.any(Object),
       expect.any(Number),
     );

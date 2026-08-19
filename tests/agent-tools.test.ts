@@ -9,6 +9,7 @@ function matchResult(limit: number): MatchResult {
     matches: Array.from({ length: limit }, (_value, index) => ({
       date: `2026-01-${String(index + 1).padStart(2, "0")}`, tournament: "Example", round: null,
       result: "Won" as const, opponent: `Opponent ${index}`, score: "4 V 0", average: 80 + index,
+      oneEighties: 1, checkoutPercentage: 50, checkoutHits: 1, checkoutAttempts: 2,
     })),
   };
 }
@@ -45,7 +46,42 @@ function modusSnapshot(date: string): ModusResultsSnapshot {
 describe("agent tools", () => {
   it.each([[5, 82], [10, 84.5], [20, 89.5]])("calculates the last %i match average deterministically", async (limit, expected) => {
     await expect(executor().execute({ name: "getPlayerMatchAverage", arguments: { player: "Test Player", limit } })).resolves.toEqual({
-      ok: true, data: { player: "Test Player", requestedLimit: limit, matchCount: limit, average: expected },
+      ok: true,
+      data: {
+        player: "Test Player",
+        requestedLimit: limit,
+        matchCount: limit,
+        average: expected,
+        totalOneEighties: limit,
+        checkoutPercentage: 50,
+        checkoutHits: limit,
+        checkoutAttempts: limit * 2,
+        coverage: { average: limit, oneEighties: limit, checkout: limit },
+      },
+    });
+  });
+  it("returns enriched rows and one shared deterministic summary", async () => {
+    const result = await executor().execute({
+      name: "getPlayerMatches",
+      arguments: { player: "Test Player", limit: 2 },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        meanMatchAverage: 80.5,
+        matches: [
+          { oneEighties: 1, checkoutPercentage: 50, checkoutHits: 1, checkoutAttempts: 2 },
+          { oneEighties: 1, checkoutPercentage: 50, checkoutHits: 1, checkoutAttempts: 2 },
+        ],
+        summary: {
+          average: 80.5,
+          totalOneEighties: 2,
+          checkoutPercentage: 50,
+          checkoutHits: 2,
+          checkoutAttempts: 4,
+        },
+      },
     });
   });
   it("returns a structured error for an unresolved player", async () => {

@@ -5,8 +5,10 @@ import {
   DartsOrakelMatchesResponseSchema,
   parseDartsOrakelMatchRow,
   parseDartsOrakelMatches,
+  parseDartsOrakelMatchesWithStatistics,
 } from "../src/dartsorakel/parser.js";
 import type { PlayerIdentity } from "../src/schemas/player.js";
+import { MatchSchema } from "../src/schemas/match.js";
 import { readMatchFixture, readFixture } from "./helpers.js";
 
 const damon: PlayerIdentity = { id: 13, name: "Damon Heta", slug: "damon-heta" };
@@ -174,6 +176,113 @@ describe("DartsOrakel match parser", () => {
       opponent: "<a>O&#39;Connor &amp; Co.</a>",
     });
     expect(parsed.opponent).toBe("O'Connor & Co.");
+  });
+
+  it("joins shuffled metric rows by invariant match identity and preserves zero", () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const first = fixture.data[0];
+    const second = fixture.data[1];
+    if (first === undefined || second === undefined) throw new Error("Fixture must contain two matches.");
+    const average = { ...fixture, data: [first, second] };
+    const oneEighties = {
+      ...fixture,
+      data: [
+        { ...second, stat: 2, stat1: 2, stat2: null },
+        { ...first, stat: 0, stat1: 0, stat2: null },
+      ],
+    };
+    const checkoutPercentage = {
+      ...fixture,
+      data: [{ ...first, stat: "0.00%", stat1: 0, stat2: 2 }],
+    };
+
+    const matches = parseDartsOrakelMatchesWithStatistics(robCross, {
+      average,
+      oneEighties,
+      checkoutPercentage,
+    });
+
+    expect(matches[0]).toMatchObject({
+      average: 93.82,
+      oneEighties: 0,
+      checkoutPercentage: 0,
+      checkoutHits: 0,
+      checkoutAttempts: 2,
+    });
+    expect(matches[1]).toMatchObject({
+      average: 97.41,
+      oneEighties: 2,
+      checkoutPercentage: null,
+      checkoutHits: null,
+      checkoutAttempts: null,
+    });
+  });
+
+  it("leaves ambiguous duplicate enrichment unavailable instead of joining by position", () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a match.");
+    const secondAverage = { ...first, stat: "94.00", stat1: Number(first.stat1) + 1 };
+    const average = { ...fixture, data: [first, secondAverage] };
+    const oneEighties = { ...fixture, data: [{ ...first, stat: 1, stat1: 1, stat2: null }] };
+    const checkoutPercentage = { ...fixture, data: [{ ...first, stat: "50.00%", stat1: 1, stat2: 2 }] };
+
+    const matches = parseDartsOrakelMatchesWithStatistics(robCross, {
+      average,
+      oneEighties,
+      checkoutPercentage,
+    });
+
+    expect(matches).toHaveLength(2);
+    expect(matches.every((match) => match.oneEighties === null && match.checkoutPercentage === null)).toBe(true);
+  });
+
+  it("rejects impossible checkout counts", () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a match.");
+    const response = { ...fixture, data: [first] };
+
+    expect(() => parseDartsOrakelMatchesWithStatistics(robCross, {
+      average: response,
+      oneEighties: { ...fixture, data: [{ ...first, stat: 0, stat1: 0, stat2: null }] },
+      checkoutPercentage: { ...fixture, data: [{ ...first, stat: "150.00%", stat1: 3, stat2: 2 }] },
+    })).toThrow(DartsOrakelStructureChangedError);
+  });
+
+  it("keeps zero checkout attempts unavailable instead of publishing 0%", () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a match.");
+    const response = { ...fixture, data: [first] };
+
+    const [match] = parseDartsOrakelMatchesWithStatistics(robCross, {
+      average: response,
+      oneEighties: { ...fixture, data: [{ ...first, stat: 0, stat1: 0, stat2: null }] },
+      checkoutPercentage: { ...fixture, data: [{ ...first, stat: 0, stat1: 0, stat2: 0 }] },
+    });
+
+    expect(match).toMatchObject({
+      checkoutPercentage: null,
+      checkoutHits: 0,
+      checkoutAttempts: 0,
+    });
+  });
+
+  it("rejects checkout percentages that contradict their raw counts", () => {
+    expect(() => MatchSchema.parse({
+      date: "2026-01-01",
+      tournament: "Example",
+      round: null,
+      result: "Won",
+      opponent: "Opponent",
+      score: "6 V 1",
+      average: 90,
+      oneEighties: 1,
+      checkoutPercentage: 75,
+      checkoutHits: 1,
+      checkoutAttempts: 2,
+    })).toThrow();
   });
 });
 

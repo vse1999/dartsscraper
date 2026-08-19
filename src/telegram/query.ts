@@ -9,13 +9,29 @@ export interface StatsQuery {
   readonly source: PlayerStatsSource;
 }
 
+const STATISTIC_TERMS = new Set([
+  "average",
+  "averages",
+  "stats",
+  "statistics",
+  "180",
+  "180s",
+  "checkout",
+  "checkouts",
+  "checkout percent",
+  "checkout percentage",
+]);
+
 export function parseStatsQuery(text: string): StatsQuery | null {
   const normalized = text.normalize("NFKC").trim().replace(/\s+/gu, " ");
   const sourceRequest = extractSource(normalized);
   if (sourceRequest === null) return null;
   const request = stripConversationalPrefix(sourceRequest.request);
-  const match = /^(.+?)\s+(?:last|latest|most recent)\s+(\d{1,2})\s+(?:completed\s+)?match(?:es)?(?:\s+(?:averages?|stats?|statistics))?[.!?]?$/iu.exec(request);
+  const match = /^(.+?)\s+(?:last|latest|most recent)\s+(\d{1,2})\s+(?:completed\s+)?match(?:es)?(?:\s+(.+?))?[.!?]?$/iu.exec(request);
   if (match === null) return null;
+
+  const statisticsSuffix = match[3];
+  if (statisticsSuffix !== undefined && !isStatisticsSuffix(statisticsSuffix)) return null;
 
   const playerName = match[1]?.trim().replace(/[’']s$/iu, "").trim() ?? "";
   const matchCount = Number(match[2]);
@@ -39,6 +55,9 @@ export function statsQueryUsage(): string {
     "Dylan Slevin last 10 match",
     "Dylan Slevin last 10 matches from MODUS",
     "Dylan Slevin last 10 matches from DartsOrakel",
+    "Robert Thornton last 10 matches with averages, 180s and checkout percentage from DartsOrakel",
+    "DartsOrakel returns average, 180s, and checkout percentage for every available match.",
+    "MODUS currently returns match averages only.",
     "Without a source, the bot chooses automatically.",
   ].join("\n");
 }
@@ -81,4 +100,14 @@ function stripConversationalPrefix(value: string): string {
     .replace(/^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:show|give)(?:\s+me)?\s+/iu, "")
     .replace(/^(?:please\s+)?what\s+(?:is|are)\s+/iu, "")
     .trim();
+}
+
+function isStatisticsSuffix(value: string): boolean {
+  const normalized = value
+    .toLocaleLowerCase("en-US")
+    .replace(/^(?:with|including)\s+/u, "")
+    .trim();
+  if (normalized === "") return false;
+  const terms = normalized.split(/\s*(?:,|\band\b)\s*/u);
+  return terms.length > 0 && terms.every((term: string): boolean => STATISTIC_TERMS.has(term));
 }

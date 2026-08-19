@@ -3,6 +3,8 @@ import { noopLogger, type Logger } from "../logger.js";
 import { ModusPlayersResultSchema } from "../modus/schemas.js";
 import { ModusResultsSnapshotSchema, type ModusResultsSnapshot } from "../modus/results-schemas.js";
 import { normalizePlayerName } from "../player/resolver.js";
+import { MatchResultSchema, type Match } from "../schemas/match.js";
+import { calculateMatchSummary, type MatchSummary } from "../services/statistics.js";
 import { resolveResearchDate, type ResolvedDate } from "./date.js";
 import { AGENT_TOOL_DEFINITIONS, type AgentToolCall, type AgentToolResult, type DartsAgentToolExecutor } from "./tools.js";
 import type { OllamaChatClient, OllamaMessage, OllamaToolCall } from "./ollama-client.js";
@@ -34,7 +36,21 @@ export interface AgentRunOptions {
   signal?: AbortSignal;
 }
 export interface AgentRunResult { answer: string; iterations: number; toolCalls: number; model: string; }
-interface AverageEvidence { player: string; average: number | null; matchCount: number; error?: string; }
+interface AverageEvidence {
+  player: string;
+  average: number | null;
+  totalOneEighties: number | null;
+  checkoutPercentage: number | null;
+  checkoutHits: number;
+  checkoutAttempts: number;
+  matchCount: number;
+  error?: string;
+}
+interface MatchRowsEvidence {
+  readonly player: string;
+  readonly matches: readonly Match[];
+  readonly summary: MatchSummary;
+}
 interface ExecutedTool { call: AgentToolCall; result: AgentToolResult; }
 
 export class DartsResearchAgent {
@@ -87,6 +103,7 @@ export class DartsResearchAgent {
     let modusResultsEvidence: ModusResultsSnapshot | undefined;
     let modusResultsAttempted = false;
     const averageEvidence = new Map<string, AverageEvidence>();
+    let matchRowsEvidence: MatchRowsEvidence | undefined;
     const completedTools = new Map<string, ExecutedTool>();
     let answerRepairAttempts = 0;
     let emptyAnswerRepairAttempts = 0;
@@ -116,6 +133,7 @@ export class DartsResearchAgent {
           averageEvidence,
           (players) => { discoveredPlayers = players; },
           (snapshot) => { modusResultsEvidence = snapshot; },
+          (evidence) => { matchRowsEvidence = evidence; },
         );
         messages.push(
           { role: "assistant", content: "", tool_calls: [toOllamaToolCall(call)] },
@@ -168,6 +186,22 @@ export class DartsResearchAgent {
             messages.push({ role: "user", content: `Your draft failed evidence validation. Use every player exactly once and only these deterministic results. Do not add other players or numbers:\n${JSON.stringify([...averageEvidence.values()])}` });
             continue;
           }
+          if (matchRowsEvidence !== undefined && !validateMatchRowsAnswer(answer, matchRowsEvidence)) {
+            answerRepairAttempts += 1;
+            if (answerRepairAttempts >= 2) {
+              return {
+                answer: deterministicMatchRowsAnswer(trimmed, matchRowsEvidence),
+                iterations: iteration,
+                toolCalls: toolCallCount,
+                model: this.model,
+              };
+            }
+            messages.push({
+              role: "user",
+              content: `Your draft omitted or contradicted verified match statistics. Answer only from this deterministic evidence and include every match row plus the mean average, total 180s, weighted checkout percentage, raw checkout counts, and coverage:\n${JSON.stringify(matchRowsEvidence)}`,
+            });
+            continue;
+          }
           return { answer, iterations: iteration, toolCalls: toolCallCount, model: this.model };
         }
 
@@ -213,6 +247,7 @@ export class DartsResearchAgent {
             averageEvidence,
             (players) => { discoveredPlayers = players; },
             (snapshot) => { modusResultsEvidence = snapshot; },
+            (evidence) => { matchRowsEvidence = evidence; },
           );
           messages.push({ role: "tool", tool_name: item.call.name, content: JSON.stringify(item.result) });
         }
@@ -271,6 +306,7 @@ export class DartsResearchAgent {
     averageEvidence: Map<string, AverageEvidence>,
     setPlayers: (players: readonly string[]) => void,
     setModusResults: (snapshot: ModusResultsSnapshot) => void,
+    setMatchRows: (evidence: MatchRowsEvidence) => void,
   ): void {
     if (item.call.name === "getModusResults" && item.result.ok) {
       const parsed = ModusResultsSnapshotSchema.safeParse(item.result.data);
@@ -282,17 +318,49 @@ export class DartsResearchAgent {
       if (parsed.success) setPlayers(parsed.data.players.map((player) => player.name));
       return;
     }
+    if (item.call.name === "getPlayerMatches" && item.result.ok) {
+      const parsed = MatchResultSchema.safeParse(item.result.data);
+      if (parsed.success && parsed.data.matches.length > 0) {
+        setMatchRows({
+          player: parsed.data.player.name,
+          matches: parsed.data.matches,
+          summary: calculateMatchSummary(parsed.data.matches),
+        });
+      }
+      return;
+    }
     if (item.call.name !== "getPlayerMatchAverage") return;
     const playerArgument = readStringProperty(item.call.arguments, "player") ?? "Unknown player";
     const key = normalizePlayerName(playerArgument);
     if (!item.result.ok) {
-      averageEvidence.set(key, { player: playerArgument, average: null, matchCount: 0, error: item.result.error.message });
+      averageEvidence.set(key, {
+        player: playerArgument,
+        average: null,
+        totalOneEighties: null,
+        checkoutPercentage: null,
+        checkoutHits: 0,
+        checkoutAttempts: 0,
+        matchCount: 0,
+        error: item.result.error.message,
+      });
       return;
     }
     const player = readStringProperty(item.result.data, "player") ?? playerArgument;
     const average = readNumberOrNullProperty(item.result.data, "average");
+    const totalOneEighties = readNumberOrNullProperty(item.result.data, "totalOneEighties");
+    const checkoutPercentage = readNumberOrNullProperty(item.result.data, "checkoutPercentage");
+    const checkoutHits = readNumberProperty(item.result.data, "checkoutHits") ?? 0;
+    const checkoutAttempts = readNumberProperty(item.result.data, "checkoutAttempts") ?? 0;
     const matchCount = readNumberProperty(item.result.data, "matchCount") ?? 0;
-    averageEvidence.set(key, { player, average, matchCount });
+    averageEvidence.set(key, {
+      player,
+      average,
+      totalOneEighties,
+      checkoutPercentage,
+      checkoutHits,
+      checkoutAttempts,
+      matchCount,
+    });
   }
 
   private tryResolveDate(query: string): ResolvedDate | undefined {
@@ -309,9 +377,9 @@ export class DartsResearchAgent {
       "You are a local darts research orchestrator. Use tools for every date, fixture, match, and numeric fact.",
       "Use the supplied conversation history to understand follow-up questions, but never treat prior assistant text as verified evidence.",
       "For factual follow-ups, resolve pronouns from history and call tools again in the current run before answering.",
-      "Never invent players, matches, averages, dates, or unavailable results. Never calculate averages yourself.",
+      "Never invent players, matches, averages, 180 counts, checkout values, dates, or unavailable results. Never recalculate returned statistics yourself.",
       "A successful tool result is authoritative. Never repeat an identical tool call. After all required results arrive, answer instead of calling the same tools again.",
-      "When the user asks to see match rows and an average, call getPlayerMatches once because it returns both the rows and meanMatchAverage.",
+      "When the user asks to see latest match rows or statistics, call getPlayerMatches once because it returns the rows plus mean average, total 180s, weighted checkout percentage, raw checkout counts, and coverage.",
       "For current, today, or latest MODUS matches, results, or averages, call getModusResults once. It is the authoritative official MODUS source for scores, per-match averages, and cumulative weekly averages.",
       "Never substitute DartsOrakel last-N history for official MODUS results. DartsOrakel remains the source for PDC matches and explicitly requested cross-event player history.",
       "For MODUS fixture-only questions outside the official current-day feed, call getModusPlayers. Use getPlayerMatchAverage only when the user explicitly asks for DartsOrakel last-N form.",
@@ -337,29 +405,103 @@ function validateEvidenceAnswer(answer: string, players: readonly string[], evid
   return players.every((player) => {
     const item = evidence.get(normalizePlayerName(player));
     if (item === undefined || !normalizedAnswer.includes(normalizePlayerName(player))) return false;
-    if (item.average === null) return true;
-    return answer.includes(item.average.toFixed(2)) || answer.includes(String(item.average));
+    if (item.average !== null && !containsFormattedNumber(answer, item.average)) return false;
+    if (item.totalOneEighties !== null && !answer.includes(String(item.totalOneEighties))) return false;
+    return item.checkoutPercentage === null || containsFormattedNumber(answer, item.checkoutPercentage);
   });
 }
 function deterministicEvidenceAnswer(query: string, date: string | undefined, players: readonly string[], evidence: ReadonlyMap<string, AverageEvidence>): string {
   const hungarian = /[áéíóöőúüű]|\b(keresd|játékos|meccs|átlag)/i.test(query);
   const header = hungarian ? `MODUS Super Series – ${date ?? "ismeretlen dátum"}` : `MODUS Super Series — ${date ?? "unknown date"}`;
-  const columns = hungarian ? "| Játékos | Meccsek | Átlag | Állapot |\n|---|---:|---:|---|" : "| Player | Matches | Average | Status |\n|---|---:|---:|---|";
+  const columns = hungarian ? "| Játékos | Meccsek | Átlag | 180 | Kiszálló | Állapot |\n|---|---:|---:|---:|---:|---|" : "| Player | Matches | Average | 180s | Checkout | Status |\n|---|---:|---:|---:|---:|---|";
   const rows = players.map((player) => {
     const item = evidence.get(normalizePlayerName(player));
-    if (item === undefined || item.average === null) return `| ${player} | ${item?.matchCount ?? 0} | — | ${item?.error ?? (hungarian ? "Nem elérhető" : "Unavailable")} |`;
-    return `| ${player} | ${item.matchCount} | ${item.average.toFixed(2)} | ${hungarian ? "Rendben" : "OK"} |`;
+    if (item === undefined) return `| ${player} | 0 | — | — | — | ${hungarian ? "Nem elérhető" : "Unavailable"} |`;
+    return `| ${player} | ${item.matchCount} | ${formatEvidenceNumber(item.average)} | ${formatEvidenceInteger(item.totalOneEighties)} | ${formatEvidenceCheckout(item)} | ${item.error ?? (hungarian ? "Rendben" : "OK")} |`;
   });
   return `${header}\n\n${columns}\n${rows.join("\n")}`;
 }
 function deterministicAverageAnswer(query: string, evidence: readonly AverageEvidence[]): string {
   const hungarian = /[áéíóöőúüű]|\b(keresd|játékos|meccs|átlag)/i.test(query);
-  const heading = hungarian ? "Ellenőrzött meccsátlagok" : "Verified match averages";
-  const columns = hungarian ? "| Játékos | Meccsek | Átlag | Állapot |\n|---|---:|---:|---|" : "| Player | Matches | Average | Status |\n|---|---:|---:|---|";
-  const rows = evidence.map((item) => item.average === null
-    ? `| ${item.player} | ${item.matchCount} | — | ${item.error ?? (hungarian ? "Nem elérhető" : "Unavailable")} |`
-    : `| ${item.player} | ${item.matchCount} | ${item.average.toFixed(2)} | ${hungarian ? "Rendben" : "OK"} |`);
+  const heading = hungarian ? "Ellenőrzött legutóbbi statisztikák" : "Verified latest-match statistics";
+  const columns = hungarian ? "| Játékos | Meccsek | Átlag | 180 | Kiszálló | Állapot |\n|---|---:|---:|---:|---:|---|" : "| Player | Matches | Average | 180s | Checkout | Status |\n|---|---:|---:|---:|---:|---|";
+  const rows = evidence.map((item) => `| ${item.player} | ${item.matchCount} | ${formatEvidenceNumber(item.average)} | ${formatEvidenceInteger(item.totalOneEighties)} | ${formatEvidenceCheckout(item)} | ${item.error ?? (hungarian ? "Rendben" : "OK")} |`);
   return `${heading}\n\n${columns}\n${rows.join("\n")}`;
+}
+
+function formatEvidenceNumber(value: number | null): string {
+  return value === null ? "—" : value.toFixed(2);
+}
+
+function formatEvidenceInteger(value: number | null): string {
+  return value === null ? "—" : String(value);
+}
+
+function formatEvidenceCheckout(item: AverageEvidence): string {
+  return item.checkoutPercentage === null
+    ? "—"
+    : `${item.checkoutPercentage.toFixed(2)}% (${item.checkoutHits}/${item.checkoutAttempts})`;
+}
+
+function validateMatchRowsAnswer(answer: string, evidence: MatchRowsEvidence): boolean {
+  const normalizedAnswer = normalizePlayerName(answer);
+  if (!normalizedAnswer.includes(normalizePlayerName(evidence.player))) return false;
+  const lines = answer.split(/\r?\n/u);
+  const hasEveryMatch = evidence.matches.every((match) => lines.some((line) => {
+    const normalizedLine = normalizePlayerName(line);
+    if (!normalizedLine.includes(normalizePlayerName(match.opponent))) return false;
+    if (!line.includes(match.date) || !line.includes(match.score)) return false;
+    if (match.average !== null && !containsFormattedNumber(line, match.average)) return false;
+    if (match.oneEighties !== null && match.oneEighties !== undefined && !line.includes(String(match.oneEighties))) return false;
+    return match.checkoutPercentage === null
+      || match.checkoutPercentage === undefined
+      || containsFormattedNumber(line, match.checkoutPercentage);
+  }));
+  if (!hasEveryMatch) return false;
+  if (evidence.summary.average !== null && !containsFormattedNumber(answer, evidence.summary.average)) return false;
+  if (evidence.summary.totalOneEighties !== null && !answer.includes(String(evidence.summary.totalOneEighties))) return false;
+  if (evidence.summary.checkoutPercentage !== null && !containsFormattedNumber(answer, evidence.summary.checkoutPercentage)) return false;
+  return answer.includes(`${evidence.summary.availableAverageCount}/${evidence.summary.matchCount}`)
+    && answer.includes(`${evidence.summary.availableOneEightiesCount}/${evidence.summary.matchCount}`)
+    && answer.includes(`${evidence.summary.availableCheckoutCount}/${evidence.summary.matchCount}`);
+}
+
+function deterministicMatchRowsAnswer(query: string, evidence: MatchRowsEvidence): string {
+  const hungarian = /[áéíóöőúüű]|\b(keresd|játékos|meccs|átlag)/iu.test(query);
+  const title = `${evidence.player} — ${evidence.matches.length} ${hungarian ? "legutóbbi meccs" : "latest matches"}`;
+  const columns = hungarian
+    ? "| Dátum | Ellenfél | Eredmény | Pontszám | Átlag | 180 | Kiszálló |\n|---|---|---|---|---:|---:|---:|"
+    : "| Date | Opponent | Result | Score | Average | 180s | Checkout |\n|---|---|---|---|---:|---:|---:|";
+  const rows = evidence.matches.map((match) => `| ${match.date} | ${match.opponent} | ${match.result} | ${match.score} | ${formatAverage(match.average)} | ${formatOptionalInteger(match.oneEighties)} | ${formatOptionalPercentage(match.checkoutPercentage)} |`);
+  const summary = evidence.summary;
+  const summaryLines = hungarian
+    ? [
+      `Meccsátlag: ${formatAverage(summary.average)}`,
+      `180-ak összesen: ${formatOptionalInteger(summary.totalOneEighties)}`,
+      `Kiszálló: ${formatSummaryCheckoutEvidence(summary)}`,
+      `Elérhetőség (átlag/180/kiszálló): ${summary.availableAverageCount}/${summary.matchCount} · ${summary.availableOneEightiesCount}/${summary.matchCount} · ${summary.availableCheckoutCount}/${summary.matchCount}`,
+    ]
+    : [
+      `Mean match average: ${formatAverage(summary.average)}`,
+      `Total 180s: ${formatOptionalInteger(summary.totalOneEighties)}`,
+      `Checkout: ${formatSummaryCheckoutEvidence(summary)}`,
+      `Coverage (average/180s/checkout): ${summary.availableAverageCount}/${summary.matchCount} · ${summary.availableOneEightiesCount}/${summary.matchCount} · ${summary.availableCheckoutCount}/${summary.matchCount}`,
+    ];
+  return `${title}\n\n${columns}\n${rows.join("\n")}\n\n${summaryLines.join("\n")}`;
+}
+
+function formatOptionalInteger(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function formatOptionalPercentage(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${value.toFixed(2)}%`;
+}
+
+function formatSummaryCheckoutEvidence(summary: MatchSummary): string {
+  return summary.checkoutPercentage === null
+    ? "—"
+    : `${summary.checkoutPercentage.toFixed(2)}% (${summary.checkoutHits}/${summary.checkoutAttempts})`;
 }
 function validateModusResultsAnswer(answer: string, evidence: ModusResultsSnapshot): boolean {
   if (!answer.includes(evidence.date)) return false;

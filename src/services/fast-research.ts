@@ -8,11 +8,11 @@ import type { PlayerResolver } from "../player/resolver.js";
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
 import type { PlayerMatchesService } from "./player-matches.js";
-import { calculateMatchSummary } from "./statistics.js";
+import { calculateMatchSummary, type MatchSummary } from "./statistics.js";
 
 export type ResearchIntent =
   | { kind: "modus-current-results"; date: string }
-  | { kind: "player-last-matches"; player: PlayerIdentity; limit: number; includeAverage: boolean }
+  | { kind: "player-last-matches"; player: PlayerIdentity; limit: number }
   | { kind: "player-latest-match"; player: PlayerIdentity }
   | { kind: "player-last-n-average"; player: PlayerIdentity; limit: number };
 
@@ -107,7 +107,6 @@ export class FastResearchService {
           snapshot.value.player,
           snapshot.value.matches,
           intent.limit,
-          intent.includeAverage,
           snapshot.stale,
           snapshot.dataAgeMs,
         );
@@ -152,7 +151,7 @@ export class FastResearchService {
     const latestFact = /\b(opponent|result|score|average|ellenfel|eredmeny|atlag)\b/u.test(normalized);
 
     if (latest && (latestFact || mentionsMatches) && limit === undefined) return { kind: "player-latest-match", player };
-    if (limit !== undefined && mentionsMatches) return { kind: "player-last-matches", player, limit, includeAverage: mentionsAverage };
+    if (limit !== undefined && mentionsMatches) return { kind: "player-last-matches", player, limit };
     if (mentionsAverage && (limit !== undefined || contextual !== undefined)) {
       return { kind: "player-last-n-average", player, limit: limit ?? 10 };
     }
@@ -212,15 +211,14 @@ function renderPlayerMatches(
   player: PlayerIdentity,
   matches: readonly Match[],
   requestedLimit: number,
-  includeAverage: boolean,
   stale: boolean,
   ageMs: number,
 ): string {
   const hungarian = isHungarian(query);
   const header = hungarian
-    ? "| Dátum | Verseny | Forduló | Eredmény | Ellenfél | Pontszám | Átlag |\n|---|---|---|---|---|---|---:|"
-    : "| Date | Tournament | Round | Result | Opponent | Score | Average |\n|---|---|---|---|---|---|---:|";
-  const rows = matches.map((match) => `| ${match.date} | ${match.tournament} | ${match.round ?? "—"} | ${match.result} | ${match.opponent} | ${match.score} | ${formatAverage(match.average)} |`);
+    ? "| Dátum | Verseny | Forduló | Eredmény | Ellenfél | Pontszám | Átlag | 180 | Kiszálló |\n|---|---|---|---|---|---|---:|---:|---:|"
+    : "| Date | Tournament | Round | Result | Opponent | Score | Average | 180s | Checkout |\n|---|---|---|---|---|---|---:|---:|---:|";
+  const rows = matches.map((match) => `| ${match.date} | ${match.tournament} | ${match.round ?? "—"} | ${match.result} | ${match.opponent} | ${match.score} | ${formatAverage(match.average)} | ${formatOneEighties(match.oneEighties)} | ${formatCheckout(match.checkoutPercentage)} |`);
   const summary = calculateMatchSummary(matches);
   const partialNotice = matches.length === requestedLimit
     ? ""
@@ -228,13 +226,12 @@ function renderPlayerMatches(
   const record = hungarian ? "Mérleg" : "Record";
   const insights = [
     `${record}: ${summary.wins}W–${summary.losses}L–${summary.draws}D`,
-    ...(includeAverage
-      ? [
-        `${hungarian ? "Meccsátlag" : "Mean match average"}: ${summary.average === null ? "—" : summary.average.toFixed(2)}`,
-        `${hungarian ? "Legjobb meccsátlag" : "Best match average"}: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`,
-        `${hungarian ? "Elérhető átlagok" : "Available averages"}: ${summary.availableAverageCount}/${summary.matchCount}`,
-      ]
-      : []),
+    `${hungarian ? "Meccsátlag" : "Mean match average"}: ${summary.average === null ? "—" : summary.average.toFixed(2)}`,
+    `${hungarian ? "Legjobb meccsátlag" : "Best match average"}: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`,
+    `${hungarian ? "180-ak összesen" : "Total 180s"}: ${formatOneEighties(summary.totalOneEighties)}`,
+    `${hungarian ? "Kiszálló" : "Checkout"}: ${formatSummaryCheckout(summary)}`,
+    `${hungarian ? "Elérhető átlagok" : "Available averages"}: ${summary.availableAverageCount}/${summary.matchCount}`,
+    `${hungarian ? "Elérhetőség (átlag/180/kiszálló)" : "Coverage (average/180s/checkout)"}: ${summary.availableAverageCount}/${summary.matchCount} · ${summary.availableOneEightiesCount}/${summary.matchCount} · ${summary.availableCheckoutCount}/${summary.matchCount}`,
   ];
   return `${player.name} — ${matches.length} ${hungarian ? "legutóbbi meccs" : "latest matches"}${partialNotice}\n\n${header}\n${rows.join("\n")}\n\n${insights.join("\n")}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
 }
@@ -243,19 +240,20 @@ function renderLatestMatch(query: string, player: PlayerIdentity, match: Match |
   const hungarian = isHungarian(query);
   if (match === undefined) return `${player.name}: ${hungarian ? "nincs elérhető befejezett meccs" : "no completed match is available"}.`;
   const header = hungarian
-    ? "| Dátum | Ellenfél | Eredmény | Pontszám | Átlag |\n|---|---|---|---|---:|"
-    : "| Date | Opponent | Result | Score | Average |\n|---|---|---|---|---:|";
-  return `${player.name} — ${hungarian ? "legutóbbi meccs" : "latest match"}\n\n${header}\n| ${match.date} | ${match.opponent} | ${match.result} | ${match.score} | ${formatAverage(match.average)} |\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
+    ? "| Dátum | Ellenfél | Eredmény | Pontszám | Átlag | 180 | Kiszálló |\n|---|---|---|---|---:|---:|---:|"
+    : "| Date | Opponent | Result | Score | Average | 180s | Checkout |\n|---|---|---|---|---:|---:|---:|";
+  return `${player.name} — ${hungarian ? "legutóbbi meccs" : "latest match"}\n\n${header}\n| ${match.date} | ${match.opponent} | ${match.result} | ${match.score} | ${formatAverage(match.average)} | ${formatOneEighties(match.oneEighties)} | ${formatCheckout(match.checkoutPercentage)} |\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
 }
 
 function renderPlayerAverage(query: string, player: PlayerIdentity, matches: readonly Match[], stale: boolean, ageMs: number): string {
   const hungarian = isHungarian(query);
   const summary = calculateMatchSummary(matches);
-  const header = hungarian ? "| Játékos | Meccsek | Átlag |\n|---|---:|---:|" : "| Player | Matches | Average |\n|---|---:|---:|";
+  const header = hungarian ? "| Játékos | Meccsek | Átlag | 180 | Kiszálló |\n|---|---:|---:|---:|---:|" : "| Player | Matches | Average | 180s | Checkout |\n|---|---:|---:|---:|---:|";
   const evidence = hungarian
     ? `Elérhető átlagok: ${summary.availableAverageCount}/${summary.matchCount} · Legjobb: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`
     : `Available averages: ${summary.availableAverageCount}/${summary.matchCount} · Best: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`;
-  return `${hungarian ? "Ellenőrzött meccsátlag" : "Verified match average"}\n\n${header}\n| ${player.name} | ${matches.length} | ${summary.average === null ? "—" : summary.average.toFixed(2)} |\n\n${evidence}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
+  const coverage = `${hungarian ? "Elérhetőség (átlag/180/kiszálló)" : "Coverage (average/180s/checkout)"}: ${summary.availableAverageCount}/${summary.matchCount} · ${summary.availableOneEightiesCount}/${summary.matchCount} · ${summary.availableCheckoutCount}/${summary.matchCount}`;
+  return `${hungarian ? "Ellenőrzött legutóbbi statisztikák" : "Verified latest-match statistics"}\n\n${header}\n| ${player.name} | ${matches.length} | ${summary.average === null ? "—" : summary.average.toFixed(2)} | ${formatOneEighties(summary.totalOneEighties)} | ${formatSummaryCheckout(summary)} |\n\n${evidence}\n${coverage}\n\n${freshnessLine(stale, ageMs, hungarian)}\nSource: ${playerUrl(player)}`;
 }
 
 function extractLimit(query: string): number | undefined {
@@ -300,4 +298,18 @@ function formatScore(home: number | null, away: number | null): string {
 
 function formatAverage(value: number | null): string {
   return value === null ? "—" : value.toFixed(2);
+}
+
+function formatOneEighties(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function formatCheckout(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${value.toFixed(2)}%`;
+}
+
+function formatSummaryCheckout(summary: MatchSummary): string {
+  return summary.checkoutPercentage === null
+    ? "—"
+    : `${summary.checkoutPercentage.toFixed(2)}% (${summary.checkoutHits}/${summary.checkoutAttempts})`;
 }

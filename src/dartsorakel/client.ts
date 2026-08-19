@@ -10,6 +10,8 @@ import {
   DartsOrakelApiPath,
   DartsOrakelMatchDefaults,
   DartsOrakelMatchQuery,
+  DartsOrakelMatchRankKey,
+  type DartsOrakelMatchStatistic,
 } from "./selectors.js";
 import {
   DartsOrakelMatchesResponseSchema,
@@ -45,6 +47,7 @@ export interface DartsOrakelMatchRequestOptions {
   dateFrom?: string;
   dateTo?: string;
   limit?: number;
+  statistic?: DartsOrakelMatchStatistic;
 }
 
 export class DartsOrakelClient {
@@ -107,12 +110,17 @@ export class DartsOrakelClient {
     const dateFrom = this.isoCalendarDate(options.dateFrom ?? HISTORICAL_START_DATE, "dateFrom");
     const dateTo = this.isoCalendarDate(options.dateTo ?? this.isoDate(this.now() + 24 * 60 * 60 * 1000), "dateTo");
     const limit = options.limit === undefined ? undefined : this.positiveInteger(options.limit, "limit");
+    const statistic = options.statistic ?? "average";
+    const rankKey = DartsOrakelMatchRankKey[statistic];
+    if (rankKey === undefined) {
+      throw new Error(`Unsupported DartsOrakel match statistic ${JSON.stringify(statistic)}.`);
+    }
     if (limit !== undefined && limit > 1_000) throw new Error("limit must not exceed 1000.");
     if (dateFrom > dateTo) throw new Error("dateFrom must not be later than dateTo.");
     const url = this.urlFor(DartsOrakelApiPath.playerMatches(playerId), {
       [DartsOrakelMatchQuery.dateFrom]: dateFrom,
       [DartsOrakelMatchQuery.dateTo]: dateTo,
-      [DartsOrakelMatchQuery.rankKey]: DartsOrakelMatchDefaults.rankKey,
+      [DartsOrakelMatchQuery.rankKey]: rankKey,
       [DartsOrakelMatchQuery.organStat]: DartsOrakelMatchDefaults.organStat,
       [DartsOrakelMatchQuery.tournaments]: DartsOrakelMatchDefaults.tournaments,
       ...(limit === undefined ? {} : { start: "0", length: String(limit) }),
@@ -120,11 +128,11 @@ export class DartsOrakelClient {
     return this.getJson(
       url,
       [
-        "player-matches-v3",
+        "player-matches-v4",
         playerId,
         dateFrom,
         dateTo,
-        DartsOrakelMatchDefaults.rankKey,
+        rankKey,
         DartsOrakelMatchDefaults.organStat,
         DartsOrakelMatchDefaults.tournaments || "all-tournaments",
         limit ?? "all-rows",

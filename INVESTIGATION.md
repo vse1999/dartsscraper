@@ -61,4 +61,13 @@ The service resolves a player, fetches validated match rows, removes bye/incompl
 ## Access and operational notes
 
 On investigation, `https://dartsorakel.com/robots.txt` returned `User-agent: *` and `Disallow:`. The implementation still uses a descriptive User-Agent, a timeout, bounded retries, deterministic backoff, and a minimum request interval. It only calls the observed public endpoints and does not bypass authentication, anti-bot controls, or access restrictions. Local caches are optional and use a long TTL for player identity data and a short TTL for match data.
+# 2026-08-19 metric enrichment update
+
+The public player-matches selector and API were re-verified read-only:
+
+- `rankKey=25`: per-match three-dart average (`stat`; raw points/darts in `stat1/stat2`)
+- `rankKey=26`: per-match 180 count (integer; zero is valid)
+- `rankKey=1053`: checkout percentage (`stat1=hits`, `stat2=attempts`)
+
+All three use `/api/player/matches/{playerId}` with identical date, organisation, and tournament filters. Historical row membership differs between views, so production enrichment uses the average response as the canonical latest-match set and correlates only unique invariant match groups; it never joins arrays by position. Checkout summary is `sum(hits) / sum(attempts)`, not the mean of displayed percentages. Missing or ambiguous enrichment remains `null` and is surfaced through coverage counts.
 

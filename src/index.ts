@@ -12,6 +12,7 @@ export { calculateMatchAverage, calculateMatchSummary } from "./services/statist
 export type { MatchSummary } from "./services/statistics.js";
 export { DartsOrakelClient } from "./dartsorakel/client.js";
 export type { DartsOrakelClientOptions, DartsOrakelMatchRequestOptions } from "./dartsorakel/client.js";
+export { DartsOrakelMatchRankKey, DartsOrakelMatchStatistic } from "./dartsorakel/selectors.js";
 export { DartsOrakelScraper } from "./dartsorakel/scraper.js";
 export type { RecentPlayerMatchesOptions } from "./dartsorakel/scraper.js";
 export { PlayerResolver, normalizePlayerName } from "./player/resolver.js";

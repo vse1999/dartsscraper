@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ModusPlayersService } from "../modus/service.js";
 import type { OfficialModusResultsService } from "../modus/results-service.js";
 import type { PlayerMatchesService } from "../services/player-matches.js";
-import { calculateMatchAverage } from "../services/statistics.js";
+import { calculateMatchSummary } from "../services/statistics.js";
 import { resolveResearchDate } from "./date.js";
 
 const ResolveDateArgumentsSchema = z.object({ expression: z.string().trim().min(1) }).strict();
@@ -26,8 +26,8 @@ export const AGENT_TOOL_DEFINITIONS: readonly Readonly<Record<string, unknown>>[
   { type: "function", function: { name: "resolveDate", description: "Resolve an explicit or relative English/Hungarian date expression to an ISO date in Europe/Budapest.", parameters: { type: "object", additionalProperties: false, required: ["expression"], properties: { expression: { type: "string" } } } } },
   { type: "function", function: { name: "getModusPlayers", description: "Get the confirmed MODUS Super Series players scheduled on an ISO date.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
   { type: "function", function: { name: "getModusResults", description: "Get the authoritative official MODUS Super Series daily matches, scores, per-match three-dart averages, and cumulative weekly player averages for an ISO date. Use this for current/latest MODUS results instead of DartsOrakel.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
-  { type: "function", function: { name: "getPlayerMatches", description: "Get a player's latest completed DartsOrakel matches.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
-  { type: "function", function: { name: "getPlayerMatchAverage", description: "Deterministically calculate a player's mean three-dart average over their latest completed matches.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
+  { type: "function", function: { name: "getPlayerMatches", description: "Get a player's latest completed DartsOrakel matches with per-match average, 180 count, checkout percentage, and a deterministic summary.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
+  { type: "function", function: { name: "getPlayerMatchAverage", description: "Deterministically calculate a player's latest-match mean average, total 180s, weighted checkout percentage, raw checkout counts, and metric coverage.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
 ];
 
 export class DartsAgentToolExecutor {
@@ -54,12 +54,31 @@ export class DartsAgentToolExecutor {
         case "getPlayerMatches": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
           const result = await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit);
-          return { ok: true, data: { ...result, meanMatchAverage: calculateMatchAverage(result.matches) } };
+          const summary = calculateMatchSummary(result.matches);
+          return { ok: true, data: { ...result, meanMatchAverage: summary.average, summary } };
         }
         case "getPlayerMatchAverage": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
           const result = await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit);
-          return { ok: true, data: { player: result.player.name, requestedLimit: args.limit, matchCount: result.matches.length, average: calculateMatchAverage(result.matches) } };
+          const summary = calculateMatchSummary(result.matches);
+          return {
+            ok: true,
+            data: {
+              player: result.player.name,
+              requestedLimit: args.limit,
+              matchCount: result.matches.length,
+              average: summary.average,
+              totalOneEighties: summary.totalOneEighties,
+              checkoutPercentage: summary.checkoutPercentage,
+              checkoutHits: summary.checkoutHits,
+              checkoutAttempts: summary.checkoutAttempts,
+              coverage: {
+                average: summary.availableAverageCount,
+                oneEighties: summary.availableOneEightiesCount,
+                checkout: summary.availableCheckoutCount,
+              },
+            },
+          };
         }
         default:
           return { ok: false, error: { code: "UNKNOWN_TOOL", message: `Tool ${JSON.stringify(call.name)} does not exist.` } };

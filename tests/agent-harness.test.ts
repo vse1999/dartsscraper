@@ -126,6 +126,40 @@ describe("bounded agent harness", () => {
     await agent.run("Show Rob Cross's last 3 completed matches and calculate the mean average.");
     expect(calls).toEqual(["getPlayerMatches"]);
   });
+  it("replaces a DartsOrakel match draft that omits verified 180 and checkout evidence", async () => {
+    const rows: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
+      { function: { name: "getPlayerMatches", arguments: { player: "Rob Cross", limit: 1 } } },
+    ] } };
+    const incomplete: OllamaChatResponse = { message: { role: "assistant", content: "Rob Cross averaged 95.50." } };
+    const client = new ScriptedClient([rows, incomplete, incomplete]);
+    const agent = new DartsResearchAgent({ client, toolExecutor: { execute: async () => ({
+      ok: true,
+      data: {
+        player: { id: 29, name: "Rob Cross", slug: "rob-cross" },
+        matches: [{
+          date: "2026-08-10",
+          tournament: "Example",
+          round: "Final",
+          result: "Won",
+          opponent: "Luke Littler",
+          score: "6 V 4",
+          average: 95.5,
+          oneEighties: 3,
+          checkoutPercentage: 50,
+          checkoutHits: 4,
+          checkoutAttempts: 8,
+        }],
+      },
+    }) } });
+
+    const result = await agent.run("Show Rob Cross's latest match statistics.");
+
+    expect(result.answer).toContain("Luke Littler");
+    expect(result.answer).toContain("Total 180s: 3");
+    expect(result.answer).toContain("Checkout: 50.00% (4/8)");
+    expect(result.answer).toContain("Coverage (average/180s/checkout): 1/1 · 1/1 · 1/1");
+    expect(client.requests[2]?.messages.at(-1)?.content).toContain("omitted or contradicted verified match statistics");
+  });
   it("requires fresh tool evidence for factual follow-up questions", async () => {
     const toolCall: OllamaChatResponse = { message: { role: "assistant", content: "", tool_calls: [
       { function: { name: "getPlayerMatches", arguments: { player: "Rob Cross", limit: 1 } } },

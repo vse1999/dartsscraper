@@ -15,7 +15,11 @@ export function formatPlayerStats(result: PlayerStatsResult): string {
   const rows = result.matches.flatMap((match: Match, index: number): readonly string[] => {
     const opponent = truncate(match.opponent, MAX_DISPLAY_NAME_LENGTH);
     const average = match.average === null ? "—" : match.average.toFixed(2);
-    const row = `${index + 1}. ${match.date} vs ${opponent}: ${average}`;
+    const oneEighties = match.oneEighties === null || match.oneEighties === undefined ? "—" : String(match.oneEighties);
+    const checkout = match.checkoutPercentage === null || match.checkoutPercentage === undefined
+      ? "—"
+      : `${match.checkoutPercentage.toFixed(2)}%`;
+    const row = `${index + 1}. ${match.date} vs ${opponent}: ${average} · 180s ${oneEighties} · checkout ${checkout}`;
     const evidenceUrl = result.evidenceUrls[index];
     return result.provider === "modus-official" && evidenceUrl !== undefined
       ? [row, `   Proof: ${truncate(evidenceUrl, MAX_SOURCE_URL_LENGTH)}`]
@@ -39,7 +43,10 @@ export function formatPlayerStats(result: PlayerStatsResult): string {
     "",
     `Mean match average: ${mean}`,
     `Best match average: ${summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2)}`,
+    `Total 180s: ${summary.totalOneEighties === null ? "—" : summary.totalOneEighties}`,
+    `Checkout: ${summary.checkoutPercentage === null ? "—" : `${summary.checkoutPercentage.toFixed(2)}% (${summary.checkoutHits}/${summary.checkoutAttempts})`}`,
     `Available averages: ${result.availableAverageCount}/${result.matches.length}`,
+    `Coverage (average/180s/checkout): ${result.availableAverageCount}/${result.matches.length} · ${summary.availableOneEightiesCount}/${result.matches.length} · ${summary.availableCheckoutCount}/${result.matches.length}`,
     `Source: ${truncate(result.sourceLabel, MAX_DISPLAY_NAME_LENGTH)} — ${truncate(result.sourceUrl, MAX_SOURCE_URL_LENGTH)}`,
   ].filter((line: string): boolean => line !== "").join("\n");
 

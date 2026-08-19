@@ -11,11 +11,25 @@ export const DartsOrakelMatchQuery = {
   tournaments: "tourns",
 } as const;
 
-// Values observed on the live player matches page when the table shows the
-// complete "Averages" view. Omitting organStat makes the API silently return
-// only a subset of competitions for some players.
+export const DartsOrakelMatchStatistic = {
+  average: "average",
+  oneEighties: "oneEighties",
+  checkoutPercentage: "checkoutPercentage",
+} as const;
+
+export type DartsOrakelMatchStatistic =
+  typeof DartsOrakelMatchStatistic[keyof typeof DartsOrakelMatchStatistic];
+
+export const DartsOrakelMatchRankKey: Readonly<Record<DartsOrakelMatchStatistic, string>> = {
+  average: "25",
+  oneEighties: "26",
+  checkoutPercentage: "1053",
+};
+
+// Values observed on the live player matches page. Omitting organStat makes
+// the API silently return only a subset of competitions for some players.
 export const DartsOrakelMatchDefaults = {
-  rankKey: "25",
+  rankKey: DartsOrakelMatchRankKey.average,
   organStat: "All",
   tournaments: "",
 } as const;
