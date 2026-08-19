@@ -210,13 +210,15 @@ describe("Telegram statistics service and formatting", () => {
 
   it("formats transparent missing-data and denominator evidence", () => {
     const message = formatPlayerStats(result());
-    expect(message).toContain("1. 2026-08-01 vs Luke Littler: 95.50");
-    expect(message).toContain("2. 2026-07-31 vs Michael van Gerwen: —");
-    expect(message).toContain("Mean match average: 95.50");
-    expect(message).toContain("Record: 2W–0L–0D");
-    expect(message).toContain("Best match average: 95.50");
-    expect(message).toContain("Available averages: 1/2");
-    expect(message).toContain("Source: DartsOrakel — https://dartsorakel.com/");
+    expect(message).toContain("🎯 Rob Cross\n2 latest completed matches\n📍 DartsOrakel");
+    expect(message).toContain("1. ✅ WIN vs Luke Littler (6–3)\n   1 Aug 2026  │  Avg 95.50");
+    expect(message).toContain("2. ✅ WIN vs Michael van Gerwen (6–3)\n   31 Jul 2026  │  Avg —");
+    expect(message).toContain("📊 SUMMARY");
+    expect(message).toContain("Form: 2W · 0L · 0D");
+    expect(message).toContain("Average: 95.50  │  Best: 95.50");
+    expect(message).toContain("Coverage: Avg 1/2 · 180s 0/2 · Checkout 0/2");
+    expect(message).toContain("ℹ️ Unavailable source values are shown as —.");
+    expect(message).toContain("🔗 Source: https://dartsorakel.com/player/details/1/rob-cross");
   });
 
   it("formats 180 totals and weighted checkout evidence", () => {
@@ -230,10 +232,10 @@ describe("Telegram statistics service and formatting", () => {
       availableAverageCount: 2,
     }));
 
-    expect(message).toContain("180s 2 · checkout 50.00%");
-    expect(message).toContain("Total 180s: 3");
-    expect(message).toContain("Checkout: 50.00% (5/10)");
-    expect(message).toContain("Coverage (average/180s/checkout): 2/2 · 2/2 · 2/2");
+    expect(message).toContain("Avg 95.50  │  180s 2  │  Checkout 50.00%");
+    expect(message).toContain("180s: 3 total");
+    expect(message).toContain("Checkout: 50.00% · 5/10 converted");
+    expect(message).toContain("Coverage: Avg 2/2 · 180s 2/2 · Checkout 2/2");
   });
 
   it("shows an official proof URL for every MODUS row", () => {
@@ -247,7 +249,8 @@ describe("Telegram statistics service and formatting", () => {
       ],
     }));
     expect(message.match(/Proof: https:\/\/modussuperseries\.com\/match-db-stats\.php\?match_id=/gu)).toHaveLength(2);
-    expect(message).toContain("Source: Official MODUS Super Series");
+    expect(message).toContain("📍 Official MODUS Super Series");
+    expect(message).toContain("1 Aug 2026  │  Average 95.50");
   });
 
   it("keeps a worst-case permitted response inside Telegram's limit", () => {
@@ -262,6 +265,27 @@ describe("Telegram statistics service and formatting", () => {
       sourceUrl: `https://example.com/${"s".repeat(500)}`,
     }));
     expect(message.length).toBeLessThanOrEqual(TELEGRAM_MAX_TEXT_LENGTH);
+  });
+
+  it("keeps a 20-row MODUS response with proof links inside Telegram's limit", () => {
+    const matches = Array.from({ length: 20 }, (_, index: number): Match =>
+      match(100 + index / 10, "x".repeat(500), `2026-07-${String(index + 1).padStart(2, "0")}`));
+    const message = formatPlayerStats(result({
+      playerName: "p".repeat(500),
+      requestedCount: 20,
+      matches,
+      meanAverage: 100.95,
+      availableAverageCount: 20,
+      provider: "modus-official",
+      sourceLabel: "Official MODUS Super Series",
+      sourceUrl: "https://modussuperseries.com/results.php",
+      evidenceUrls: Array.from(
+        { length: 20 },
+        (_, index: number): string => `https://modussuperseries.com/match-db-stats.php?match_id=${19_000 + index}`,
+      ),
+    }));
+    expect(message.length).toBeLessThanOrEqual(TELEGRAM_MAX_TEXT_LENGTH);
+    expect(message.match(/↗ Proof:/gu)).toHaveLength(20);
   });
 });
 
@@ -434,9 +458,9 @@ describe("Telegram request handler", () => {
     );
 
     expect(outcome).toBe("success");
-    expect(responder.edits[0]?.text).toContain("180s 2 · checkout 50.00%");
-    expect(responder.edits[0]?.text).toContain("Total 180s: 3");
-    expect(responder.edits[0]?.text).toContain("Checkout: 50.00% (5/10)");
+    expect(responder.edits[0]?.text).toContain("Avg 95.50  │  180s 2  │  Checkout 50.00%");
+    expect(responder.edits[0]?.text).toContain("180s: 3 total");
+    expect(responder.edits[0]?.text).toContain("Checkout: 50.00% · 5/10 converted");
   });
 
   it("falls back to a new message if Telegram cannot edit the status", async () => {
@@ -462,7 +486,7 @@ describe("Telegram request handler", () => {
 
     expect(outcome).toBe("success");
     expect(replies).toHaveLength(2);
-    expect(replies[1]).toContain("Mean match average: 95.50");
+    expect(replies[1]).toContain("Average: 95.50  │  Best: 95.50");
   });
 
   it("propagates complete Telegram delivery failure so the webhook can retry", async () => {

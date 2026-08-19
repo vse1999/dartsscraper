@@ -16,7 +16,7 @@ import { parseStatsQuery, statsQueryUsage } from "./query.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
-export const TELEGRAM_BOT_RELEASE = "dartsorakel-match-metrics-v3";
+export const TELEGRAM_BOT_RELEASE = "mobile-stats-ui-v4";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
