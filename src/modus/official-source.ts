@@ -38,11 +38,16 @@ export class OfficialModusSource implements ModusFixtureSource {
       if (!parsed.success) throw new DartsOrakelStructureChangedError("The official MODUS daily feed changed structure.", parsed.error);
       if (parsed.data.date !== date) return [];
       const names = parsed.data.summaries.flatMap((summary) => summary.sport_event.competitors?.map((competitor) => canonicalizeFixtureName(competitor.name)) ?? []).filter(isNamedPlayer);
-      return this.resolver === undefined ? names : Promise.all(names.map((name) => this.resolver?.resolve(name) ?? name));
+      if (this.resolver === undefined) return names;
+      return Promise.all(names.map((name) => isAbbreviatedName(name) ? this.resolver?.resolve(name) ?? name : name));
     } finally { clearTimeout(timeout); }
   }
 }
 
 function isNamedPlayer(name: string): boolean {
   return !/^(winner|runner[- ]?up|semi[- ]?final|tba|to be confirmed)\b/i.test(name);
+}
+
+function isAbbreviatedName(name: string): boolean {
+  return /^.+?\s+[\p{L}]\.$/u.test(name.trim());
 }

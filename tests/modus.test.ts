@@ -47,7 +47,19 @@ describe("MODUS discovery", () => {
     const payload = { date: "2026-08-10", summaries: [{ sport_event: { competitors: [{ name: "Branley, Ryan" }, { name: "Winner Group 1" }, { name: "Runner Up Group 2" }] } }] };
     const official = new OfficialModusSource({ fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }) });
     await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["Ryan Branley"]);
-  });  it("falls back, deduplicates, and caches a successful provider", async () => {
+  });
+  it("does not make official full names depend on the DartsOrakel directory", async () => {
+    const payload = { date: "2026-08-10", summaries: [{ sport_event: { competitors: [{ name: "Rob Cross" }, { name: "Littler, Luke" }] } }] };
+    const resolve = vi.fn(async (): Promise<string> => { throw new Error("directory unavailable"); });
+    const official = new OfficialModusSource({
+      resolver: { resolve },
+      fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }),
+    });
+
+    await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["Rob Cross", "Luke Littler"]);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  it("falls back, deduplicates, and caches a successful provider", async () => {
     const writes: { key: string; value: unknown; ttlMs: number }[] = [];
     const service = new ModusPlayersService({
       sources: [source("official", []), source("fallback", ["Jack Drayton", " jack   drayton ", "George Cressey"])],
