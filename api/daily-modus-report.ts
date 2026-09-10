@@ -18,6 +18,11 @@ import { runModusReport, type ModusReportResult } from "../src/daily/modus-repor
 import type { ModusReportDateExpression } from "../src/telegram/modus-command.js";
 
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
+// Jina Reader's public transport throttles burst traffic. A shared three-second
+// request cadence keeps the rich three-request player pipeline below that limit.
+const AUTOMATED_REQUEST_INTERVAL_MS = 3_000;
+const AUTOMATED_MAX_RETRIES = 2;
+const AUTOMATED_RETRY_BACKOFF_MS = 3_000;
 const CRON_AUTHORIZATION_PREFIX = "Bearer ";
 
 export const config = { maxDuration: 180 };
@@ -102,8 +107,9 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
   const botConfiguration = readBotConfiguration(process.env);
   const client = new DartsOrakelClient({
     timeoutMs: DARTSORAKEL_TIMEOUT_MS,
-    maxRetries: 0,
-    minRequestIntervalMs: 250,
+    maxRetries: AUTOMATED_MAX_RETRIES,
+    backoffMs: AUTOMATED_RETRY_BACKOFF_MS,
+    minRequestIntervalMs: AUTOMATED_REQUEST_INTERVAL_MS,
     logger,
     fetchImpl: createJinaReaderFetch(),
   });
