@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 
 import type { Bot, Context } from "grammy";
 import type { Update } from "grammy/types";
@@ -85,6 +86,59 @@ async function productionFetch(request: Request): Promise<Response> {
   });
 }
 
+interface VercelNodeRequest extends IncomingMessage {
+  readonly body?: unknown;
+}
+
+async function telegramWebhook(request: VercelNodeRequest, response: ServerResponse): Promise<void> {
+  const method = request.method ?? "GET";
+  const webRequest = new Request(requestUrl(request), {
+    method,
+    headers: webHeaders(request.headers),
+    ...(method === "GET" || method === "HEAD"
+      ? {}
+      : { body: await requestBody(request) }),
+  });
+  const webResponse = await productionFetch(webRequest);
+  response.statusCode = webResponse.status;
+  webResponse.headers.forEach((value: string, name: string): void => {
+    response.setHeader(name, value);
+  });
+  response.end(Buffer.from(await webResponse.arrayBuffer()));
+}
+
+function requestUrl(request: IncomingMessage): string {
+  const host = request.headers.host ?? "localhost";
+  return `https://${host}${request.url ?? "/"}`;
+}
+
+function webHeaders(headers: IncomingHttpHeaders): Headers {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === "string") result.set(name, value);
+    else if (Array.isArray(value)) {
+      for (const item of value) result.append(name, item);
+    }
+  }
+  return result;
+}
+
+async function requestBody(request: VercelNodeRequest): Promise<string> {
+  if (typeof request.body === "string") return request.body;
+  if (request.body instanceof Uint8Array) return Buffer.from(request.body).toString("utf8");
+  if (request.body !== undefined) return JSON.stringify(request.body);
+
+  const chunks: Buffer[] = [];
+  for await (const rawChunk of request as AsyncIterable<unknown>) {
+    if (typeof rawChunk === "string" || rawChunk instanceof Uint8Array) {
+      chunks.push(Buffer.from(rawChunk));
+      continue;
+    }
+    throw new Error("Webhook request contained an unsupported body chunk.");
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 async function processProductionUpdate(update: Update): Promise<void> {
   const bot = getProductionBot();
   await ensureBotInitialized(bot);
@@ -157,4 +211,4 @@ function temporarilyUnavailable(): Response {
   });
 }
 
-export default { fetch: productionFetch };
+export default telegramWebhook;
