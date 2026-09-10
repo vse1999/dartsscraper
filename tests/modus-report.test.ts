@@ -74,15 +74,27 @@ function options(names: readonly string[], harnessValue: Harness, overrides: { r
 }
 
 describe("automatic MODUS report", () => {
-  it("deduplicates fixture players and sends one formatted card per unique player", async () => {
+  it("deduplicates fixture players and sends one compact overview per unique player set", async () => {
     const value = harness(["Rob Cross", " rob   cross ", "Luke Littler"]);
     const result = await runModusReport(options(["Rob Cross", " rob   cross ", "Luke Littler"], value));
 
     expect(result.players).toEqual(["Rob Cross", "Luke Littler"]);
     expect(value.getPlayerStats).toHaveBeenCalledTimes(2);
-    expect(value.sendMessage).toHaveBeenCalledTimes(4);
-    expect(value.sendMessage.mock.calls.filter(([_, text]) => text.includes("🎯 Rob Cross"))).toHaveLength(1);
-    expect(value.sendMessage.mock.calls.filter(([_, text]) => text.includes("🎯 Luke Littler"))).toHaveLength(1);
+    expect(value.sendMessage).toHaveBeenCalledTimes(1);
+    const overview = value.sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(overview).toContain("🎯 MODUS TOMORROW · 11 Sep 2026");
+    expect(overview).toContain("2 scheduled players");
+    expect(overview).toContain("Form = last 10 completed DartsOrakel matches");
+    expect(overview).toContain("Rob Cross — 92.00 avg · 1W–0L · 1×180 · 50.00% checkout");
+    expect(overview).toContain("Luke Littler — 92.00 avg · 1W–0L · 1×180 · 50.00% checkout");
+    expect(overview.indexOf("Rob Cross")).toBeLessThan(overview.indexOf("Luke Littler"));
+    expect(overview).not.toContain("1. ✅ WIN vs Opponent");
+    expect(value.sendMessage.mock.calls[0]?.[2]?.replyMarkup?.inline_keyboard).toEqual([
+      [
+        { text: "Rob Cross", callback_data: "modus-player:0:10" },
+        { text: "Luke Littler", callback_data: "modus-player:1:10" },
+      ],
+    ]);
   });
 
   it("performs six stat lookups for six players", async () => {
@@ -106,23 +118,35 @@ describe("automatic MODUS report", () => {
 
     expect(result.results.map((item) => item.status)).toEqual(["succeeded", "failed", "succeeded"]);
     expect(value.getPlayerStats).toHaveBeenCalledTimes(3);
-    expect(summary).toContain("2/3 succeeded");
-    expect(summary).toContain("Failed: B");
+    expect(value.sendMessage).toHaveBeenCalledTimes(1);
+    expect(summary).toContain("Form available for 2/3 players");
+    expect(summary).toContain("1 player unavailable: B");
   });
 
-  it("continues after one Telegram player delivery failure", async () => {
+  it("marks the report undelivered when the compact overview cannot be sent", async () => {
     const value = harness(["A", "B", "C"]);
     value.sendMessage.mockImplementation(async (_chatId: number | string, text: string): Promise<void> => {
-      if (text.startsWith("🎯 B")) throw new Error("Telegram unavailable");
+      if (text.startsWith("🎯 MODUS")) throw new Error("Telegram unavailable");
     });
 
     const result = await runModusReport(options(["A", "B", "C"], value));
-    const summary = value.sendMessage.mock.calls.at(-1)?.[1] ?? "";
-
-    expect(result.results.map((item) => item.status)).toEqual(["succeeded", "failed", "succeeded"]);
+    expect(result.results.map((item) => item.status)).toEqual(["failed", "failed", "failed"]);
     expect(value.getPlayerStats).toHaveBeenCalledTimes(3);
-    expect(summary).toContain("2/3 succeeded");
-    expect(summary).toContain("Failed: B");
+    expect(value.sendMessage).toHaveBeenCalledTimes(1);
+    expect(result.results.every((item) => item.error === "TELEGRAM_SEND_FAILED")).toBe(true);
+  });
+
+  it("keeps overview rows in fixture order even when lookups finish out of order", async () => {
+    const value = harness(["Slow Player", "Fast Player"]);
+    value.getPlayerStats.mockImplementation(async (playerName: string, matchCount: number): Promise<PlayerStatsResult> => {
+      if (playerName === "Slow Player") await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      return stats(playerName, matchCount);
+    });
+
+    await runModusReport(options(["Slow Player", "Fast Player"], value, { concurrency: 2 }));
+
+    const overview = value.sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(overview.indexOf("Slow Player")).toBeLessThan(overview.indexOf("Fast Player"));
   });
 
   it("warns and does not fan out when no fixtures are available", async () => {

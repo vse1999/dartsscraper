@@ -133,6 +133,7 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
 
   return runModusReport({
     date: resolveResearchDate(dateExpression ?? "tomorrow", { timeZone: "Europe/Budapest" }).date,
+    dateLabel: dateExpression ?? "tomorrow",
     matchCount: 10,
     chatId: botConfiguration.allowedUserId,
     concurrency: 3,

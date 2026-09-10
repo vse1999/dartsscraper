@@ -1,5 +1,15 @@
+import type { InlineKeyboardMarkup } from "grammy/types";
+
 export interface TelegramMessageSender {
-  sendMessage(chatId: number | string, text: string): Promise<void>;
+  sendMessage(
+    chatId: number | string,
+    text: string,
+    options?: TelegramSendMessageOptions,
+  ): Promise<void>;
+}
+
+export interface TelegramSendMessageOptions {
+  readonly replyMarkup?: InlineKeyboardMarkup;
 }
 
 export interface TelegramSenderOptions {
@@ -20,7 +30,11 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
   const apiBaseUrl = (options.apiBaseUrl ?? "https://api.telegram.org").replace(/\/$/u, "");
 
   return {
-    async sendMessage(chatId: number | string, text: string): Promise<void> {
+    async sendMessage(
+      chatId: number | string,
+      text: string,
+      sendOptions?: TelegramSendMessageOptions,
+    ): Promise<void> {
       if (text.trim() === "") throw new Error("Telegram message must not be empty.");
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -28,7 +42,11 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
         const response = await fetchImpl(`${apiBaseUrl}/bot${token}/sendMessage`, {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ chat_id: chatId, text }),
+          body: JSON.stringify({
+            chat_id: chatId,
+            text,
+            ...(sendOptions?.replyMarkup === undefined ? {} : { reply_markup: sendOptions.replyMarkup }),
+          }),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`Telegram sendMessage failed with HTTP ${response.status}.`);

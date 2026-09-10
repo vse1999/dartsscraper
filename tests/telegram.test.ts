@@ -82,6 +82,24 @@ function result(overrides: Partial<PlayerStatsResult> = {}): PlayerStatsResult {
   };
 }
 
+function testBotInfo(): UserFromGetMe {
+  return {
+    id: 777,
+    is_bot: true,
+    first_name: "Test Bot",
+    username: "test_bot",
+    can_join_groups: false,
+    can_read_all_group_messages: false,
+    supports_inline_queries: false,
+    can_connect_to_business: false,
+    has_main_web_app: false,
+    has_topics_enabled: false,
+    allows_users_to_create_topics: false,
+    can_manage_bots: false,
+    supports_join_request_queries: false,
+  };
+}
+
 describe("Telegram owner authorization", () => {
   it("accepts only the configured owner in that owner's private chat", () => {
     expect(isOwnerPrivateChat(123, "private", 123)).toBe(true);
@@ -312,21 +330,7 @@ describe("Telegram request handler", () => {
         return result();
       },
     };
-    const botInfo: UserFromGetMe = {
-      id: 777,
-      is_bot: true,
-      first_name: "Test Bot",
-      username: "test_bot",
-      can_join_groups: false,
-      can_read_all_group_messages: false,
-      supports_inline_queries: false,
-      can_connect_to_business: false,
-      has_main_web_app: false,
-      has_topics_enabled: false,
-      allows_users_to_create_topics: false,
-      can_manage_bots: false,
-      supports_join_request_queries: false,
-    };
+    const botInfo = testBotInfo();
     const bot = createBot({
       token: "123456:abcdefghijklmnopqrstuvwxyz_123456",
       allowedUserId: 123,
@@ -363,6 +367,63 @@ describe("Telegram request handler", () => {
     await bot.handleUpdate(ownerUpdate);
     expect(apiMethods).toEqual(["sendMessage", "editMessageText"]);
     expect(serviceCalls).toBe(1);
+  });
+
+  it("opens detailed DartsOrakel statistics when an overview player button is clicked", async () => {
+    const apiMethods: string[] = [];
+    const apiFetch: typeof fetch = async (input: string | URL | Request): Promise<Response> => {
+      const method = new URL(String(input)).pathname.split("/").at(-1) ?? "unknown";
+      apiMethods.push(method);
+      return method === "answerCallbackQuery"
+        ? Response.json({ ok: true, result: true })
+        : Response.json({
+          ok: true,
+          result: {
+            message_id: apiMethods.length,
+            date: 0,
+            chat: { id: 123, type: "private" },
+            text: "test response",
+          },
+        });
+    };
+    const serviceCalls: Array<{ playerName: string; matchCount: number; source: string | undefined }> = [];
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (playerName, matchCount, source): Promise<PlayerStatsResult> => {
+        serviceCalls.push({ playerName, matchCount, source });
+        return result({ playerName, requestedCount: matchCount });
+      },
+    };
+    const bot = createBot({
+      token: "123456:abcdefghijklmnopqrstuvwxyz_123456",
+      allowedUserId: 123,
+      statsService: service,
+      logger: new MemoryLogger(),
+      apiFetch,
+      botInfo: testBotInfo(),
+    });
+    const callbackUpdate: Update = {
+      update_id: 3,
+      callback_query: {
+        id: "callback-1",
+        from: { id: 123, is_bot: false, first_name: "Owner" },
+        chat_instance: "test-chat",
+        data: "modus-player:0:10",
+        message: {
+          message_id: 10,
+          date: 0,
+          chat: { id: 123, type: "private", first_name: "Owner" },
+          text: "MODUS overview",
+          reply_markup: {
+            inline_keyboard: [[{ text: "Kevin Lane", callback_data: "modus-player:0:10" }]],
+          },
+        },
+      },
+    };
+
+    await bot.handleUpdate(callbackUpdate);
+
+    expect(serviceCalls).toEqual([{ playerName: "Kevin Lane", matchCount: 10, source: "dartsorakel" }]);
+    expect(apiMethods).toEqual(["answerCallbackQuery", "sendMessage", "editMessageText"]);
   });
 
   it("returns usage without calling the scraper for invalid input", async () => {

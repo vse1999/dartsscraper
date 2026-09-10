@@ -18,11 +18,15 @@ import {
   type ModusReportTrigger,
 } from "./modus-command.js";
 import { createHttpModusReportTrigger } from "./modus-trigger.js";
-import { parseStatsQuery, statsQueryUsage } from "./query.js";
+import {
+  MODUS_PLAYER_CALLBACK_PATTERN,
+  resolveModusPlayerCallback,
+} from "./modus-player-callback.js";
+import { parseStatsQuery, statsQueryUsage, type StatsQuery } from "./query.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
-export const TELEGRAM_BOT_RELEASE = "mobile-stats-ui-v4";
+export const TELEGRAM_BOT_RELEASE = "modus-dashboard-v5";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
@@ -120,6 +124,35 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     );
   });
 
+  bot.callbackQuery(MODUS_PLAYER_CALLBACK_PATTERN, async (ctx): Promise<void> => {
+    const message = ctx.callbackQuery.message;
+    const replyMarkup = message !== undefined && "reply_markup" in message
+      ? message.reply_markup
+      : undefined;
+    const query = resolveModusPlayerCallback(ctx.callbackQuery.data, replyMarkup);
+    if (query === null) {
+      await ctx.answerCallbackQuery({
+        text: "This player button is no longer valid. Run /modus again.",
+        show_alert: true,
+      });
+      return;
+    }
+
+    await ctx.answerCallbackQuery({ text: `Loading ${query.playerName}…` });
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    const responder: StatsMessageResponder = {
+      reply: async (text: string): Promise<{ readonly messageId: number }> => {
+        const sent = await ctx.reply(text);
+        return { messageId: sent.message_id };
+      },
+      edit: async (messageId: number, text: string): Promise<void> => {
+        await ctx.api.editMessageText(chatId, messageId, text);
+      },
+    };
+    await handleStatsQuery(query, options.statsService, responder, logger, ctx.update.update_id);
+  });
+
   bot.on("message:text", async (ctx: Context): Promise<void> => {
     const text = ctx.message?.text;
     const chatId = ctx.chat?.id;
@@ -192,6 +225,16 @@ export async function handleStatsText(
     return "invalid-query";
   }
 
+  return handleStatsQuery(query, statsService, responder, logger, updateId);
+}
+
+async function handleStatsQuery(
+  query: StatsQuery,
+  statsService: PlayerStatsReader,
+  responder: StatsMessageResponder,
+  logger: Logger,
+  updateId: number,
+): Promise<Exclude<StatsHandlerOutcome, "invalid-query">> {
   const startedAt = Date.now();
   const status = await responder.reply(STATUS_MESSAGE);
   let outcome: Exclude<StatsHandlerOutcome, "invalid-query">;

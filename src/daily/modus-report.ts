@@ -10,7 +10,11 @@ import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import type { ModusPlayersService } from "../modus/service.js";
 import { IsoDateSchema } from "../agent/date.js";
-import { formatPlayerStats } from "../telegram/formatter.js";
+import {
+  formatModusOverviewMessages,
+  type ModusOverviewPlayer,
+} from "../telegram/modus-overview-formatter.js";
+import { createModusPlayerKeyboard } from "../telegram/modus-player-callback.js";
 import type { PlayerStatsReader, PlayerStatsResult } from "../telegram/stats-service.js";
 import type { TelegramMessageSender } from "../telegram/sender.js";
 
@@ -31,6 +35,7 @@ export interface ModusReportDependencies {
 
 export interface RunModusReportOptions {
   readonly date: string;
+  readonly dateLabel?: "today" | "tomorrow";
   readonly matchCount: number;
   readonly chatId: number | string;
   readonly concurrency?: number;
@@ -75,9 +80,15 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
     });
   }
 
-  await trySend(options.dependencies.telegram, options.chatId, headerMessage(date, players.length), logger, date, "TELEGRAM_HEADER_SEND_FAILED");
-
   if (!discoverySucceeded || players.length === 0) {
+    await trySend(
+      options.dependencies.telegram,
+      options.chatId,
+      headerMessage(date, players.length, options.dateLabel ?? "tomorrow"),
+      logger,
+      date,
+      "TELEGRAM_HEADER_SEND_FAILED",
+    );
     await trySend(
       options.dependencies.telegram,
       options.chatId,
@@ -100,7 +111,7 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
     return { date, players, results, discoverySucceeded };
   }
 
-  const results = await mapWithConcurrency(players, concurrency, async (player: string): Promise<ModusReportPlayerResult> => {
+  const lookupResults = await mapWithConcurrency(players, concurrency, async (player: string): Promise<ModusOverviewPlayer> => {
     const playerStartedAt = Date.now();
     let lookupDurationMs = 0;
     let stats: PlayerStatsResult;
@@ -119,45 +130,36 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
       return { player, status: "failed", error: failureCode };
     }
 
-    let message: string;
-    try {
-      message = formatPlayerStats(stats);
-    } catch (error: unknown) {
-      const failureCode = errorCode(error, "TELEGRAM_FORMAT_FAILED");
-      logger.warn("MODUS daily report player formatting failed.", {
-        targetDate: date,
-        player,
-        lookupDurationMs,
-        success: false,
-        failureCode,
-      });
-      return { player, status: "failed", error: failureCode };
-    }
-
-    try {
-      await options.dependencies.telegram.sendMessage(options.chatId, message);
-    } catch (error: unknown) {
-      const failureCode = errorCode(error, "TELEGRAM_SEND_FAILED");
-      logger.warn("MODUS daily report player delivery failed.", {
-        targetDate: date,
-        player,
-        lookupDurationMs,
-        success: false,
-        failureCode,
-      });
-      return { player, status: "failed", error: failureCode };
-    }
-
     logger.info("MODUS daily report player completed.", {
       targetDate: date,
       player,
       lookupDurationMs,
       success: true,
     });
-    return { player, status: "succeeded" };
+    return { player, status: "succeeded", stats };
   });
 
-  await trySend(options.dependencies.telegram, options.chatId, summaryMessage(results), logger, date, "TELEGRAM_SUMMARY_SEND_FAILED");
+  const overviewMessages = formatModusOverviewMessages({
+    date,
+    dateLabel: options.dateLabel ?? "tomorrow",
+    matchCount: options.matchCount,
+    players,
+    results: lookupResults,
+  });
+  const playerKeyboard = createModusPlayerKeyboard(players, options.matchCount);
+  const overviewDelivered = await sendOverviewMessages(
+    options.dependencies.telegram,
+    options.chatId,
+    overviewMessages,
+    playerKeyboard,
+    logger,
+    date,
+  );
+  const results = overviewDelivered
+    ? lookupResults.map(toReportResult)
+    : lookupResults.map((result): ModusReportPlayerResult => result.status === "failed"
+      ? toReportResult(result)
+      : { player: result.player, status: "failed", error: "TELEGRAM_SEND_FAILED" });
   logger.info("MODUS daily report completed.", {
     targetDate: date,
     playersDiscovered: players.length,
@@ -204,8 +206,8 @@ function uniquePlayerNames(names: readonly string[]): readonly string[] {
   return unique;
 }
 
-function headerMessage(date: string, playerCount: number): string {
-  return `🎯 MODUS tomorrow — ${date}\nPlayers found: ${playerCount}`;
+function headerMessage(date: string, playerCount: number, dateLabel: "today" | "tomorrow"): string {
+  return `🎯 MODUS ${dateLabel.toUpperCase()} — ${date}\nPlayers found: ${playerCount}`;
 }
 
 function summaryMessage(results: readonly ModusReportPlayerResult[], discoveryFailure?: string): string {
@@ -238,6 +240,37 @@ async function trySend(
     });
     return false;
   }
+}
+
+async function sendOverviewMessages(
+  telegram: TelegramMessageSender,
+  chatId: number | string,
+  messages: readonly string[],
+  replyMarkup: ReturnType<typeof createModusPlayerKeyboard>,
+  logger: Logger,
+  date: string,
+): Promise<boolean> {
+  try {
+    for (const [index, message] of messages.entries()) {
+      if (index === messages.length - 1) await telegram.sendMessage(chatId, message, { replyMarkup });
+      else await telegram.sendMessage(chatId, message);
+    }
+    return true;
+  } catch {
+    logger.error("MODUS daily report overview delivery failed.", {
+      targetDate: date,
+      success: false,
+      failureCode: "TELEGRAM_OVERVIEW_SEND_FAILED",
+    });
+    return false;
+  }
+}
+
+function toReportResult(result: ModusOverviewPlayer): ModusReportPlayerResult {
+  if (result.status === "succeeded") return { player: result.player, status: result.status };
+  return result.error === undefined
+    ? { player: result.player, status: result.status }
+    : { player: result.player, status: result.status, error: result.error };
 }
 
 function errorCode(error: unknown, fallback = "PLAYER_STATS_FAILED"): string {
