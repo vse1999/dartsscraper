@@ -10,6 +10,8 @@ export interface ModusCommandResponder {
   reply(text: string): Promise<void>;
 }
 
+export type BackgroundTaskScheduler = (task: Promise<void>) => void;
+
 export type ModusCommandOutcome = "invalid" | "unavailable" | "started" | "failed";
 
 export function parseModusReportCommand(text: string): ModusReportDateExpression | null {
@@ -24,6 +26,7 @@ export async function handleModusReportCommand(
   trigger: ModusReportTrigger | undefined,
   responder: ModusCommandResponder,
   logger: Logger,
+  scheduleBackgroundTask?: BackgroundTaskScheduler,
 ): Promise<ModusCommandOutcome> {
   const date = parseModusReportCommand(text);
   if (date === null) {
@@ -36,6 +39,20 @@ export async function handleModusReportCommand(
   }
 
   await responder.reply(`🎯 Starting MODUS ${date} report…`);
+  const task = runTrigger(date, trigger, responder, logger);
+  if (scheduleBackgroundTask !== undefined) {
+    scheduleBackgroundTask(task.then((): void => undefined));
+    return "started";
+  }
+  return task;
+}
+
+async function runTrigger(
+  date: ModusReportDateExpression,
+  trigger: ModusReportTrigger,
+  responder: ModusCommandResponder,
+  logger: Logger,
+): Promise<Exclude<ModusCommandOutcome, "invalid" | "unavailable">> {
   try {
     await trigger.start(date);
     return "started";
@@ -45,7 +62,14 @@ export async function handleModusReportCommand(
       failureCode: "MODUS_REPORT_TRIGGER_FAILED",
       errorType: error instanceof Error ? error.name : "UnknownError",
     });
-    await responder.reply("The MODUS report could not be started. Please try again later.");
+    try {
+      await responder.reply("The MODUS report could not be completed. Please try again later.");
+    } catch {
+      logger.error("Manual MODUS report failure message could not be delivered.", {
+        requestedDate: date,
+        failureCode: "MODUS_REPORT_TRIGGER_FAILURE_SEND_FAILED",
+      });
+    }
     return "failed";
   }
 }

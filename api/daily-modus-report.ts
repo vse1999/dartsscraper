@@ -20,7 +20,7 @@ import type { ModusReportDateExpression } from "../src/telegram/modus-command.js
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
 const CRON_AUTHORIZATION_PREFIX = "Bearer ";
 
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 180 };
 
 export interface DailyReportEnvironment {
   readonly BOT_TOKEN?: string;

@@ -12,7 +12,11 @@ import {
 import { ConsoleLogger, type Logger } from "../logger.js";
 import { isOwnerPrivateChat, parseAllowedUserId } from "./authorization.js";
 import { formatPlayerStats } from "./formatter.js";
-import { handleModusReportCommand, type ModusReportTrigger } from "./modus-command.js";
+import {
+  handleModusReportCommand,
+  type BackgroundTaskScheduler,
+  type ModusReportTrigger,
+} from "./modus-command.js";
 import { createHttpModusReportTrigger } from "./modus-trigger.js";
 import { parseStatsQuery, statsQueryUsage } from "./query.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
@@ -36,6 +40,7 @@ export interface CreateBotOptions {
   readonly apiFetch?: typeof fetch;
   readonly botInfo?: UserFromGetMe;
   readonly modusReportTrigger?: ModusReportTrigger;
+  readonly scheduleBackgroundTask?: BackgroundTaskScheduler;
 }
 
 export interface StatsMessageResponder {
@@ -111,6 +116,7 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
       options.modusReportTrigger,
       { reply: async (text: string): Promise<void> => { await ctx.reply(text); } },
       logger,
+      options.scheduleBackgroundTask,
     );
   });
 
@@ -137,6 +143,7 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
 export function createConfiguredBot(
   environment: BotEnvironment = process.env,
   logger: Logger = new ConsoleLogger({ minimumLevel: "info" }),
+  scheduleBackgroundTask?: BackgroundTaskScheduler,
 ): Bot<Context> {
   const configuration = readBotConfiguration(environment);
   const modusReportTrigger = createConfiguredModusReportTrigger(environment);
@@ -146,6 +153,7 @@ export function createConfiguredBot(
     ...(modusReportTrigger === undefined
       ? {}
       : { modusReportTrigger }),
+    ...(scheduleBackgroundTask === undefined ? {} : { scheduleBackgroundTask }),
     logger,
   });
 }

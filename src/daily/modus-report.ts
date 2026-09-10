@@ -51,6 +51,11 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
   validatePositiveInteger(concurrency, "concurrency");
   const logger = options.dependencies.logger ?? noopLogger;
   const startedAt = Date.now();
+  logger.info("MODUS daily report started.", {
+    targetDate: date,
+    matchCount: options.matchCount,
+    concurrency,
+  });
 
   let players: readonly string[] = [];
   let discoverySucceeded = true;

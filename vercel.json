@@ -2,10 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/telegram-webhook.ts": {
-      "maxDuration": 60
+      "maxDuration": 180
     },
     "api/daily-modus-report.ts": {
-      "maxDuration": 60
+      "maxDuration": 180
     }
   },
   "crons": [

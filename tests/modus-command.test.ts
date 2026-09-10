@@ -46,7 +46,28 @@ describe("manual MODUS Telegram command", () => {
 
     expect(outcome).toBe("failed");
     expect(replies).toHaveLength(2);
-    expect(replies[1]).toContain("could not be started");
+    expect(replies[1]).toContain("could not be completed");
+  });
+
+  it("returns immediately while a scheduled report continues in the background", async () => {
+    let finishTrigger: (() => void) | undefined;
+    const triggerFinished = new Promise<void>((resolve: () => void): void => { finishTrigger = resolve; });
+    const scheduled: Promise<void>[] = [];
+    const replies: string[] = [];
+
+    const outcome = await handleModusReportCommand(
+      "/modus today",
+      { start: async (): Promise<void> => triggerFinished },
+      { reply: async (text: string): Promise<void> => { replies.push(text); } },
+      logger,
+      (task: Promise<void>): void => { scheduled.push(task); },
+    );
+
+    expect(outcome).toBe("started");
+    expect(replies).toEqual(["🎯 Starting MODUS today report…"]);
+    expect(scheduled).toHaveLength(1);
+    finishTrigger?.();
+    await scheduled[0];
   });
 
   it("uses the authenticated endpoint and forwards the selected date", async () => {
@@ -64,5 +85,21 @@ describe("manual MODUS Telegram command", () => {
     expect(String(request)).toBe("https://example.test/api/daily-modus-report?date=tomorrow");
     expect(init?.method).toBe("GET");
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${"s".repeat(32)}`);
+  });
+
+  it("bounds a stalled report endpoint request", async () => {
+    const apiFetch: typeof fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      return new Promise<Response>((_resolve, reject): void => {
+        init?.signal?.addEventListener("abort", (): void => reject(new Error("aborted")), { once: true });
+      });
+    };
+    const trigger = createHttpModusReportTrigger({
+      endpointUrl: "https://example.test/api/daily-modus-report",
+      cronSecret: "s".repeat(32),
+      apiFetch,
+      timeoutMs: 5,
+    });
+
+    await expect(trigger.start("today")).rejects.toThrow("timed out after 5ms");
   });
 });

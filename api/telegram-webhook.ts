@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import type { Bot, Context } from "grammy";
 import type { Update } from "grammy/types";
+import { waitUntil } from "@vercel/functions";
 
 import { ConsoleLogger, type Logger } from "../src/logger.js";
 import { createConfiguredBot } from "../src/telegram/bot.js";
@@ -9,7 +10,7 @@ import { createConfiguredBot } from "../src/telegram/bot.js";
 const TELEGRAM_SECRET_HEADER = "x-telegram-bot-api-secret-token";
 const MAX_UPDATE_BYTES = 64 * 1_024;
 
-export const config = { maxDuration: 60 };
+export const config = { maxDuration: 180 };
 
 export interface WebhookEnvironment {
   readonly WEBHOOK_SECRET?: string;
@@ -91,7 +92,7 @@ async function processProductionUpdate(update: Update): Promise<void> {
 }
 
 function getProductionBot(): Bot<Context> {
-  productionBot ??= createConfiguredBot(process.env, productionLogger);
+  productionBot ??= createConfiguredBot(process.env, productionLogger, waitUntil);
   return productionBot;
 }
 
