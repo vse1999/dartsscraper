@@ -27,6 +27,11 @@ describe("MODUS discovery", () => {
     await expect(resolver.resolve("van Peer B.")).resolves.toBe("Berry van Peer");
     await expect(resolver.resolve("Drayton J.")).resolves.toBe("Jack Drayton");
   });
+  it("resolves fixture punctuation and the provider's jnr suffix without guessing", async () => {
+    const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["John O Shea", "Ram Guevara jnr"]) });
+    await expect(resolver.resolve("O'Shea J.")).resolves.toBe("John O Shea");
+    await expect(resolver.resolve("Guevara R.")).resolves.toBe("Ram Guevara jnr");
+  });
   it("does not silently choose an ambiguous abbreviation", async () => {
     const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["John Smith", "Jack Smith"]) });
     await expect(resolver.resolve("Smith J.")).rejects.toBeInstanceOf(PlayerAmbiguousError);

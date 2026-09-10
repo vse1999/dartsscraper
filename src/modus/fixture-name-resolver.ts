@@ -15,11 +15,14 @@ export class FixtureNameResolver {
     if (exact.length === 1) return exact[0]?.player_name ?? name;
     const abbreviated = /^(.+?)\s+([\p{L}])\.$/u.exec(canonicalName.trim());
     if (abbreviated === null) throw new PlayerNotFoundError(name);
-    const surname = normalizePlayerName(abbreviated[1] ?? "");
+    const surname = comparableNamePart(abbreviated[1] ?? "");
     const initial = normalizePlayerName(abbreviated[2] ?? "");
     const candidates = response.data.filter((row) => {
-      const parts = normalizePlayerName(row.player_name).split(" ");
-      return (parts[0] ?? "").startsWith(initial) && parts.slice(1).join(" ") === surname;
+      const parts = comparableNameParts(row.player_name);
+      const firstName = parts[0] ?? "";
+      const surnameParts = parts.slice(1);
+      if (surnameParts.at(-1) === "jnr") surnameParts.pop();
+      return firstName.startsWith(initial) && surnameParts.join("") === surname;
     });
     if (candidates.length === 0) throw new PlayerNotFoundError(name);
     if (candidates.length > 1) throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.player_name));
@@ -35,6 +38,18 @@ export class FixtureNameResolver {
     this.directoryPromise = request;
     return request;
   }
+}
+
+function comparableNamePart(value: string): string {
+  return comparableNameParts(value).join("");
+}
+
+function comparableNameParts(value: string): string[] {
+  return normalizePlayerName(value)
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((part) => part !== "");
 }
 
 export function canonicalizeFixtureName(name: string): string {
