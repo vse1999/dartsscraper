@@ -78,7 +78,13 @@ export class PlayerResolver {
 }
 
 export function normalizePlayerName(name: string): string {
-  return name.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+  return name
+    .replace(/['\u00b4\u2018\u2019\u02bc]+/gu, " ")
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\bjr\.?$/iu, "jnr")
+    .toLocaleLowerCase("en-US");
 }
 
 function searchable(value: string): string {

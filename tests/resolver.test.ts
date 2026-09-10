@@ -30,6 +30,23 @@ describe("player resolver", () => {
     expect(normalizePlayerName("  Karel\u00a0Sedláček ")).toBe("karel sedláček");
   });
 
+  it("normalizes official MODUS apostrophes and junior suffixes", async () => {
+    const response = readPlayerStatsFixture();
+    const base = response.data[0];
+    if (base === undefined) throw new Error("Fixture must contain a player.");
+    const directory: PlayerStatsResponse = {
+      ...response,
+      data: [
+        { ...base, player_key: 1001, player_name: "John O Shea", player_profile_url: "https://dartsorakel.com/player/details/1001/john-o-shea" },
+        { ...base, player_key: 1002, player_name: "Ram Guevara jnr", player_profile_url: "https://dartsorakel.com/player/details/1002/ram-guevara-jnr" },
+      ],
+    };
+    const resolver = resolverFor(directory);
+
+    await expect(resolver.resolvePlayer("John O´Shea")).resolves.toMatchObject({ name: "John O Shea" });
+    await expect(resolver.resolvePlayer("Ram Guevara Jr")).resolves.toMatchObject({ name: "Ram Guevara jnr" });
+  });
+
   it("rejects an unknown player", async () => {
     await expect(resolverFor(readPlayerStatsFixture()).resolvePlayer("Unknown Player")).rejects.toThrow(PlayerNotFoundError);
   });
