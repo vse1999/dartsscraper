@@ -46,6 +46,12 @@ export function resolveResearchDate(
   throw new Error(`Unable to resolve date expression ${JSON.stringify(expression)}. Use an ISO date, today/tomorrow, ma/holnap, or a weekday.`);
 }
 
+export function resolveTomorrowDate(
+  options: { now?: Date; timeZone?: string } = {},
+): string {
+  return resolveResearchDate("tomorrow", options).date;
+}
+
 function normalizeExpression(value: string): string {
   return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("en-US");
 }

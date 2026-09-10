@@ -12,6 +12,8 @@ import {
 import { ConsoleLogger, type Logger } from "../logger.js";
 import { isOwnerPrivateChat, parseAllowedUserId } from "./authorization.js";
 import { formatPlayerStats } from "./formatter.js";
+import { handleModusReportCommand, type ModusReportTrigger } from "./modus-command.js";
+import { createHttpModusReportTrigger } from "./modus-trigger.js";
 import { parseStatsQuery, statsQueryUsage } from "./query.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 
@@ -21,6 +23,9 @@ export const TELEGRAM_BOT_RELEASE = "mobile-stats-ui-v4";
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
   readonly ALLOWED_USER_ID?: string;
+  readonly CRON_SECRET?: string;
+  readonly MODUS_REPORT_URL?: string;
+  readonly VERCEL_URL?: string;
 }
 
 export interface CreateBotOptions {
@@ -30,6 +35,7 @@ export interface CreateBotOptions {
   readonly logger?: Logger;
   readonly apiFetch?: typeof fetch;
   readonly botInfo?: UserFromGetMe;
+  readonly modusReportTrigger?: ModusReportTrigger;
 }
 
 export interface StatsMessageResponder {
@@ -99,6 +105,15 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     await ctx.reply(`Bot online. Telegram delivery is working.\nRelease: ${TELEGRAM_BOT_RELEASE}`);
   });
 
+  bot.command("modus", async (ctx: Context): Promise<void> => {
+    await handleModusReportCommand(
+      ctx.message?.text ?? "",
+      options.modusReportTrigger,
+      { reply: async (text: string): Promise<void> => { await ctx.reply(text); } },
+      logger,
+    );
+  });
+
   bot.on("message:text", async (ctx: Context): Promise<void> => {
     const text = ctx.message?.text;
     const chatId = ctx.chat?.id;
@@ -124,11 +139,23 @@ export function createConfiguredBot(
   logger: Logger = new ConsoleLogger({ minimumLevel: "info" }),
 ): Bot<Context> {
   const configuration = readBotConfiguration(environment);
+  const modusReportTrigger = createConfiguredModusReportTrigger(environment);
   return createBot({
     ...configuration,
     statsService: createDefaultPlayerStatsService(logger),
+    ...(modusReportTrigger === undefined
+      ? {}
+      : { modusReportTrigger }),
     logger,
   });
+}
+
+function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusReportTrigger | undefined {
+  const cronSecret = environment.CRON_SECRET?.trim();
+  const endpointUrl = environment.MODUS_REPORT_URL?.trim()
+    ?? (environment.VERCEL_URL === undefined ? undefined : `https://${environment.VERCEL_URL}/api/daily-modus-report`);
+  if (cronSecret === undefined || cronSecret === "" || endpointUrl === undefined || endpointUrl === "") return undefined;
+  return createHttpModusReportTrigger({ endpointUrl, cronSecret });
 }
 
 export async function handleStatsText(
@@ -207,7 +234,7 @@ export async function handleStatsText(
 }
 
 function botHelpText(): string {
-  return `${statsQueryUsage()}\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
+  return `${statsQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
 function publicFailure(error: unknown): {

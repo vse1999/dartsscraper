@@ -1,4 +1,5 @@
 import { InsufficientMatchDataError } from "../errors.js";
+import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import type { DartsOrakelScraper } from "../dartsorakel/scraper.js";
@@ -17,6 +18,7 @@ export interface PlayerMatchesServiceDependencies {
   maxStaleMs?: number;
   logger?: Logger;
   now?: () => Date;
+  timeZone?: string;
   maxStoreEntries?: number;
 }
 
@@ -27,6 +29,7 @@ export class PlayerMatchesService {
   private readonly maxStaleMs: number;
   private readonly logger: Logger;
   private readonly now: () => Date;
+  private readonly timeZone: string;
   private readonly maxStoreEntries: number;
   private readonly stores = new Map<string, SnapshotStore<MatchResult>>();
 
@@ -37,6 +40,7 @@ export class PlayerMatchesService {
     this.maxStaleMs = positiveFinite(dependencies.maxStaleMs ?? DEFAULT_MAX_STALE_MS, "maxStaleMs");
     this.logger = dependencies.logger ?? noopLogger;
     this.now = dependencies.now ?? (() => new Date());
+    this.timeZone = dependencies.timeZone ?? "Europe/Budapest";
     this.maxStoreEntries = positiveInteger(dependencies.maxStoreEntries ?? DEFAULT_MAX_STORE_ENTRIES, "maxStoreEntries");
   }
 
@@ -46,7 +50,7 @@ export class PlayerMatchesService {
 
   public async getLastMatchesSnapshot(playerName: string, limit: number, signal?: AbortSignal): Promise<SnapshotRead<MatchResult>> {
     validateLimit(limit);
-    const dateTo = addDays(this.now().toISOString().slice(0, 10), 1);
+    const dateTo = addDays(localIsoDate(this.now(), this.timeZone), 1);
     const key = `${normalizePlayerName(playerName)}:${limit}:${dateTo}`;
     let store = this.stores.get(key);
     if (store === undefined) {
@@ -117,4 +121,15 @@ function addDays(isoDate: string, days: number): string {
   if (Number.isNaN(date.getTime())) throw new Error("The configured player-cache clock returned an invalid date.");
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function localIsoDate(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? "";
+  return IsoDateSchema.parse(`${value("year")}-${value("month")}-${value("day")}`);
 }

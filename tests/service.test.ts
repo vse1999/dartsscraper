@@ -55,4 +55,21 @@ describe("player match service", () => {
       "2026-08-12",
     );
   });
+
+  it("uses the Budapest calendar date for the completed-match cutoff", async () => {
+    const getPlayerMatches = vi.fn(async () => matches);
+    const service = new PlayerMatchesService({
+      resolver: { resolvePlayer: async () => ({ id: 1, name: "Example", slug: "example" }) },
+      scraper: { getPlayerMatches },
+      now: () => new Date("2026-09-10T22:30:00Z"),
+    });
+
+    await service.getLastMatches("Example", 2);
+
+    expect(getPlayerMatches).toHaveBeenCalledWith(
+      { id: 1, name: "Example", slug: "example" },
+      2,
+      "2026-09-12",
+    );
+  });
 });

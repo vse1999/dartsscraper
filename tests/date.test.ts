@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveResearchDate } from "../src/agent/date.js";
+import { resolveResearchDate, resolveTomorrowDate } from "../src/agent/date.js";
 
 describe("research date resolution", () => {
   const now = new Date("2026-08-08T12:00:00Z");
@@ -11,6 +11,9 @@ describe("research date resolution", () => {
   it("resolves English and Hungarian tomorrow", () => {
     expect(resolveResearchDate("tomorrow", { now }).date).toBe("2026-08-09");
     expect(resolveResearchDate("holnap", { now }).date).toBe("2026-08-09");
+  });
+  it("resolves tomorrow from the Budapest calendar date at a UTC boundary", () => {
+    expect(resolveTomorrowDate({ now: new Date("2026-09-10T22:30:00Z"), timeZone: "Europe/Budapest" })).toBe("2026-09-12");
   });
   it("resolves Monday and hétfői to the next occurrence", () => {
     expect(resolveResearchDate("Monday", { now }).date).toBe("2026-08-10");

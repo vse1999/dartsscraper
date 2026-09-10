@@ -3,6 +3,15 @@
   "functions": {
     "api/telegram-webhook.ts": {
       "maxDuration": 60
+    },
+    "api/daily-modus-report.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/daily-modus-report",
+      "schedule": "0 17 * * *"
+    }
+  ]
 }

@@ -17,6 +17,16 @@ export { DartsOrakelScraper } from "./dartsorakel/scraper.js";
 export type { RecentPlayerMatchesOptions } from "./dartsorakel/scraper.js";
 export { PlayerResolver, normalizePlayerName } from "./player/resolver.js";
 export { PlayerMatchesService } from "./services/player-matches.js";
+export { mapWithConcurrency, runModusReport } from "./daily/modus-report.js";
+export type {
+  ModusReportDependencies,
+  ModusReportPlayerResult,
+  ModusReportPlayerStatus,
+  ModusReportResult,
+  RunModusReportOptions,
+} from "./daily/modus-report.js";
+export { createTelegramSender } from "./telegram/sender.js";
+export type { TelegramMessageSender, TelegramSenderOptions } from "./telegram/sender.js";
 export * from "./errors.js";
 
 export interface DefaultServiceOptions {
@@ -56,7 +66,7 @@ function createResolver(options: DefaultServiceOptions): PlayerResolver {
   const client = options.client ?? new DartsOrakelClient(options.clientOptions);
   return new PlayerResolver(client);
 }
-export { resolveResearchDate, IsoDateSchema } from "./agent/date.js";
+export { resolveResearchDate, resolveTomorrowDate, IsoDateSchema } from "./agent/date.js";
 export { createDartsResearchAgent, createDartsResearchRuntime } from "./agent/factory.js";
 export type { CreateAgentOptions, DartsResearchRuntime } from "./agent/factory.js";
 export { DartsResearchAgent } from "./agent/harness.js";

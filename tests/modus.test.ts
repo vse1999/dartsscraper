@@ -31,6 +31,12 @@ describe("MODUS discovery", () => {
     const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["John Smith", "Jack Smith"]) });
     await expect(resolver.resolve("Smith J.")).rejects.toBeInstanceOf(PlayerAmbiguousError);
   });
+  it("single-flights and caches the player directory within a resolver", async () => {
+    const getPlayerStats = vi.fn(async () => playerStats(["Jack Drayton", "George Cressey"]));
+    const resolver = new FixtureNameResolver({ getPlayerStats });
+    await Promise.all([resolver.resolve("Drayton J."), resolver.resolve("Cressey G."), resolver.resolve("Drayton J.")]);
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+  });
   it("parses the official daily feed and ignores a different date", async () => {
     const payload = { date: "2026-08-10", summaries: [{ sport_event: { competitors: [{ name: "One Player" }, { name: "Two Player" }] } }] };
     const official = new OfficialModusSource({ fetchImpl: vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(payload), { status: 200 })) });

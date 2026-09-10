@@ -9,12 +9,20 @@ The bot is an owner-only, free-tier webhook around deterministic official MODUS 
 Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOrakel. The bot therefore retrieves only the public DartsOrakel JSON through Jina Reader's free public-URL service; no Telegram identity, token, or message metadata is sent to Jina.
 
 1. Use Node.js 24 and run `npm install`.
-2. Copy the three Telegram settings from [`.env.example`](./.env.example) to `.env.local`. Generate `WEBHOOK_SECRET` yourself; it is not supplied by Telegram.
+2. Copy the Telegram and cron settings from [`.env.example`](./.env.example) to `.env.local`. Generate `WEBHOOK_SECRET` and `CRON_SECRET` yourself; they are not supplied by Telegram.
 3. Run `npm run build`, `npm test`, and `npm run audit:prod`.
-4. Create a Vercel Hobby project from this directory and add `BOT_TOKEN`, `ALLOWED_USER_ID`, and `WEBHOOK_SECRET` as encrypted project environment variables.
+4. Create a Vercel Hobby project from this directory and add `BOT_TOKEN`, `ALLOWED_USER_ID`, `WEBHOOK_SECRET`, and `CRON_SECRET` as encrypted project environment variables.
 5. Deploy, then register `https://<deployment-domain>/api/telegram-webhook` with Telegram's `setWebhook`, passing the same value as `secret_token`.
 
-Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayton last 10 matches from MODUS`, or `Rob Cross last 10 matches from DartsOrakel`. “Average,” “stats,” and plural “matches” are optional. Unqualified requests use DartsOrakel so the response includes each match's average, 180 count, and checkout percentage, plus mean/best average, total 180s, weighted checkout conversion with hit/attempt evidence, metric coverage, and the win/loss/draw record. Use an explicit `from MODUS` request only when official MODUS history is desired. MODUS currently publishes match averages through this integration; 180 and checkout fields remain visibly unavailable instead of being mixed from another source. An explicit MODUS request checks the live official catalogue even when the bundled index has not yet seen today's player, and every MODUS row includes its official proof URL. `/start` and `/help` show examples; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
+The daily MODUS report is configured in `vercel.json` for 17:00 UTC (18:00 Budapest in winter, 19:00 in summer). Vercel invokes `/api/daily-modus-report` with `Authorization: Bearer $CRON_SECRET`; to trigger it manually:
+
+```powershell
+curl.exe -H "Authorization: Bearer $env:CRON_SECRET" https://<deployment-domain>/api/daily-modus-report
+```
+
+On Vercel, the Telegram `/modus` command automatically targets the deployment URL. When running the bot locally, set `MODUS_REPORT_URL` to the local or deployed report endpoint before using `/modus today` or `/modus tomorrow`.
+
+Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayton last 10 matches from MODUS`, or `Rob Cross last 10 matches from DartsOrakel`. “Average,” “stats,” and plural “matches” are optional. Unqualified requests use DartsOrakel so the response includes each match's average, 180 count, and checkout percentage, plus mean/best average, total 180s, weighted checkout conversion with hit/attempt evidence, metric coverage, and the win/loss/draw record. Use an explicit `from MODUS` request only when official MODUS history is desired. MODUS currently publishes match averages through this integration; 180 and checkout fields remain visibly unavailable instead of being mixed from another source. An explicit MODUS request checks the live official catalogue even when the bundled index has not yet seen today's player, and every MODUS row includes its official proof URL. `/modus today` and `/modus tomorrow` manually start the separate daily MODUS report for the owner; `/modus` defaults to tomorrow. `/start` and `/help` show examples; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
 
 `npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
 
