@@ -30,6 +30,10 @@ export function createHttpModusReportTrigger(options: HttpModusReportTriggerOpti
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`MODUS report endpoint returned HTTP ${response.status}.`);
+        const payload: unknown = await response.json().catch((): null => null);
+        if (!isSuccessfulReportResponse(payload)) {
+          throw new Error("MODUS report endpoint returned an unexpected response.");
+        }
       } catch (error: unknown) {
         if (controller.signal.aborted) {
           throw new Error(`MODUS report endpoint timed out after ${timeoutMs}ms.`, { cause: error });
@@ -40,4 +44,12 @@ export function createHttpModusReportTrigger(options: HttpModusReportTriggerOpti
       }
     },
   };
+}
+
+function isSuccessfulReportResponse(value: unknown): boolean {
+  return typeof value === "object"
+    && value !== null
+    && Reflect.get(value, "ok") === true
+    && typeof Reflect.get(value, "date") === "string"
+    && Number.isSafeInteger(Reflect.get(value, "players"));
 }

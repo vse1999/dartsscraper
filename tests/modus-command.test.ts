@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { handleModusReportCommand, parseModusReportCommand } from "../src/telegram/modus-command.js";
+import { resolveModusReportEndpointUrl } from "../src/telegram/bot.js";
 import { createHttpModusReportTrigger } from "../src/telegram/modus-trigger.js";
 import type { Logger } from "../src/logger.js";
 
@@ -71,7 +72,11 @@ describe("manual MODUS Telegram command", () => {
   });
 
   it("uses the authenticated endpoint and forwards the selected date", async () => {
-    const apiFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response("{}", { status: 200 }));
+    const apiFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      date: "2026-09-11",
+      players: 6,
+    }), { status: 200 }));
     const trigger = createHttpModusReportTrigger({
       endpointUrl: "https://example.test/api/daily-modus-report",
       cronSecret: "s".repeat(32),
@@ -85,6 +90,26 @@ describe("manual MODUS Telegram command", () => {
     expect(String(request)).toBe("https://example.test/api/daily-modus-report?date=tomorrow");
     expect(init?.method).toBe("GET");
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${"s".repeat(32)}`);
+  });
+
+  it("uses the stable production URL instead of the protected deployment URL", () => {
+    expect(resolveModusReportEndpointUrl({
+      VERCEL_PROJECT_PRODUCTION_URL: "dartsscraper.vercel.app",
+    })).toBe("https://dartsscraper.vercel.app/api/daily-modus-report");
+    expect(resolveModusReportEndpointUrl({
+      MODUS_REPORT_URL: "https://custom.example/api/report",
+      VERCEL_PROJECT_PRODUCTION_URL: "dartsscraper.vercel.app",
+    })).toBe("https://custom.example/api/report");
+  });
+
+  it("rejects a protected deployment login page even when it returns HTTP 200", async () => {
+    const trigger = createHttpModusReportTrigger({
+      endpointUrl: "https://example.test/api/daily-modus-report",
+      cronSecret: "s".repeat(32),
+      apiFetch: async (): Promise<Response> => new Response("<html>Sign in</html>", { status: 200 }),
+    });
+
+    await expect(trigger.start("today")).rejects.toThrow("unexpected response");
   });
 
   it("bounds a stalled report endpoint request", async () => {

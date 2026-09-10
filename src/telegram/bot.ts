@@ -29,7 +29,7 @@ export interface BotEnvironment {
   readonly ALLOWED_USER_ID?: string;
   readonly CRON_SECRET?: string;
   readonly MODUS_REPORT_URL?: string;
-  readonly VERCEL_URL?: string;
+  readonly VERCEL_PROJECT_PRODUCTION_URL?: string;
 }
 
 export interface CreateBotOptions {
@@ -160,10 +160,18 @@ export function createConfiguredBot(
 
 function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusReportTrigger | undefined {
   const cronSecret = environment.CRON_SECRET?.trim();
-  const endpointUrl = environment.MODUS_REPORT_URL?.trim()
-    ?? (environment.VERCEL_URL === undefined ? undefined : `https://${environment.VERCEL_URL}/api/daily-modus-report`);
+  const endpointUrl = resolveModusReportEndpointUrl(environment);
   if (cronSecret === undefined || cronSecret === "" || endpointUrl === undefined || endpointUrl === "") return undefined;
   return createHttpModusReportTrigger({ endpointUrl, cronSecret });
+}
+
+export function resolveModusReportEndpointUrl(environment: BotEnvironment): string | undefined {
+  const configuredUrl = environment.MODUS_REPORT_URL?.trim();
+  if (configuredUrl !== undefined && configuredUrl !== "") return configuredUrl;
+  const productionHost = environment.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  return productionHost === undefined || productionHost === ""
+    ? undefined
+    : `https://${productionHost}/api/daily-modus-report`;
 }
 
 export async function handleStatsText(
