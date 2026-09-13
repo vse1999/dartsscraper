@@ -293,7 +293,7 @@ Keep `CHAT_HOST=127.0.0.1`. The app has no user authentication and is designed f
 | Memory | Current official MODUS snapshot | refresh every 10 seconds; stale warning after 10 seconds |
 | Memory | Recently requested player/limit/date result | 15 seconds |
 | `.cache/modus-results` | Validated MODUS process-restart fallback | never accepted after five minutes |
-| `.cache/modus` | MODUS participant discovery | 30 seconds for today; 6 hours for other dates |
+| `.cache/modus` | MODUS participant discovery | 30 seconds for today; 30 minutes for upcoming dates; 6 hours for historical dates |
 | `.cache/dartsorakel` | Player directory and bounded match windows | directory 30 days; match HTTP cache 10 seconds |
 
 The daily official request itself uses `cache: no-store`. Identical simultaneous requests share one in-flight promise. Stale-while-revalidate returns the last valid snapshot immediately with its age, but data older than five minutes is rejected. Player history starts with 90 days, expands through 180/365/730 days only when needed, and uses complete history as the final fallback.

@@ -111,7 +111,7 @@ The same locked install, type-check, test suite, and production dependency audit
 - memory L1: MODUS refreshes every 10 seconds; player results stay fresh for 15 seconds; identical requests are single-flight
 - `.cache/dartsorakel`: 30-day player directory and 10-second bounded-history HTTP responses
 - `.cache/modus-results`: validated process-restart fallback, rejected after five minutes
-- `.cache/modus`: fixture discovery cached for 30 seconds for today and six hours for other dates
+- `.cache/modus`: fixture discovery cached for 30 seconds for today, 30 minutes for upcoming dates, and six hours for historical dates
 
 Cache failures are non-fatal. Delete `.cache` manually only when intentionally forcing a complete live refresh.
 

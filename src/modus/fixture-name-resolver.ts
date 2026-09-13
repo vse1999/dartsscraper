@@ -13,16 +13,17 @@ export class FixtureNameResolver {
     const normalized = normalizePlayerName(canonicalName);
     const exact = response.data.filter((row) => normalizePlayerName(row.player_name) === normalized);
     if (exact.length === 1) return exact[0]?.player_name ?? name;
-    const abbreviated = /^(.+?)\s+([\p{L}])\.$/u.exec(canonicalName.trim());
-    if (abbreviated === null) throw new PlayerNotFoundError(name);
-    const surname = comparableNamePart(abbreviated[1] ?? "");
-    const initial = normalizePlayerName(abbreviated[2] ?? "");
+    const abbreviated = parseAbbreviatedName(canonicalName);
+    if (abbreviated === undefined) throw new PlayerNotFoundError(name);
     const candidates = response.data.filter((row) => {
       const parts = comparableNameParts(row.player_name);
-      const firstName = parts[0] ?? "";
-      const surnameParts = parts.slice(1);
-      if (surnameParts.at(-1) === "jnr") surnameParts.pop();
-      return firstName.startsWith(initial) && surnameParts.join("") === surname;
+      const candidateSurnameParts = parts.at(-1) === "jnr" ? parts.slice(0, -1) : parts;
+      if (candidateSurnameParts.length < abbreviated.surnameParts.length) return false;
+      const surnameStart = candidateSurnameParts.length - abbreviated.surnameParts.length;
+      const candidateSurname = candidateSurnameParts.slice(surnameStart);
+      if (candidateSurname.join("") !== abbreviated.surnameParts.join("")) return false;
+      const givenNameParts = candidateSurnameParts.slice(0, surnameStart);
+      return abbreviated.initials.every((initial, index) => givenNameParts[index]?.startsWith(initial) === true);
     });
     if (candidates.length === 0) throw new PlayerNotFoundError(name);
     if (candidates.length > 1) throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.player_name));
@@ -40,10 +41,6 @@ export class FixtureNameResolver {
   }
 }
 
-function comparableNamePart(value: string): string {
-  return comparableNameParts(value).join("");
-}
-
 function comparableNameParts(value: string): string[] {
   return normalizePlayerName(value)
     .normalize("NFKD")
@@ -56,4 +53,25 @@ export function canonicalizeFixtureName(name: string): string {
   const trimmed = name.replace(/\s+/g, " ").trim();
   const commaName = /^([^,]+),\s*(.+)$/.exec(trimmed);
   return commaName === null ? trimmed : `${commaName[2] ?? ""} ${commaName[1] ?? ""}`.trim();
+}
+
+interface AbbreviatedName {
+  readonly surnameParts: readonly string[];
+  readonly initials: readonly string[];
+}
+
+function parseAbbreviatedName(value: string): AbbreviatedName | undefined {
+  const tokens = value.trim().split(/\s+/u).filter((token) => token !== "");
+  const initialTokens: string[] = [];
+  while (tokens.length > 0) {
+    const token = tokens.at(-1) ?? "";
+    if (!/^[\p{L}]\.$/u.test(token)) break;
+    tokens.pop();
+    initialTokens.unshift(normalizePlayerName(token).replace(/[^\p{L}]/gu, ""));
+  }
+  if (tokens.length === 0 || initialTokens.length === 0) return undefined;
+  const surnameParts = comparableNameParts(tokens.join(" "));
+  const initials = initialTokens.map((initial) => comparableNameParts(initial)[0] ?? "");
+  if (surnameParts.length === 0 || initials.some((initial) => initial === "")) return undefined;
+  return { surnameParts, initials };
 }

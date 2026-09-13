@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { parsePlayersForDate } from "../src/modus/darts-nerd-source.js";
+import { DartsNerdModusSource, parsePlayersForDate } from "../src/modus/darts-nerd-source.js";
 import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
 import { OfficialModusSource } from "../src/modus/official-source.js";
 import { ModusPlayersService } from "../src/modus/service.js";
@@ -11,6 +11,10 @@ const html = `<div class="hm-date-header">Monday 10 August</div>
 <a class="hm-match"><span class="hm-time" data-utc="2026-08-10T09:30:00Z"></span><span class="hm-name">van Peer B.</span><span class="hm-name">Drayton J.</span></a>
 <a class="hm-match"><span class="hm-time" data-utc="2026-08-10T09:50:00Z"></span><span class="hm-name">Drayton J.</span><span class="hm-name">Cressey G.</span></a>
 <a class="hm-match"><span class="hm-time" data-utc="2026-08-11T09:30:00Z"></span><span class="hm-name">Other O.</span></a>`;
+const previewHtml = `<a class="hm-match" href="/en/federations/modus/super-series/2026/matches/howson-r-vs-evans-d-14-09-2026"><span class="hm-time" data-utc="2026-09-14T08:40:00Z"></span><span class="hm-name">Howson R.</span><span class="hm-name">Evans D.</span></a>
+<a class="hm-match" href="/en/federations/pdc/2026/matches/other-match"><span class="hm-time" data-utc="2026-09-14T08:45:00Z"></span><span class="hm-name">Other O.</span><span class="hm-name">Player P.</span></a>
+<a class="hm-match" href="/en/federations/modus/super-series/2026/matches/leung-k-f-vs-cooper-h-14-09-2026"><span class="hm-time" data-utc="2026-09-14T09:15:00Z"></span><span class="hm-name">Leung K. F.</span><span class="hm-name">Cooper H.</span></a>
+<a class="hm-match" href="/en/federations/modus/super-series/2026/matches/next-day"><span class="hm-time" data-utc="2026-09-15T08:40:00Z"></span><span class="hm-name">Next N.</span><span class="hm-name">Day D.</span></a>`;
 function playerStats(names: readonly string[]): PlayerStatsResponse {
   return { draw: 1, recordsTotal: names.length, recordsFiltered: names.length, data: names.map((name, index) => ({ player_key: index + 1, player_name: name, player_profile_url: `https://dartsorakel.com/player/details/${index + 1}/player-${index + 1}` })) };
 }
@@ -31,6 +35,10 @@ describe("MODUS discovery", () => {
     const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["John O Shea", "Ram Guevara jnr"]) });
     await expect(resolver.resolve("O'Shea J.")).resolves.toBe("John O Shea");
     await expect(resolver.resolve("Guevara R.")).resolves.toBe("Ram Guevara jnr");
+  });
+  it("resolves fixture names with multiple given-name initials", async () => {
+    const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["Kai Fan Leung"]) });
+    await expect(resolver.resolve("Leung K. F.")).resolves.toBe("Kai Fan Leung");
   });
   it("does not silently choose an ambiguous abbreviation", async () => {
     const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["John Smith", "Jack Smith"]) });
@@ -64,6 +72,41 @@ describe("MODUS discovery", () => {
     await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["Rob Cross", "Luke Littler"]);
     expect(resolve).not.toHaveBeenCalled();
   });
+  it("filters the global preview page to MODUS fixtures for the requested date", () => {
+    expect(parsePlayersForDate(previewHtml, "2026-09-14", { modusOnly: true })).toEqual([
+      "Howson R.",
+      "Evans D.",
+      "Leung K. F.",
+      "Cooper H.",
+    ]);
+  });
+  it("uses the preview endpoint for future dates and preserves unresolved players", async () => {
+    const requestedUrls: string[] = [];
+    const resolve = vi.fn(async (name: string): Promise<string> => {
+      if (name === "Leung K. F.") throw new Error("player is not in the directory");
+      return name === "Howson R." ? "Richie Howson" : name;
+    });
+    const source = new DartsNerdModusSource({
+      resolver: { resolve },
+      baseUrl: "https://example.test",
+      fetchImpl: async (input: RequestInfo | URL): Promise<Response> => {
+        requestedUrls.push(String(input));
+        return new Response(previewHtml, { status: 200 });
+      },
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    });
+
+    await expect(source.getPlayers("2026-09-14")).resolves.toEqual([
+      "Richie Howson",
+      "Evans D.",
+      "Leung K. F.",
+      "Cooper H.",
+    ]);
+    expect(source.sourceUrl("2026-09-14")).toBe("https://example.test/en/matches/preview");
+    expect(source.sourceUrl("2026-09-13")).toBe("https://example.test/en/federations/modus/super-series/2026/matches");
+    expect(requestedUrls).toEqual(["https://example.test/en/matches/preview"]);
+    expect(resolve).toHaveBeenCalledTimes(4);
+  });
   it("falls back, deduplicates, and caches a successful provider", async () => {
     const writes: { key: string; value: unknown; ttlMs: number }[] = [];
     const service = new ModusPlayersService({
@@ -74,7 +117,19 @@ describe("MODUS discovery", () => {
     const result = await service.getModusPlayers("2026-08-10");
     expect(result.players.map((player) => player.name)).toEqual(["Jack Drayton", "George Cressey"]);
     expect(result.players.every((player) => player.confidence === 1)).toBe(true);
-    expect(writes).toMatchObject([{ key: "modus-players-v2-2026-08-10", ttlMs: 30_000 }]);
+    expect(writes).toMatchObject([{ key: "modus-players-v3-2026-08-10", ttlMs: 30_000 }]);
+  });
+  it("uses a short cache TTL for upcoming fixture discovery", async () => {
+    const writes: { key: string; value: unknown; ttlMs: number }[] = [];
+    const service = new ModusPlayersService({
+      sources: [source("preview", ["Jack Drayton"])],
+      cache: { get: async () => null, set: async (key, value, ttlMs) => { writes.push({ key, value, ttlMs }); } },
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    });
+
+    await service.getModusPlayers("2026-09-14");
+
+    expect(writes).toMatchObject([{ key: "modus-players-v3-2026-09-14", ttlMs: 30 * 60 * 1000 }]);
   });
   it("reports all unavailable sources", async () => {
     const service = new ModusPlayersService({ sources: [source("official", new Error("offline")), source("fallback", [])] });

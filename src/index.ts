@@ -81,6 +81,7 @@ export type { OllamaHealthChecker, OllamaHealthCheckerOptions, OllamaHealthResul
 export { OllamaClient } from "./agent/ollama-client.js";
 export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js";
 export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";
+export type { DartsNerdModusSourceOptions, ParsePlayersForDateOptions } from "./modus/darts-nerd-source.js";
 export { FixtureNameResolver } from "./modus/fixture-name-resolver.js";
 export { OfficialModusSource } from "./modus/official-source.js";
 export {

@@ -93,8 +93,8 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
       options.dependencies.telegram,
       options.chatId,
       discoverySucceeded
-        ? `⚠️ No MODUS players were found for ${date}. No DartsOrakel lookups were attempted.`
-        : `⚠️ MODUS fixtures could not be discovered for ${date}. No DartsOrakel lookups were attempted.`,
+        ? `⚠️ No MODUS players were found for ${date}. No DartsOrakel lookups were attempted. Try again later.`
+        : `⚠️ MODUS fixtures could not be discovered for ${date}. No DartsOrakel lookups were attempted. Try again later.`,
       logger,
       date,
       "TELEGRAM_WARNING_SEND_FAILED",

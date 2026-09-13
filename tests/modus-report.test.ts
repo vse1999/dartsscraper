@@ -123,6 +123,22 @@ describe("automatic MODUS report", () => {
     expect(summary).toContain("1 player unavailable: B");
   });
 
+  it("keeps an unresolved fixture player in the roster without aborting other lookups", async () => {
+    const value = harness(["Richie Howson", "Leung K. F."]);
+    value.getPlayerStats.mockImplementation(async (playerName: string, matchCount: number): Promise<PlayerStatsResult> => {
+      if (playerName === "Leung K. F.") throw new Error("player is not in the directory");
+      return stats(playerName, matchCount);
+    });
+
+    const result = await runModusReport(options(["Richie Howson", "Leung K. F."], value));
+
+    expect(result.discoverySucceeded).toBe(true);
+    expect(result.players).toEqual(["Richie Howson", "Leung K. F."]);
+    expect(result.results.map((item) => item.status)).toEqual(["succeeded", "failed"]);
+    expect(value.getPlayerStats).toHaveBeenCalledTimes(2);
+    expect(value.sendMessage.mock.calls[0]?.[1]).toContain("Leung K. F. — unavailable");
+  });
+
   it("marks the report undelivered when the compact overview cannot be sent", async () => {
     const value = harness(["A", "B", "C"]);
     value.sendMessage.mockImplementation(async (_chatId: number | string, text: string): Promise<void> => {

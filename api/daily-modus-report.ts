@@ -125,7 +125,7 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
   const modusPlayersService = new ModusPlayersService({
     sources: [
       new OfficialModusSource({ resolver: fixtureNameResolver }),
-      new DartsNerdModusSource({ resolver: fixtureNameResolver }),
+      new DartsNerdModusSource({ resolver: fixtureNameResolver, logger }),
     ],
     logger,
   });
