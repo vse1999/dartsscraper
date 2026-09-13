@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DartsAgentToolExecutor } from "../src/agent/tools.js";
 import type { MatchResult } from "../src/schemas/match.js";
 import type { ModusResultsSnapshot } from "../src/modus/results-schemas.js";
+import type { PdcTournamentResult } from "../src/pdc/schemas.js";
+import type { PdcTournamentService } from "../src/pdc/service.js";
 
 function matchResult(limit: number): MatchResult {
   return {
@@ -13,10 +15,11 @@ function matchResult(limit: number): MatchResult {
     })),
   };
 }
-function executor(failure?: Error): DartsAgentToolExecutor {
+function executor(failure?: Error, pdcTournamentService?: Pick<PdcTournamentService, "getResultsForDate">): DartsAgentToolExecutor {
   return new DartsAgentToolExecutor({
     modusService: { getModusPlayers: async (date) => ({ event: "MODUS Super Series", date, players: [] }) },
     modusResultsService: { getResults: async (date) => modusSnapshot(date) },
+    ...(pdcTournamentService === undefined ? {} : { pdcTournamentService }),
     playerMatchesService: { getLastMatches: async (_player, limit) => { if (failure !== undefined) throw failure; return matchResult(limit); } },
     now: () => new Date("2026-08-08T12:00:00Z"),
   });
@@ -40,6 +43,39 @@ function modusSnapshot(date: string): ModusResultsSnapshot {
       weekAveragesUrl: "https://modussuperseries.com/week-averages.php?series_id=26&week_id=192",
     },
     warnings: [],
+  };
+}
+
+function pdcResult(date: string): PdcTournamentResult {
+  return {
+    event: {
+      eventKey: 8022,
+      tournamentKey: 5,
+      tournamentName: "European Tour",
+      tournamentNumber: 12,
+      category: "ET",
+      eventDate: date,
+      startDate: date,
+      endDate: date,
+      eventAverage: 93.47,
+      winnerAverage: 101.73,
+      winnerName: "Luke Littler",
+      winnerPlayerId: 5403,
+      calendarUrl: "https://dartsorakel.com/api/events?year=2026&organCal=PDCE",
+      resultsUrl: "https://dartsorakel.com/events/result/8022/2026-european-tour",
+    },
+    matches: [{
+      matchId: 565570,
+      round: "Final",
+      winnerName: "Luke Littler",
+      winnerPlayerId: 5403,
+      loserName: "Luke Humphries",
+      loserPlayerId: 34,
+      winnerScore: 8,
+      loserScore: 6,
+      sourceUrl: "https://dartsorakel.com/match/stats/565570",
+    }],
+    sourceUrl: "https://dartsorakel.com/events/result/8022/2026-european-tour",
   };
 }
 
@@ -110,6 +146,22 @@ describe("agent tools", () => {
     expect(result).toMatchObject({
       ok: true,
       data: { date: "2026-08-10", matches: [{ home: { average: 91.58 }, away: { average: 81 } }], weekAverages: [{ average: 88.18 }] },
+    });
+  });
+  it("returns an independent PDC tournament result set", async () => {
+    const getResultsForDate = async (date: string): Promise<readonly PdcTournamentResult[]> => [pdcResult(date)];
+    const result = await executor(undefined, { getResultsForDate }).execute({
+      name: "getPdcResults",
+      arguments: { date: "2026-08-10" },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        date: "2026-08-10",
+        source: "pdc",
+        results: [{ event: { tournamentName: "European Tour" }, matches: [{ winnerName: "Luke Littler" }] }],
+      },
     });
   });
   it("forwards cancellation to the official MODUS results service", async () => {

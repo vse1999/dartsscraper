@@ -34,6 +34,12 @@ Output: one validated official snapshot containing the feed date/timestamp, sele
 
 This is the authoritative bulk tool for current/today/latest MODUS results. Missing values remain `null`. It never fills gaps from DartsOrakel. A requested date that differs from the official daily feed date is an explicit error.
 
+## `getPdcResults`
+
+Input: `{ "date": "YYYY-MM-DD" }`
+
+Output: the independently validated PDC tournament result set for that calendar date. Each event includes its PDC tournament name/number, winner and event averages when published, every parsed match with round, score, player IDs, and a DartsOrakel event-result URL. This source is separate from MODUS and covers the configured PDC calendar categories, including European Tour, Masters, majors, World Series, Premier League, and Players Championship events. No result is synthesized from MODUS data.
+
 ## `getPlayerMatches`
 
 Input: `{ "player": string, "limit": integer 1..1000 }`

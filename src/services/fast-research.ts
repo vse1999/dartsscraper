@@ -4,6 +4,8 @@ import type { Logger } from "../logger.js";
 import { noopLogger } from "../logger.js";
 import type { OfficialModusResultsService } from "../modus/results-service.js";
 import type { ModusResultsSnapshot } from "../modus/results-schemas.js";
+import type { PdcTournamentResult } from "../pdc/schemas.js";
+import type { PdcTournamentService } from "../pdc/service.js";
 import type { PlayerResolver } from "../player/resolver.js";
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
@@ -12,6 +14,7 @@ import { calculateMatchSummary, type MatchSummary } from "./statistics.js";
 
 export type ResearchIntent =
   | { kind: "modus-current-results"; date: string }
+  | { kind: "pdc-current-results"; date: string; latest: boolean }
   | { kind: "player-last-matches"; player: PlayerIdentity; limit: number }
   | { kind: "player-latest-match"; player: PlayerIdentity }
   | { kind: "player-last-n-average"; player: PlayerIdentity; limit: number };
@@ -28,6 +31,7 @@ export interface FastResearchAnswer {
 
 export interface FastResearchServiceDependencies {
   modusResultsService: Pick<OfficialModusResultsService, "activate" | "stopBackgroundRefresh">;
+  pdcTournamentService?: Pick<PdcTournamentService, "getResultsForDate" | "getLatestResults">;
   playerMatchesService: Pick<PlayerMatchesService, "getLastMatchesSnapshot">;
   playerResolver: Pick<PlayerResolver, "findMentions" | "preload">;
   now?: () => Date;
@@ -37,6 +41,7 @@ export interface FastResearchServiceDependencies {
 
 export class FastResearchService {
   private readonly modusResultsService: FastResearchServiceDependencies["modusResultsService"];
+  private readonly pdcTournamentService: FastResearchServiceDependencies["pdcTournamentService"];
   private readonly playerMatchesService: FastResearchServiceDependencies["playerMatchesService"];
   private readonly playerResolver: FastResearchServiceDependencies["playerResolver"];
   private readonly now: () => Date;
@@ -46,6 +51,7 @@ export class FastResearchService {
 
   public constructor(dependencies: FastResearchServiceDependencies) {
     this.modusResultsService = dependencies.modusResultsService;
+    this.pdcTournamentService = dependencies.pdcTournamentService;
     this.playerMatchesService = dependencies.playerMatchesService;
     this.playerResolver = dependencies.playerResolver;
     this.now = dependencies.now ?? (() => new Date());
@@ -96,6 +102,23 @@ export class FastResearchService {
       };
     }
 
+    if (intent.kind === "pdc-current-results") {
+      if (this.pdcTournamentService === undefined) throw new Error("The PDC tournament service is not configured.");
+      const results = intent.latest
+        ? await this.pdcTournamentService.getLatestResults(intent.date)
+        : await this.pdcTournamentService.getResultsForDate(intent.date);
+      const answer = formatPdcResults(intent.date, results, intent.latest);
+      return {
+        answer,
+        intent: intent.kind,
+        executionMode: "fast-path",
+        sourceLatencyMs: Math.round(performance.now() - startedAt),
+        dataAgeMs: 0,
+        fetchedAt: this.now().toISOString(),
+        stale: false,
+      };
+    }
+
     const limit = intent.kind === "player-latest-match" ? 1 : intent.limit;
     const snapshot = await this.playerMatchesService.getLastMatchesSnapshot(intent.player.name, limit, signal);
     const answer = intent.kind === "player-latest-match"
@@ -134,6 +157,20 @@ export class FastResearchService {
         // Current/latest queries without an explicit date use today.
       }
       return { kind: "modus-current-results", date: today };
+    }
+
+    const mentionsPdcTournament = /\b(pdc|european tour|european championship|grand slam|masters|players championship|premier league|uk open|world championship|world matchplay|world grand prix|world series|world cup|major\w*)\b/u.test(normalized);
+    if (mentionsPdcTournament && /\b(tournament\w*|event\w*|results?|scores?|matches?|fixtures?|eredmeny\w*|meccs\w*)\b/u.test(normalized)) {
+      const latest = /\b(latest|most recent|legfrissebb)\b/u.test(normalized);
+      let date = resolveResearchDate("today", { now: this.now(), timeZone: this.timeZone }).date;
+      if (!latest) {
+        try {
+          date = resolveResearchDate(query, { now: this.now(), timeZone: this.timeZone }).date;
+        } catch {
+          // Bare PDC-result questions use today's calendar date.
+        }
+      }
+      return { kind: "pdc-current-results", date, latest };
     }
 
     const directPlayers = await this.playerResolver.findMentions(query);
@@ -177,6 +214,23 @@ export class FastResearchService {
     }
     return undefined;
   }
+}
+
+function formatPdcResults(date: string, results: readonly PdcTournamentResult[], latest: boolean): string {
+  if (results.length === 0) {
+    return latest
+      ? `PDC latest tournaments — no completed PDC tournament was found on or before ${date}.`
+      : `PDC tournament results — no completed PDC tournament was found for ${date}.`;
+  }
+  const title = `PDC ${latest ? "latest" : "tournament results"} — ${date}`;
+  const sections = results.map((result) => {
+    const event = result.event;
+    const name = event.tournamentNumber === 0 ? event.tournamentName : `${event.tournamentName} ${event.tournamentNumber}`;
+    const winner = event.winnerName === null ? "Winner unavailable" : `Winner: ${event.winnerName}`;
+    const matches = result.matches.map((match) => `${match.round ?? "Match"}: ${match.winnerName} ${match.winnerScore}–${match.loserScore} ${match.loserName}`);
+    return [`### ${name} · ${event.eventDate}`, winner, `Matches: ${result.matches.length}`, ...matches, `Source: ${result.sourceUrl}`].join("\n");
+  });
+  return [title, ...sections].join("\n\n");
 }
 
 function renderModusResults(query: string, evidence: ModusResultsSnapshot, stale: boolean, ageMs: number): string {

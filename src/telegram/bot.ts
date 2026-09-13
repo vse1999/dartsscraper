@@ -1,6 +1,7 @@
 import { Bot, type BotConfig, type Context, type NextFunction } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 
+import { resolveResearchDate } from "../agent/date.js";
 import {
   DartsOrakelRequestError,
   DartsOrakelStructureChangedError,
@@ -23,6 +24,8 @@ import {
   resolveModusPlayerCallback,
 } from "./modus-player-callback.js";
 import { parseStatsQuery, statsQueryUsage, type StatsQuery } from "./query.js";
+import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
+import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
@@ -44,6 +47,7 @@ export interface CreateBotOptions {
   readonly apiFetch?: typeof fetch;
   readonly botInfo?: UserFromGetMe;
   readonly modusReportTrigger?: ModusReportTrigger;
+  readonly pdcTournamentService?: PdcTournamentReader;
   readonly scheduleBackgroundTask?: BackgroundTaskScheduler;
 }
 
@@ -124,6 +128,16 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     );
   });
 
+  bot.command("pdc", async (ctx: Context): Promise<void> => {
+    await handlePdcReportCommand(
+      ctx.message?.text ?? "",
+      options.pdcTournamentService,
+      (expression): string => resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date,
+      { reply: async (text: string): Promise<void> => { await ctx.reply(text); } },
+      logger,
+    );
+  });
+
   bot.callbackQuery(MODUS_PLAYER_CALLBACK_PATTERN, async (ctx): Promise<void> => {
     const message = ctx.callbackQuery.message;
     const replyMarkup = message !== undefined && "reply_markup" in message
@@ -183,6 +197,7 @@ export function createConfiguredBot(
   return createBot({
     ...configuration,
     statsService: createDefaultPlayerStatsService(logger),
+    pdcTournamentService: createDefaultPdcTournamentService(logger),
     ...(modusReportTrigger === undefined
       ? {}
       : { modusReportTrigger }),
@@ -293,7 +308,7 @@ async function handleStatsQuery(
 }
 
 function botHelpText(): string {
-  return `${statsQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
+  return `${statsQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
 function publicFailure(error: unknown): {

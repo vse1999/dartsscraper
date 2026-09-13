@@ -9,6 +9,7 @@ import type { SnapshotRead } from "../src/services/snapshot-store.js";
 import type { MatchResult } from "../src/schemas/match.js";
 import type { PlayerIdentity } from "../src/schemas/player.js";
 import type { ModusResultsSnapshot } from "../src/modus/results-schemas.js";
+import type { PdcTournamentResult } from "../src/pdc/schemas.js";
 
 const player: PlayerIdentity = { id: 29, name: "Rob Cross", slug: "rob-cross" };
 const fixedNow = new Date("2026-08-11T12:00:00.000Z");
@@ -100,6 +101,7 @@ function playerMatches(): MatchResult {
 
 interface TestServices {
   service: FastResearchService;
+  dependencies: FastResearchServiceDependencies;
   modusActivate: ReturnType<typeof vi.fn<FastResearchServiceDependencies["modusResultsService"]["activate"]>>;
   playerGetLastMatchesSnapshot: ReturnType<typeof vi.fn<FastResearchServiceDependencies["playerMatchesService"]["getLastMatchesSnapshot"]>>;
 }
@@ -134,6 +136,7 @@ function createServices(): TestServices {
 
   return {
     service: new FastResearchService(dependencies),
+    dependencies,
     modusActivate,
     playerGetLastMatchesSnapshot,
   };
@@ -179,6 +182,49 @@ describe("FastResearchService", () => {
     expect(answer?.answer).toContain("Checkout: 50.00% (5/10)");
     expect(answer?.answer).toContain("Available averages: 2/2");
     expect(playerGetLastMatchesSnapshot).toHaveBeenCalledWith("Rob Cross", 2, undefined);
+  });
+
+  it("answers a PDC tournament question through the separate PDC service", async () => {
+    const { dependencies } = createServices();
+    const pdcResult: PdcTournamentResult = {
+      event: {
+        eventKey: 8022,
+        tournamentKey: 5,
+        tournamentName: "European Tour",
+        tournamentNumber: 12,
+        category: "ET",
+        eventDate: "2026-09-06",
+        startDate: "2026-09-06",
+        endDate: "2026-09-06",
+        eventAverage: 93.47,
+        winnerAverage: 101.73,
+        winnerName: "Luke Littler",
+        winnerPlayerId: 5403,
+        calendarUrl: "https://dartsorakel.com/api/events?year=2026&organCal=PDCE",
+        resultsUrl: "https://dartsorakel.com/events/result/8022/2026-european-tour",
+      },
+      matches: [{
+        matchId: 565570,
+        round: "Final",
+        winnerName: "Luke Littler",
+        winnerPlayerId: 5403,
+        loserName: "Luke Humphries",
+        loserPlayerId: 34,
+        winnerScore: 8,
+        loserScore: 6,
+        sourceUrl: "https://dartsorakel.com/match/stats/565570",
+      }],
+      sourceUrl: "https://dartsorakel.com/events/result/8022/2026-european-tour",
+    };
+    const getLatestResults = vi.fn(async (): Promise<readonly PdcTournamentResult[]> => [pdcResult]);
+    const service = new FastResearchService({ ...dependencies, pdcTournamentService: { getResultsForDate: vi.fn(), getLatestResults } });
+
+    const answer = await service.tryAnswer("latest PDC tournament results");
+
+    expect(answer).toMatchObject({ intent: "pdc-current-results", executionMode: "fast-path", stale: false });
+    expect(answer?.answer).toContain("European Tour 12");
+    expect(answer?.answer).toContain("Luke Littler");
+    expect(getLatestResults).toHaveBeenCalledWith("2026-08-11");
   });
 
   it("returns null for open-ended questions so the LLM can handle them", async () => {

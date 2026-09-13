@@ -4,7 +4,7 @@ Production-oriented TypeScript tooling for DartsOrakel player matches plus a bro
 
 ## Private Telegram bot
 
-The bot is an owner-only, free-tier webhook around deterministic official MODUS history and DartsOrakel readers. It needs no database, paid API, queue, Redis, or language model.
+The bot is an owner-only, free-tier webhook around deterministic official MODUS history, separate PDC tournament scans, and DartsOrakel readers. It needs no database, paid API, queue, Redis, or language model.
 
 Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOrakel. The bot therefore retrieves only the public DartsOrakel JSON through Jina Reader's free public-URL service; no Telegram identity, token, or message metadata is sent to Jina.
 
@@ -22,6 +22,8 @@ curl.exe -H "Authorization: Bearer $env:CRON_SECRET" https://<deployment-domain>
 
 On Vercel, the Telegram `/modus` command targets `MODUS_REPORT_URL` when configured, otherwise the stable `VERCEL_PROJECT_PRODUCTION_URL`. It intentionally does not use the generated deployment URL because deployment protection can intercept that URL. When running the bot locally, set `MODUS_REPORT_URL` to the local or deployed report endpoint before using `/modus today` or `/modus tomorrow`.
 
+The separate `/pdc` command scans the DartsOrakel PDC calendar and retrieves tournament result pages for European Tour, Masters, European Championship, World Series, Premier League, UK Open, World Championship, World Matchplay, World Grand Prix, Grand Slam, and Players Championship events. It never uses the MODUS source or MODUS report endpoint. Use `/pdc today`, `/pdc tomorrow`, or `/pdc latest`; the last form returns the most recently completed PDC tournament(s) on or before today.
+
 Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayton last 10 matches from MODUS`, or `Rob Cross last 10 matches from DartsOrakel`. “Average,” “stats,” and plural “matches” are optional. Unqualified requests use DartsOrakel so the response includes each match's average, 180 count, and checkout percentage, plus mean/best average, total 180s, weighted checkout conversion with hit/attempt evidence, metric coverage, and the win/loss/draw record. Use an explicit `from MODUS` request only when official MODUS history is desired. MODUS currently publishes match averages through this integration; 180 and checkout fields remain visibly unavailable instead of being mixed from another source. An explicit MODUS request checks the live official catalogue even when the bundled index has not yet seen today's player, and every MODUS row includes its official proof URL. `/modus today` and `/modus tomorrow` manually start the separate daily MODUS report for the owner; `/modus` defaults to tomorrow. The report is delivered as one compact comparison dashboard with a two-column inline player keyboard. Tapping a player fetches and opens that player's detailed ten-match DartsOrakel card on demand instead of sending every card automatically. `/start` and `/help` show examples; `/health` verifies Telegram delivery without calling a statistics source. Updates from every other user, group, or channel are silently ignored.
 
 `npm run telegram:smoke` performs a real end-to-end check using `.env.local`; it sends and edits one Rob Cross result in the owner's Telegram chat.
@@ -29,6 +31,8 @@ Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayt
 `npm run modus:players:smoke` discovers every player in the current official MODUS series/week and validates each player sequentially through the forced official-history route. It fails if any player cannot return official match rows with aligned MODUS proof URLs.
 
 `npm run modus:smoke -- "Jack Drayton" 10` performs a read-only live contract test against the official MODUS results and match-detail pages without sending a Telegram message. `npm run modus:index` rebuilds the bundled official historical catalogue; run it before a production deployment. The runtime still refreshes the current official week, so newly completed matches do not require a redeploy.
+
+`npm run pdc:smoke` performs a read-only live contract test against the public PDC calendar and a completed DartsOrakel tournament result page. It validates the event, winner, match count, and trusted source URLs without sending a Telegram message.
 
 ## Start the chatbot
 
@@ -47,7 +51,7 @@ Open [http://127.0.0.1:3210](http://127.0.0.1:3210). **Stats ready** can answer 
 The web app provides:
 
 - natural-language English and Hungarian darts research;
-- deterministic fast-path answers for latest MODUS and named-player last-N facts;
+- deterministic fast-path answers for latest MODUS, PDC tournament results, and named-player last-N facts;
 - deterministic DartsOrakel and MODUS tools selected by Gemma;
 - multi-turn follow-up context per browser session;
 - local health/model checks and actionable setup errors;
@@ -112,6 +116,7 @@ The same locked install, type-check, test suite, and production dependency audit
 - `.cache/dartsorakel`: 30-day player directory and 10-second bounded-history HTTP responses
 - `.cache/modus-results`: validated process-restart fallback, rejected after five minutes
 - `.cache/modus`: fixture discovery cached for 30 seconds for today, 30 minutes for upcoming dates, and six hours for historical dates
+- `.cache/pdc`: validated PDC calendar responses cached for 30 seconds, kept separate from MODUS caches
 
 Cache failures are non-fatal. Delete `.cache` manually only when intentionally forcing a complete live refresh.
 
@@ -125,4 +130,4 @@ Cache failures are non-fatal. Delete `.cache` manually only when intentionally f
 - [Tool contracts](./docs/TOOL_CONTRACTS.md)
 - [DartsOrakel investigation](./INVESTIGATION.md)
 
-Current MODUS results and Telegram MODUS history come from the public official results, match-detail, daily JSON, and weekly-average pages. Participant-only discovery in the local research app can fall back to the allowed public Darts Nerd season page. The Telegram bot never uses that fallback for MODUS statistics: each MODUS match is backed by its official match-detail URL. The app does not bypass anti-bot controls or use private APIs.
+Current MODUS results and Telegram MODUS history come from the public official results, match-detail, daily JSON, and weekly-average pages. PDC tournament results are independently discovered from the DartsOrakel PDC calendar and independently fetched from event result pages. Participant-only discovery in the local research app can fall back to the allowed public Darts Nerd season page. The Telegram bot never uses that fallback for MODUS statistics: each MODUS match is backed by its official match-detail URL. The app does not bypass anti-bot controls or use private APIs.

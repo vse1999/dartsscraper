@@ -6,8 +6,12 @@ import { PlayerStatsResponseSchema, type PlayerStatsResponse } from "../src/sche
 
 const fixtureDirectory = path.resolve(process.cwd(), "tests", "fixtures");
 
+export function readTextFixture(name: string): string {
+  return readFileSync(path.join(fixtureDirectory, name), "utf8");
+}
+
 export function readFixture(name: string): unknown {
-  return JSON.parse(readFileSync(path.join(fixtureDirectory, name), "utf8")) as unknown;
+  return JSON.parse(readTextFixture(name)) as unknown;
 }
 
 export function readMatchFixture(name: string): DartsOrakelMatchesResponse {

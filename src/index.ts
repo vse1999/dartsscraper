@@ -111,6 +111,12 @@ export type {
 } from "./modus/results-schemas.js";
 export { ModusPlayersService } from "./modus/service.js";
 export type { ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
+export { DartsOrakelPdcSource, PdcSourceUnavailableError, parsePdcTournamentMatches } from "./pdc/source.js";
+export type { DartsOrakelPdcSourceOptions } from "./pdc/source.js";
+export { PdcTournamentService } from "./pdc/service.js";
+export type { PdcTournamentServiceOptions } from "./pdc/service.js";
+export { PDC_CALENDAR_CATEGORIES, PDC_TOURNAMENT_NAMES, PdcCalendarCategorySchema, PdcTournamentEventSchema, PdcTournamentMatchSchema, PdcTournamentResultSchema } from "./pdc/schemas.js";
+export type { PdcCalendarCategory, PdcTournamentEvent, PdcTournamentMatch, PdcTournamentResult, PdcTournamentSource } from "./pdc/schemas.js";
 export { FastResearchService } from "./services/fast-research.js";
 export type { FastResearchAnswer, FastResearchServiceDependencies, ResearchIntent } from "./services/fast-research.js";
 export { SnapshotStore } from "./services/snapshot-store.js";

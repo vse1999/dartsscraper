@@ -9,6 +9,7 @@ import { OfficialModusSource } from "../modus/official-source.js";
 import { OfficialModusResultsSource } from "../modus/official-results-source.js";
 import { OfficialModusResultsService } from "../modus/results-service.js";
 import { ModusPlayersService } from "../modus/service.js";
+import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { PlayerResolver } from "../player/resolver.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
 import { FastResearchService } from "../services/fast-research.js";
@@ -51,17 +52,19 @@ export function createDartsResearchRuntime(options: CreateAgentOptions = {}): Da
     cache: new FileCache({ directory: path.join(rootCache, "modus-results"), logger }),
     logger,
   });
-  const toolExecutor = new DartsAgentToolExecutor({ modusService, modusResultsService, playerMatchesService });
+  const pdcTournamentService = createDefaultPdcTournamentService(logger, path.join(rootCache, "pdc"));
+  const configuredToolExecutor = new DartsAgentToolExecutor({ modusService, modusResultsService, pdcTournamentService, playerMatchesService });
   const ollamaOptions = {
     ...(options.ollamaBaseUrl === undefined ? {} : { baseUrl: options.ollamaBaseUrl }),
     ...(options.ollamaKeepAlive === undefined ? {} : { keepAlive: options.ollamaKeepAlive }),
   };
   const agent = new DartsResearchAgent({
-    client: new OllamaClient(ollamaOptions), toolExecutor,
+    client: new OllamaClient(ollamaOptions), toolExecutor: configuredToolExecutor,
     model: options.model ?? process.env.OLLAMA_MODEL ?? DEFAULT_OLLAMA_MODEL, logger,
   });
   const fastResearchService = new FastResearchService({
     modusResultsService,
+    pdcTournamentService,
     playerMatchesService,
     playerResolver,
     logger,

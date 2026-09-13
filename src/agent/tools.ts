@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ModusPlayersService } from "../modus/service.js";
 import type { OfficialModusResultsService } from "../modus/results-service.js";
+import type { PdcTournamentService } from "../pdc/service.js";
 import type { PlayerMatchesService } from "../services/player-matches.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import { resolveResearchDate } from "./date.js";
@@ -17,6 +18,7 @@ export type AgentToolResult =
 export interface DartsAgentToolDependencies {
   modusService: Pick<ModusPlayersService, "getModusPlayers">;
   modusResultsService?: Pick<OfficialModusResultsService, "getResults">;
+  pdcTournamentService?: Pick<PdcTournamentService, "getResultsForDate">;
   playerMatchesService: Pick<PlayerMatchesService, "getLastMatches">;
   now?: () => Date;
   timeZone?: string;
@@ -26,6 +28,7 @@ export const AGENT_TOOL_DEFINITIONS: readonly Readonly<Record<string, unknown>>[
   { type: "function", function: { name: "resolveDate", description: "Resolve an explicit or relative English/Hungarian date expression to an ISO date in Europe/Budapest.", parameters: { type: "object", additionalProperties: false, required: ["expression"], properties: { expression: { type: "string" } } } } },
   { type: "function", function: { name: "getModusPlayers", description: "Get the confirmed MODUS Super Series players scheduled on an ISO date.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
   { type: "function", function: { name: "getModusResults", description: "Get the authoritative official MODUS Super Series daily matches, scores, per-match three-dart averages, and cumulative weekly player averages for an ISO date. Use this for current/latest MODUS results instead of DartsOrakel.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
+  { type: "function", function: { name: "getPdcResults", description: "Get verified PDC tournament results for an ISO date, including European Tour, Masters, major, World Series, and other PDC events covered by the calendar. This is separate from MODUS.", parameters: { type: "object", additionalProperties: false, required: ["date"], properties: { date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } } } } },
   { type: "function", function: { name: "getPlayerMatches", description: "Get a player's latest completed DartsOrakel matches with per-match average, 180 count, checkout percentage, and a deterministic summary.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
   { type: "function", function: { name: "getPlayerMatchAverage", description: "Deterministically calculate a player's latest-match mean average, total 180s, weighted checkout percentage, raw checkout counts, and metric coverage.", parameters: { type: "object", additionalProperties: false, required: ["player", "limit"], properties: { player: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 1000 } } } } },
 ];
@@ -50,6 +53,11 @@ export class DartsAgentToolExecutor {
           const args = ModusPlayersArgumentsSchema.parse(normalizeArguments(call.arguments));
           if (this.dependencies.modusResultsService === undefined) throw new Error("The official MODUS results service is not configured.");
           return { ok: true, data: await this.dependencies.modusResultsService.getResults(args.date, signal) };
+        }
+        case "getPdcResults": {
+          const args = ModusPlayersArgumentsSchema.parse(normalizeArguments(call.arguments));
+          if (this.dependencies.pdcTournamentService === undefined) throw new Error("The PDC tournament service is not configured.");
+          return { ok: true, data: { date: args.date, source: "pdc", results: await this.dependencies.pdcTournamentService.getResultsForDate(args.date) } };
         }
         case "getPlayerMatches": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
