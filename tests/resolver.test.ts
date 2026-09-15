@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { PlayerNotFoundError } from "../src/errors.js";
+import { PlayerAmbiguousError, PlayerNotFoundError } from "../src/errors.js";
 import { PlayerResolver, normalizePlayerName, playerIdentityFromStatsRow } from "../src/player/resolver.js";
 import type { PlayerStatsResponse } from "../src/schemas/player.js";
 import { readPlayerStatsFixture } from "./helpers.js";
@@ -84,5 +84,40 @@ describe("player resolver", () => {
     await resolver.resolvePlayer("Damon Heta");
 
     expect(getPlayerStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves a unique partial name and a high-confidence typo", async () => {
+    const base = readPlayerStatsFixture().data[0];
+    if (base === undefined) throw new Error("Fixture must contain a player.");
+    const response: PlayerStatsResponse = {
+      draw: 0,
+      recordsTotal: 3,
+      recordsFiltered: 3,
+      data: [
+        { ...base, player_key: 1001, player_name: "Gian van Veen", player_profile_url: "https://dartsorakel.com/player/details/1001/gian-van-veen" },
+        { ...base, player_key: 1002, player_name: "Danny Noppert", player_profile_url: "https://dartsorakel.com/player/details/1002/danny-noppert" },
+        { ...base, player_key: 1003, player_name: "Rob Cross", player_profile_url: "https://dartsorakel.com/player/details/1003/rob-cross" },
+      ],
+    };
+    const resolver = resolverFor(response);
+
+    await expect(resolver.resolvePlayer("van veen")).resolves.toMatchObject({ name: "Gian van Veen" });
+    await expect(resolver.resolvePlayer("danny nopper")).resolves.toMatchObject({ name: "Danny Noppert" });
+  });
+
+  it("rejects ambiguous partial names instead of guessing", async () => {
+    const base = readPlayerStatsFixture().data[0];
+    if (base === undefined) throw new Error("Fixture must contain a player.");
+    const response: PlayerStatsResponse = {
+      draw: 0,
+      recordsTotal: 2,
+      recordsFiltered: 2,
+      data: [
+        { ...base, player_key: 2001, player_name: "Michael Smith", player_profile_url: "https://dartsorakel.com/player/details/2001/michael-smith" },
+        { ...base, player_key: 2002, player_name: "Ross Smith", player_profile_url: "https://dartsorakel.com/player/details/2002/ross-smith" },
+      ],
+    };
+
+    await expect(resolverFor(response).resolvePlayer("smith")).rejects.toBeInstanceOf(PlayerAmbiguousError);
   });
 });

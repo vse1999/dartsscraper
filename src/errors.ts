@@ -6,14 +6,24 @@ export class DartsOrakelError extends Error {
 }
 
 export class PlayerNotFoundError extends DartsOrakelError {
-  public constructor(name: string) {
+  public readonly requestedName: string;
+  public readonly suggestions: readonly string[];
+
+  public constructor(name: string, suggestions: readonly string[] = []) {
     super(`No DartsOrakel player matched ${JSON.stringify(name)}.`);
+    this.requestedName = name;
+    this.suggestions = suggestions;
   }
 }
 
 export class PlayerAmbiguousError extends DartsOrakelError {
+  public readonly requestedName: string;
+  public readonly matches: readonly string[];
+
   public constructor(name: string, matches: readonly string[]) {
     super(`Player name ${JSON.stringify(name)} is ambiguous: ${matches.join(", ")}.`);
+    this.requestedName = name;
+    this.matches = matches;
   }
 }
 

@@ -20,7 +20,7 @@ import {
   type StatsMessageResponder,
 } from "../src/telegram/bot.js";
 import { formatPlayerStats, TELEGRAM_MAX_TEXT_LENGTH } from "../src/telegram/formatter.js";
-import { parseStatsQuery, statsQueryUsage } from "../src/telegram/query.js";
+import { parseStatsBatchQuery, parseStatsQuery, statsQueryUsage } from "../src/telegram/query.js";
 import {
   DartsPlayerStatsService,
   type PlayerMatchesReader,
@@ -206,6 +206,19 @@ describe("Telegram query parser", () => {
     expect(parseStatsQuery("show Rob Cross statistics")).toBeNull();
     expect(parseStatsQuery(`${"x".repeat(81)} last 10 match averages`)).toBeNull();
     expect(statsQueryUsage()).toContain("1-20");
+  });
+
+  it("parses a comma-separated batch and removes case-insensitive duplicates", () => {
+    expect(parseStatsBatchQuery("Luke Littler, Danny Noppert, Rob Cross, James Wade, luke littler last 10 matches")).toEqual({
+      playerNames: ["Luke Littler", "Danny Noppert", "Rob Cross", "James Wade"],
+      matchCount: 10,
+      source: "auto",
+    });
+  });
+
+  it("rejects malformed or oversized batches", () => {
+    expect(parseStatsBatchQuery("Luke Littler, , Rob Cross last 10 matches")).toBeNull();
+    expect(parseStatsBatchQuery("A, B, C, D, E, F last 10 matches")).toBeNull();
   });
 });
 
@@ -462,6 +475,56 @@ describe("Telegram request handler", () => {
     );
 
     expect(calls).toEqual([{ playerName: "Dylan Slevin", matchCount: 10, source: "modus" }]);
+  });
+
+  it("processes a batch sequentially, sends one result per player, and reports progress", async () => {
+    const calls: string[] = [];
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (playerName, matchCount, source): Promise<PlayerStatsResult> => {
+        calls.push(`${playerName}:${matchCount}:${source}`);
+        return result({ playerName, requestedCount: matchCount });
+      },
+    };
+    const responder = new MemoryResponder();
+
+    const outcome = await handleStatsText(
+      "Luke Littler, Rob Cross last 2 matches from DartsOrakel",
+      service,
+      responder,
+      new MemoryLogger(),
+      45,
+    );
+
+    expect(outcome).toBe("success");
+    expect(calls).toEqual(["Luke Littler:2:dartsorakel", "Rob Cross:2:dartsorakel"]);
+    expect(responder.replies[0]).toBe("Looking up 0/2 players…");
+    expect(responder.replies.slice(1)).toHaveLength(2);
+    expect(responder.replies[1]).toContain("🎯 Luke Littler");
+    expect(responder.replies[2]).toContain("🎯 Rob Cross");
+    expect(responder.edits.at(-1)?.text).toBe("Completed: 2 succeeded, 0 failed.");
+  });
+
+  it("continues after a failed player and includes a corrected-name notice", async () => {
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (playerName): Promise<PlayerStatsResult> => {
+        if (playerName === "Danny Nopper") throw new PlayerNotFoundError(playerName, ["Danny Noppert"]);
+        return result({ playerName: "Gian van Veen" });
+      },
+    };
+    const responder = new MemoryResponder();
+
+    const outcome = await handleStatsText(
+      "Danny Nopper, van veen last 10 matches",
+      service,
+      responder,
+      new MemoryLogger(),
+      46,
+    );
+
+    expect(outcome).toBe("success");
+    expect(responder.replies[1]).toContain("Suggestions: Danny Noppert.");
+    expect(responder.replies[2]).toContain("Matched “van veen” to Gian van Veen");
+    expect(responder.edits.at(-1)?.text).toBe("Completed: 1 succeeded, 1 failed.");
   });
 
   it("replaces the status message with a successful result", async () => {

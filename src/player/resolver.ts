@@ -7,6 +7,12 @@ import {
   type PlayerStatsRow,
 } from "../schemas/player.js";
 
+const MIN_FUZZY_INPUT_LENGTH = 5;
+const MAX_FUZZY_DISTANCE = 2;
+const MIN_FUZZY_SCORE = 0.86;
+const MIN_FUZZY_MARGIN = 0.08;
+const MAX_SUGGESTIONS = 3;
+
 export class PlayerResolver {
   private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
   private directoryPromise: Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> | undefined;
@@ -23,17 +29,34 @@ export class PlayerResolver {
 
     const directory = await this.directory();
     const candidates = directory.get(normalizedRequestedName) ?? [];
-    if (candidates.length === 0) {
-      throw new PlayerNotFoundError(name);
-    }
     if (candidates.length > 1) {
       throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.name));
     }
-    const candidate = candidates[0];
-    if (candidate === undefined) {
-      throw new PlayerNotFoundError(name);
+    const exactCandidate = candidates[0];
+    if (exactCandidate !== undefined) return exactCandidate;
+
+    const uniquePlayers = uniqueDirectoryPlayers(directory);
+    const queryTokens = searchable(name).split(" ").filter((token: string): boolean => token !== "");
+    const partialCandidates = uniquePlayers.filter((candidate: PlayerIdentity): boolean => {
+      return containsTokenPhrase(searchable(candidate.name).split(" "), queryTokens);
+    });
+    if (partialCandidates.length > 1) {
+      throw new PlayerAmbiguousError(name, partialCandidates.map((candidate) => candidate.name));
     }
-    return candidate;
+    const partialCandidate = partialCandidates[0];
+    if (partialCandidate !== undefined) return partialCandidate;
+
+    const fuzzyCandidates = rankFuzzyCandidates(name, uniquePlayers);
+    const first = fuzzyCandidates[0];
+    if (first !== undefined && first.score >= MIN_FUZZY_SCORE && first.distance <= MAX_FUZZY_DISTANCE) {
+      const second = fuzzyCandidates[1];
+      if (second !== undefined && first.score - second.score < MIN_FUZZY_MARGIN) {
+        throw new PlayerAmbiguousError(name, fuzzyCandidates.slice(0, MAX_SUGGESTIONS).map((candidate) => candidate.player.name));
+      }
+      return first.player;
+    }
+
+    throw new PlayerNotFoundError(name, suggestionNames(fuzzyCandidates));
   }
 
   public async findMention(text: string): Promise<PlayerIdentity | undefined> {
@@ -93,6 +116,85 @@ function searchable(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+interface FuzzyCandidate {
+  readonly player: PlayerIdentity;
+  readonly distance: number;
+  readonly score: number;
+}
+
+function uniqueDirectoryPlayers(
+  directory: ReadonlyMap<string, readonly PlayerIdentity[]>,
+): readonly PlayerIdentity[] {
+  const players = new Map<number, PlayerIdentity>();
+  for (const candidates of directory.values()) {
+    for (const player of candidates) players.set(player.id, player);
+  }
+  return [...players.values()];
+}
+
+function rankFuzzyCandidates(
+  requestedName: string,
+  players: readonly PlayerIdentity[],
+): readonly FuzzyCandidate[] {
+  const query = searchable(requestedName);
+  if (query.length < MIN_FUZZY_INPUT_LENGTH) return [];
+  return players
+    .map((player: PlayerIdentity): FuzzyCandidate => {
+      const queryTokens = query.split(" ");
+      const candidateTokens = searchable(player.name).split(" ");
+      const representations = [searchable(player.name), ...tokenWindows(candidateTokens, queryTokens.length)];
+      const distance = Math.min(...representations.map((representation: string): number => levenshteinDistance(query, representation)));
+      const score = 1 - distance / Math.max(query.length, searchable(player.name).length);
+      return { player, distance, score };
+    })
+    .sort((left: FuzzyCandidate, right: FuzzyCandidate): number => {
+      return right.score - left.score || left.distance - right.distance || left.player.name.localeCompare(right.player.name);
+    });
+}
+
+function suggestionNames(candidates: readonly FuzzyCandidate[]): readonly string[] {
+  return candidates
+    .filter((candidate: FuzzyCandidate): boolean => candidate.score >= 0.45)
+    .slice(0, MAX_SUGGESTIONS)
+    .map((candidate: FuzzyCandidate): string => candidate.player.name);
+}
+
+function tokenWindows(tokens: readonly string[], length: number): readonly string[] {
+  if (length <= 0 || length > tokens.length) return [];
+  const windows: string[] = [];
+  for (let start = 0; start <= tokens.length - length; start += 1) {
+    windows.push(tokens.slice(start, start + length).join(" "));
+  }
+  return windows;
+}
+
+function containsTokenPhrase(candidateTokens: readonly string[], queryTokens: readonly string[]): boolean {
+  if (queryTokens.length === 0 || queryTokens.length > candidateTokens.length) return false;
+  for (let start = 0; start <= candidateTokens.length - queryTokens.length; start += 1) {
+    if (queryTokens.every((token: string, index: number): boolean => candidateTokens[start + index] === token)) return true;
+  }
+  return false;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index: number): number => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+      current[rightIndex] = Math.min(
+        (current[rightIndex - 1] ?? Number.POSITIVE_INFINITY) + 1,
+        (previous[rightIndex] ?? Number.POSITIVE_INFINITY) + 1,
+        (previous[rightIndex - 1] ?? Number.POSITIVE_INFINITY) + substitutionCost,
+      );
+    }
+    for (let index = 0; index < current.length; index += 1) {
+      previous[index] = current[index] ?? Number.POSITIVE_INFINITY;
+    }
+  }
+  return previous[right.length] ?? Number.POSITIVE_INFINITY;
 }
 
 export function playerIdentityFromStatsRow(row: PlayerStatsRow): PlayerIdentity {

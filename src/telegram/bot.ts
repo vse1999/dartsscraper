@@ -12,7 +12,7 @@ import {
 } from "../errors.js";
 import { ConsoleLogger, type Logger } from "../logger.js";
 import { isOwnerPrivateChat, parseAllowedUserId } from "./authorization.js";
-import { formatPlayerStats } from "./formatter.js";
+import { formatPlayerStats, TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
 import {
   handleModusReportCommand,
   type BackgroundTaskScheduler,
@@ -23,12 +23,14 @@ import {
   MODUS_PLAYER_CALLBACK_PATTERN,
   resolveModusPlayerCallback,
 } from "./modus-player-callback.js";
-import { parseStatsQuery, statsQueryUsage, type StatsQuery } from "./query.js";
+import { parseStatsBatchQuery, statsQueryUsage, type StatsBatchQuery, type StatsQuery } from "./query.js";
 import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
+import { normalizePlayerName } from "../player/resolver.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
+const BATCH_TIMEOUT_MS = 150_000;
 export const TELEGRAM_BOT_RELEASE = "modus-dashboard-v5";
 
 export interface BotEnvironment {
@@ -229,7 +231,7 @@ export async function handleStatsText(
   logger: Logger,
   updateId: number,
 ): Promise<StatsHandlerOutcome> {
-  const query = parseStatsQuery(text);
+  const query = parseStatsBatchQuery(text);
   if (query === null) {
     logger.info("Telegram statistics query rejected.", {
       updateId,
@@ -240,7 +242,113 @@ export async function handleStatsText(
     return "invalid-query";
   }
 
-  return handleStatsQuery(query, statsService, responder, logger, updateId);
+  if (query.playerNames.length === 1) {
+    const playerName = query.playerNames[0];
+    if (playerName === undefined) return "invalid-query";
+    return handleStatsQuery(
+      { playerName, matchCount: query.matchCount, source: query.source },
+      statsService,
+      responder,
+      logger,
+      updateId,
+    );
+  }
+  return handleStatsBatchQuery(query, statsService, responder, logger, updateId);
+}
+
+async function handleStatsBatchQuery(
+  query: StatsBatchQuery,
+  statsService: PlayerStatsReader,
+  responder: StatsMessageResponder,
+  logger: Logger,
+  updateId: number,
+): Promise<StatsHandlerOutcome> {
+  const startedAt = Date.now();
+  const total = query.playerNames.length;
+  const status = await responder.reply(`Looking up 0/${total} players…`);
+  let succeeded = 0;
+  let failed = 0;
+  let firstFailure: Exclude<StatsHandlerOutcome, "invalid-query" | "success"> | undefined;
+
+  for (let index = 0; index < total; index += 1) {
+    const requestedName = query.playerNames[index];
+    if (requestedName === undefined) continue;
+
+    let message: string;
+    let outcome: Exclude<StatsHandlerOutcome, "invalid-query">;
+    if (Date.now() - startedAt >= BATCH_TIMEOUT_MS) {
+      message = `⏱️ Skipped “${requestedName}”: the batch time limit was reached.`;
+      outcome = "upstream-timeout";
+    } else {
+      const playerStartedAt = Date.now();
+      try {
+        const result = await statsService.getPlayerStats(requestedName, query.matchCount, query.source);
+        message = formatResolvedPlayerStats(requestedName, result);
+        outcome = "success";
+        logger.info("Player statistics lookup completed.", {
+          updateId,
+          durationMs: Date.now() - playerStartedAt,
+          requestedCount: query.matchCount,
+          returnedCount: result.matches.length,
+          provider: result.provider,
+          requestedSource: query.source,
+          batchIndex: index,
+          batchSize: total,
+        });
+      } catch (error: unknown) {
+        const failure = publicFailure(error);
+        message = formatBatchFailure(requestedName, failure.message);
+        outcome = failure.outcome;
+        logger.warn("Player statistics lookup failed.", {
+          updateId,
+          durationMs: Date.now() - playerStartedAt,
+          code: failure.outcome,
+          batchIndex: index,
+          batchSize: total,
+          ...(error instanceof DartsOrakelRequestError && error.status !== undefined
+            ? { upstreamStatus: error.status }
+            : {}),
+        });
+      }
+    }
+
+    await responder.reply(message);
+    if (outcome === "success") succeeded += 1;
+    else {
+      failed += 1;
+      firstFailure ??= outcome;
+    }
+    try {
+      await responder.edit(status.messageId, formatBatchProgress(index + 1, total, succeeded, failed));
+    } catch {
+      logger.warn("Telegram batch progress message could not be edited.", {
+        updateId,
+        code: "TELEGRAM_BATCH_PROGRESS_EDIT_FAILED",
+      });
+    }
+  }
+
+  const summary = `Completed: ${succeeded} succeeded, ${failed} failed.`;
+  try {
+    await responder.edit(status.messageId, summary);
+  } catch {
+    logger.warn("Telegram batch summary could not be edited; using a new message.", {
+      updateId,
+      code: "TELEGRAM_BATCH_SUMMARY_EDIT_FAILED",
+    });
+    try {
+      await responder.reply(summary);
+    } catch {
+      logger.error("Telegram batch summary could not be delivered.", {
+        updateId,
+        code: "TELEGRAM_BATCH_SUMMARY_SEND_FAILED",
+      });
+      throw new Error("Telegram batch summary delivery failed.");
+    }
+  }
+
+  if (succeeded > 0) return "success";
+  return firstFailure ?? "internal-error";
 }
 
 async function handleStatsQuery(
@@ -311,15 +419,40 @@ function botHelpText(): string {
   return `${statsQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
+function formatResolvedPlayerStats(
+  requestedName: string,
+  result: Awaited<ReturnType<PlayerStatsReader["getPlayerStats"]>>,
+): string {
+  const formatted = formatPlayerStats(result);
+  if (normalizePlayerName(requestedName) === normalizePlayerName(result.playerName)) return formatted;
+  const notice = `Matched “${requestedName}” to ${result.playerName}`;
+  const prefix = `${notice}\n\n`;
+  if (prefix.length + formatted.length <= TELEGRAM_MAX_TEXT_LENGTH) return `${prefix}${formatted}`;
+  const availableBodyLength = TELEGRAM_MAX_TEXT_LENGTH - prefix.length - 1;
+  return `${prefix}${formatted.slice(0, Math.max(0, availableBodyLength))}…`;
+}
+
+function formatBatchFailure(requestedName: string, message: string): string {
+  return `❌ ${requestedName}\n${message}`;
+}
+
+function formatBatchProgress(completed: number, total: number, succeeded: number, failed: number): string {
+  return `Looking up ${completed}/${total} players…\nSucceeded: ${succeeded} · Failed: ${failed}`;
+}
+
 function publicFailure(error: unknown): {
   readonly outcome: Exclude<StatsHandlerOutcome, "invalid-query" | "success">;
   readonly message: string;
 } {
   if (error instanceof PlayerNotFoundError) {
-    return { outcome: "player-not-found", message: "Player not found. Check the exact full name and try again." };
+    const suggestions = error.suggestions.length === 0
+      ? ""
+      : ` Suggestions: ${error.suggestions.join(", ")}.`;
+    return { outcome: "player-not-found", message: `Player not found. Check the name and try again.${suggestions}` };
   }
   if (error instanceof PlayerAmbiguousError) {
-    return { outcome: "player-ambiguous", message: "That player name is ambiguous. Send the exact full name." };
+    const matches = error.matches.length === 0 ? "" : ` Matches: ${error.matches.join(", ")}.`;
+    return { outcome: "player-ambiguous", message: `That player name is ambiguous. Send a more specific name.${matches}` };
   }
   if (error instanceof InsufficientMatchDataError) {
     return { outcome: "no-matches", message: "No completed matches were found for that player." };

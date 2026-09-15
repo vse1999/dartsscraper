@@ -1,10 +1,17 @@
 export const MAX_PLAYER_NAME_LENGTH = 80;
 export const MAX_MATCH_COUNT = 20;
+export const MAX_BATCH_PLAYERS = 5;
 
 export type PlayerStatsSource = "auto" | "modus" | "dartsorakel";
 
 export interface StatsQuery {
   readonly playerName: string;
+  readonly matchCount: number;
+  readonly source: PlayerStatsSource;
+}
+
+export interface StatsBatchQuery {
+  readonly playerNames: readonly string[];
   readonly matchCount: number;
   readonly source: PlayerStatsSource;
 }
@@ -23,6 +30,14 @@ const STATISTIC_TERMS = new Set([
 ]);
 
 export function parseStatsQuery(text: string): StatsQuery | null {
+  const batch = parseStatsBatchQuery(text);
+  if (batch === null || batch.playerNames.length !== 1) return null;
+  const playerName = batch.playerNames[0];
+  if (playerName === undefined) return null;
+  return { playerName, matchCount: batch.matchCount, source: batch.source };
+}
+
+export function parseStatsBatchQuery(text: string): StatsBatchQuery | null {
   const normalized = text.normalize("NFKC").trim().replace(/\s+/gu, " ");
   const sourceRequest = extractSource(normalized);
   if (sourceRequest === null) return null;
@@ -33,11 +48,23 @@ export function parseStatsQuery(text: string): StatsQuery | null {
   const statisticsSuffix = match[3];
   if (statisticsSuffix !== undefined && !isStatisticsSuffix(statisticsSuffix)) return null;
 
-  const playerName = match[1]?.trim().replace(/[’']s$/iu, "").trim() ?? "";
+  const playerList = match[1]?.trim().replace(/[’']s$/iu, "").trim() ?? "";
   const matchCount = Number(match[2]);
+  const playerNames = playerList.split(",").map((name: string): string => name.trim());
+  const uniqueNames: string[] = [];
+  const seenNames = new Set<string>();
+  for (const playerName of playerNames) {
+    const key = playerName.toLocaleLowerCase("en-US");
+    if (seenNames.has(key)) continue;
+    seenNames.add(key);
+    uniqueNames.push(playerName);
+  }
   if (
-    playerName.length === 0
-    || playerName.length > MAX_PLAYER_NAME_LENGTH
+    playerList.length === 0
+    || playerNames.length === 0
+    || playerNames.some((name: string): boolean => name === "")
+    || uniqueNames.length > MAX_BATCH_PLAYERS
+    || uniqueNames.some((name: string): boolean => name.length > MAX_PLAYER_NAME_LENGTH)
     || !Number.isSafeInteger(matchCount)
     || matchCount < 1
     || matchCount > MAX_MATCH_COUNT
@@ -45,12 +72,13 @@ export function parseStatsQuery(text: string): StatsQuery | null {
     return null;
   }
 
-  return { playerName, matchCount, source: sourceRequest.source };
+  return { playerNames: uniqueNames, matchCount, source: sourceRequest.source };
 }
 
 export function statsQueryUsage(): string {
   return [
     `Ask: <player name> last <1-${MAX_MATCH_COUNT}> matches`,
+    `For multiple players, separate names with commas (up to ${MAX_BATCH_PLAYERS}): Luke Littler, Rob Cross last 10 matches`,
     "Examples:",
     "Dylan Slevin last 10 match",
     "Dylan Slevin last 10 matches from MODUS",
