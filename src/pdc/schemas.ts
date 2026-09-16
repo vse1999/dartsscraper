@@ -74,7 +74,35 @@ export const PdcTournamentResultSchema = z.object({
 
 export type PdcTournamentResult = z.infer<typeof PdcTournamentResultSchema>;
 
+export const PdcFixtureSchema = z.object({
+  id: z.string().trim().min(1),
+  tournamentName: z.string().trim().min(1),
+  date: IsoDateSchema,
+  startTime: z.string().datetime({ offset: true }).nullable(),
+  session: z.string().trim().min(1).nullable(),
+  round: z.string().trim().min(1).nullable(),
+  playerOne: z.string().trim().min(1),
+  playerTwo: z.string().trim().min(1),
+  sourceUrl: z.string().url(),
+}).strict().superRefine((fixture, context) => {
+  if (fixture.playerOne.normalize("NFKC").toLocaleLowerCase("en-US")
+    === fixture.playerTwo.normalize("NFKC").toLocaleLowerCase("en-US")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "A PDC fixture must contain two different players.",
+      path: ["playerTwo"],
+    });
+  }
+});
+
+export type PdcFixture = z.infer<typeof PdcFixtureSchema>;
+
 export interface PdcTournamentSource {
   getCalendar(year: number, category: PdcCalendarCategory): Promise<readonly PdcTournamentEvent[]>;
   getResults(event: PdcTournamentEvent): Promise<PdcTournamentResult>;
+}
+
+export interface PdcFixtureSource {
+  readonly name: string;
+  getFixtures(date: string): Promise<readonly PdcFixture[]>;
 }

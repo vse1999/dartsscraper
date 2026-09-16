@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DartsNerdModusSource, parsePlayersForDate } from "../src/modus/darts-nerd-source.js";
+import { DartsNerdModusSource, parseFixturesForDate, parsePlayersForDate } from "../src/modus/darts-nerd-source.js";
 import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
 import { OfficialModusSource } from "../src/modus/official-source.js";
 import { ModusPlayersService } from "../src/modus/service.js";
@@ -25,6 +25,22 @@ function source(name: string, result: readonly string[] | Error): ModusFixtureSo
 describe("MODUS discovery", () => {
   it("extracts and deduplicates only the requested date", () => {
     expect(parsePlayersForDate(html, "2026-08-10")).toEqual(["van Peer B.", "Drayton J.", "Cressey G."]);
+  });
+  it("extracts paired fixtures with time and stable source identity", () => {
+    const fixtures = parseFixturesForDate(previewHtml, "2026-09-14", {
+      modusOnly: true,
+      baseUrl: "https://www.darts-nerd.com",
+      pageUrl: "https://www.darts-nerd.com/en/matches/preview",
+    });
+
+    expect(fixtures).toHaveLength(2);
+    expect(fixtures[0]).toMatchObject({
+      id: "https://www.darts-nerd.com/en/federations/modus/super-series/2026/matches/howson-r-vs-evans-d-14-09-2026",
+      startTime: "2026-09-14T08:40:00Z",
+      playerOne: "Howson R.",
+      playerTwo: "Evans D.",
+      source: "https://www.darts-nerd.com/en/federations/modus/super-series/2026/matches/howson-r-vs-evans-d-14-09-2026",
+    });
   });
   it("resolves provider abbreviations deterministically", async () => {
     const resolver = new FixtureNameResolver({ getPlayerStats: async () => playerStats(["Berry van Peer", "Carlo van Peer", "Jack Drayton", "George Cressey"]) });
@@ -55,6 +71,31 @@ describe("MODUS discovery", () => {
     const official = new OfficialModusSource({ fetchImpl: vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify(payload), { status: 200 })) });
     await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["One Player", "Two Player"]);
     await expect(official.getPlayers("2026-08-11")).resolves.toEqual([]);
+  });
+  it("parses paired fixtures from the official daily feed", async () => {
+    const payload = {
+      date: "2026-08-10",
+      summaries: [{
+        sport_event: {
+          id: "sr:match:123",
+          start_time: "2026-08-10T09:30:00Z",
+          competitors: [{ name: "One Player" }, { name: "Two Player" }],
+        },
+      }],
+    };
+    const official = new OfficialModusSource({
+      fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 }),
+    });
+
+    await expect(official.getFixtures("2026-08-10")).resolves.toEqual([{
+      id: "sr:match:123",
+      event: "MODUS Super Series",
+      date: "2026-08-10",
+      startTime: "2026-08-10T09:30:00Z",
+      playerOne: "One Player",
+      playerTwo: "Two Player",
+      source: "https://modussuperseries.com/live-scores-json.php",
+    }]);
   });
   it("canonicalizes official comma names and excludes bracket placeholders", async () => {
     const payload = { date: "2026-08-10", summaries: [{ sport_event: { competitors: [{ name: "Branley, Ryan" }, { name: "Winner Group 1" }, { name: "Runner Up Group 2" }] } }] };
@@ -130,6 +171,34 @@ describe("MODUS discovery", () => {
     await service.getModusPlayers("2026-09-14");
 
     expect(writes).toMatchObject([{ key: "modus-players-v3-2026-09-14", ttlMs: 30 * 60 * 1000 }]);
+  });
+  it("falls back and caches paired fixtures independently from the player roster", async () => {
+    const writes: { key: string; value: unknown; ttlMs: number }[] = [];
+    const pairedSource: ModusFixtureSource = {
+      name: "paired preview",
+      sourceUrl: () => "https://example.test/preview",
+      getPlayers: async () => ["One Player", "Two Player"],
+      getFixtures: async () => [{
+        id: "fixture-1",
+        event: "MODUS Super Series",
+        date: "2026-09-14",
+        startTime: "2026-09-14T08:40:00Z",
+        playerOne: "One Player",
+        playerTwo: "Two Player",
+        source: "https://example.test/fixture-1",
+      }],
+    };
+    const service = new ModusPlayersService({
+      sources: [source("unpaired", ["Ignored Player"]), pairedSource],
+      cache: { get: async () => null, set: async (key, value, ttlMs) => { writes.push({ key, value, ttlMs }); } },
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    });
+
+    const result = await service.getModusFixtures("2026-09-14");
+
+    expect(result.fixtures).toHaveLength(1);
+    expect(result.fixtures[0]?.playerOne).toBe("One Player");
+    expect(writes).toMatchObject([{ key: "modus-fixtures-v1-2026-09-14", ttlMs: 30 * 60 * 1000 }]);
   });
   it("reports all unavailable sources", async () => {
     const service = new ModusPlayersService({ sources: [source("official", new Error("offline")), source("fallback", [])] });

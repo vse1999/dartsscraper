@@ -3,7 +3,7 @@ import type { Element } from "domhandler";
 import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import type { FixtureNameResolver } from "./fixture-name-resolver.js";
-import type { ModusFixtureSource } from "./schemas.js";
+import { ModusFixtureSchema, type ModusFixture, type ModusFixtureSource } from "./schemas.js";
 
 const DEFAULT_BASE_URL = "https://www.darts-nerd.com";
 const PREVIEW_PATH = "/en/matches/preview";
@@ -60,20 +60,45 @@ export class DartsNerdModusSource implements ModusFixtureSource {
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const names = parsePlayersForDate(await response.text(), validatedDate, { modusOnly: url === this.previewUrl });
-      return Promise.all(names.map(async (name: string): Promise<string> => {
-        try {
-          return await this.resolver.resolve(name);
-        } catch (error: unknown) {
-          this.logger.warn("MODUS fixture player could not be resolved; preserving provider label.", {
-            source: this.name,
-            date: validatedDate,
-            player: name,
-            errorType: error instanceof Error ? error.name : "UnknownError",
-          });
-          return name;
-        }
-      }));
+      return Promise.all(names.map((name: string): Promise<string> => this.resolveName(name, validatedDate)));
     } finally { clearTimeout(timeout); }
+  }
+
+  public async getFixtures(date: string): Promise<readonly ModusFixture[]> {
+    const validatedDate = IsoDateSchema.parse(date);
+    const pageUrl = this.sourceUrl(validatedDate);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(pageUrl, {
+        headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.2" }, signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const fixtures = parseFixturesForDate(await response.text(), validatedDate, {
+        modusOnly: pageUrl === this.previewUrl,
+        baseUrl: this.baseUrl,
+        pageUrl,
+      });
+      return Promise.all(fixtures.map(async (fixture): Promise<ModusFixture> => ModusFixtureSchema.parse({
+        ...fixture,
+        playerOne: await this.resolveName(fixture.playerOne, validatedDate),
+        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate),
+      })));
+    } finally { clearTimeout(timeout); }
+  }
+
+  private async resolveName(name: string, date: string): Promise<string> {
+    try {
+      return await this.resolver.resolve(name);
+    } catch (error: unknown) {
+      this.logger.warn("MODUS fixture player could not be resolved; preserving provider label.", {
+        source: this.name,
+        date,
+        player: name,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return name;
+    }
   }
 
   private seasonUrl(date: string): string {
@@ -83,6 +108,45 @@ export class DartsNerdModusSource implements ModusFixtureSource {
 
 export interface ParsePlayersForDateOptions {
   readonly modusOnly?: boolean;
+}
+
+export interface ParseFixturesForDateOptions extends ParsePlayersForDateOptions {
+  readonly baseUrl?: string;
+  readonly pageUrl?: string;
+}
+
+export function parseFixturesForDate(
+  html: string,
+  date: string,
+  options: ParseFixturesForDateOptions = {},
+): readonly ModusFixture[] {
+  const validatedDate = IsoDateSchema.parse(date);
+  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  const pageUrl = options.pageUrl ?? `${baseUrl}${PREVIEW_PATH}`;
+  const $ = cheerio.load(html);
+  const fixtures: ModusFixture[] = [];
+  $(".hm-match").each((index, matchElement) => {
+    const match = $(matchElement);
+    if (options.modusOnly === true && !isModusMatch(match)) return;
+    const startTime = match.find(".hm-time[data-utc]").first().attr("data-utc");
+    if (startTime?.slice(0, 10) !== validatedDate) return;
+    const names = match.find(".hm-name").map((_nameIndex, nameElement) => normalizeFixtureName($(nameElement).text())).get();
+    if (names.length !== 2 || names.some((name) => !isNamedPlayer(name))) return;
+    const playerOne = names[0];
+    const playerTwo = names[1];
+    if (playerOne === undefined || playerTwo === undefined) return;
+    const matchUrl = resolveMatchUrl(match, baseUrl) ?? pageUrl;
+    fixtures.push(ModusFixtureSchema.parse({
+      id: resolveMatchUrl(match, baseUrl) ?? `darts-nerd:${validatedDate}:${index + 1}:${playerOne}:${playerTwo}`,
+      event: "MODUS Super Series",
+      date: validatedDate,
+      startTime,
+      playerOne,
+      playerTwo,
+      source: matchUrl,
+    }));
+  });
+  return fixtures;
 }
 
 export function parsePlayersForDate(
@@ -115,6 +179,16 @@ function isModusMatch(match: cheerio.Cheerio<Element>): boolean {
     return MODUS_MATCH_PATH_PATTERN.test(url.pathname);
   } catch {
     return false;
+  }
+}
+
+function resolveMatchUrl(match: cheerio.Cheerio<Element>, baseUrl: string): string | undefined {
+  const href = match.attr("href") ?? match.find("a[href]").first().attr("href");
+  if (href === undefined || href.trim() === "") return undefined;
+  try {
+    return new URL(href, baseUrl).toString();
+  } catch {
+    return undefined;
   }
 }
 

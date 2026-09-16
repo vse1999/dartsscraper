@@ -80,8 +80,8 @@ export { createOllamaHealthChecker } from "./chat/ollama-health.js";
 export type { OllamaHealthChecker, OllamaHealthCheckerOptions, OllamaHealthResult, OllamaHealthStatus } from "./chat/ollama-health.js";
 export { OllamaClient } from "./agent/ollama-client.js";
 export { AGENT_TOOL_DEFINITIONS, DartsAgentToolExecutor } from "./agent/tools.js";
-export { DartsNerdModusSource, parsePlayersForDate } from "./modus/darts-nerd-source.js";
-export type { DartsNerdModusSourceOptions, ParsePlayersForDateOptions } from "./modus/darts-nerd-source.js";
+export { DartsNerdModusSource, parseFixturesForDate, parsePlayersForDate } from "./modus/darts-nerd-source.js";
+export type { DartsNerdModusSourceOptions, ParseFixturesForDateOptions, ParsePlayersForDateOptions } from "./modus/darts-nerd-source.js";
 export { FixtureNameResolver } from "./modus/fixture-name-resolver.js";
 export { OfficialModusSource } from "./modus/official-source.js";
 export {
@@ -110,14 +110,27 @@ export type {
   ModusWeekAverage,
 } from "./modus/results-schemas.js";
 export { ModusPlayersService } from "./modus/service.js";
-export type { ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
+export { ModusFixtureSchema, ModusFixturesResultSchema } from "./modus/schemas.js";
+export type { ModusFixture, ModusFixturesResult, ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
 export { DartsOrakelPdcSource, PdcSourceUnavailableError, parsePdcTournamentMatches } from "./pdc/source.js";
 export type { DartsOrakelPdcSourceOptions } from "./pdc/source.js";
+export { PdpaPdcFixtureSource, PdpaFixtureSourceUnavailableError, parsePdpaEventFixtures, parsePdpaEventReferences } from "./pdc/pdpa-fixture-source.js";
+export type { PdpaEventReference, PdpaPdcFixtureSourceOptions } from "./pdc/pdpa-fixture-source.js";
 export { PdcTournamentService } from "./pdc/service.js";
-export type { PdcTournamentServiceOptions } from "./pdc/service.js";
-export { PDC_CALENDAR_CATEGORIES, PDC_TOURNAMENT_NAMES, PdcCalendarCategorySchema, PdcTournamentEventSchema, PdcTournamentMatchSchema, PdcTournamentResultSchema } from "./pdc/schemas.js";
-export type { PdcCalendarCategory, PdcTournamentEvent, PdcTournamentMatch, PdcTournamentResult, PdcTournamentSource } from "./pdc/schemas.js";
+export type { PdcPlayerResearch, PdcPlayerStats, PdcPlayerStatsReader, PdcTournamentServiceOptions, PdcUpcomingReport } from "./pdc/service.js";
+export { PDC_CALENDAR_CATEGORIES, PDC_TOURNAMENT_NAMES, PdcCalendarCategorySchema, PdcFixtureSchema, PdcTournamentEventSchema, PdcTournamentMatchSchema, PdcTournamentResultSchema } from "./pdc/schemas.js";
+export type { PdcCalendarCategory, PdcFixture, PdcFixtureSource, PdcTournamentEvent, PdcTournamentMatch, PdcTournamentResult, PdcTournamentSource } from "./pdc/schemas.js";
 export { FastResearchService } from "./services/fast-research.js";
 export type { FastResearchAnswer, FastResearchServiceDependencies, ResearchIntent } from "./services/fast-research.js";
 export { SnapshotStore } from "./services/snapshot-store.js";
 export type { SnapshotRead, SnapshotStoreOptions } from "./services/snapshot-store.js";
+export { analyzeMatchup } from "./services/matchup-analysis.js";
+export type {
+  AverageTrend,
+  MatchupAnalysis,
+  MatchupConfidence,
+  MatchupHeadToHead,
+  MatchupPlayerAnalysis,
+  MatchupPlayerHistory,
+  MatchupSignal,
+} from "./services/matchup-analysis.js";

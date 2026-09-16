@@ -52,7 +52,7 @@ export function createDartsResearchRuntime(options: CreateAgentOptions = {}): Da
     cache: new FileCache({ directory: path.join(rootCache, "modus-results"), logger }),
     logger,
   });
-  const pdcTournamentService = createDefaultPdcTournamentService(logger, path.join(rootCache, "pdc"));
+  const pdcTournamentService = createDefaultPdcTournamentService(logger, undefined, path.join(rootCache, "pdc"));
   const configuredToolExecutor = new DartsAgentToolExecutor({ modusService, modusResultsService, pdcTournamentService, playerMatchesService });
   const ollamaOptions = {
     ...(options.ollamaBaseUrl === undefined ? {} : { baseUrl: options.ollamaBaseUrl }),

@@ -1,7 +1,48 @@
 import type { PdcTournamentResult } from "../pdc/schemas.js";
-import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
+import type { PdcFixture } from "../pdc/schemas.js";
+import type { PdcUpcomingReport } from "../pdc/service.js";
+import { normalizePlayerName } from "../player/resolver.js";
+import { formatPlayerStats, TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
 
 const MAX_BODY_LENGTH = TELEGRAM_MAX_TEXT_LENGTH - 200;
+
+export function formatPdcUpcomingMessages(report: PdcUpcomingReport): readonly string[] {
+  if (report.fixtures.length === 0) {
+    return [`🎯 PDC FIXTURES · ${report.date}\nNo scheduled PDC match was found for this date.`];
+  }
+  const successfulPlayers = report.players.filter((player) => player.stats !== null).length;
+  const overview = [
+    `🎯 PDC FIXTURES · ${report.date}`,
+    `${report.fixtures.length} matches · ${report.players.length} players`,
+    `Last 10 form loaded: ${successfulPlayers}/${report.players.length} players`,
+    "",
+    ...report.fixtures.map(formatFixture),
+    "",
+    ...[...new Set(report.fixtures.map((fixture) => fixture.sourceUrl))].map((url) => `Schedule source: ${url}`),
+  ].join("\n");
+  if (overview.length > TELEGRAM_MAX_TEXT_LENGTH) {
+    throw new Error("The PDC fixture overview exceeds Telegram's message limit.");
+  }
+
+  const messages: string[] = [overview];
+  for (const player of report.players) {
+    const scheduled = report.fixtures.filter((fixture) => (
+      normalizePlayerName(fixture.playerOne) === normalizePlayerName(player.requestedName)
+      || normalizePlayerName(fixture.playerTwo) === normalizePlayerName(player.requestedName)
+    ));
+    const schedule = scheduled.map((fixture) => opponentLabel(fixture, player.requestedName)).join(" · ");
+    const prefix = `📅 Scheduled: ${schedule === "" ? player.requestedName : schedule}`;
+    if (player.stats === null) {
+      messages.push(`${prefix}\n⚠️ Last-10 form could not be loaded for ${player.requestedName}.`);
+      continue;
+    }
+    const body = formatPlayerStats(player.stats);
+    const combined = `${prefix}\n\n${body}`;
+    if (combined.length <= TELEGRAM_MAX_TEXT_LENGTH) messages.push(combined);
+    else messages.push(prefix, body);
+  }
+  return messages;
+}
 
 export function formatPdcTournamentMessages(
   date: string,
@@ -56,4 +97,18 @@ function formatTournament(result: PdcTournamentResult): string {
     ...rows,
     `Source: ${result.sourceUrl}`,
   ].join("\n");
+}
+
+function formatFixture(fixture: PdcFixture): string {
+  const time = fixture.startTime === null
+    ? fixture.session ?? "Time TBC"
+    : new Date(fixture.startTime).toISOString().slice(11, 16) + " UTC";
+  const round = fixture.round === null ? "" : ` · ${fixture.round}`;
+  return `${time}${round} · ${fixture.playerOne} vs ${fixture.playerTwo}\n  ${fixture.tournamentName}`;
+}
+
+function opponentLabel(fixture: PdcFixture, playerName: string): string {
+  const normalized = normalizePlayerName(playerName);
+  const opponent = normalizePlayerName(fixture.playerOne) === normalized ? fixture.playerTwo : fixture.playerOne;
+  return `${fixture.tournamentName}: ${playerName} vs ${opponent}`;
 }

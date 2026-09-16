@@ -15,13 +15,20 @@ export interface RecentPlayerMatchesOptions {
   dateTo?: string;
 }
 
+export interface DartsOrakelScraperOptions {
+  readonly now?: () => Date;
+  readonly enrichStatistics?: boolean;
+}
+
 export class DartsOrakelScraper {
   private readonly client: Pick<DartsOrakelClient, "getPlayerMatches">;
   private readonly now: () => Date;
+  private readonly enrichStatistics: boolean;
 
-  public constructor(client: Pick<DartsOrakelClient, "getPlayerMatches">, options: { now?: () => Date } = {}) {
+  public constructor(client: Pick<DartsOrakelClient, "getPlayerMatches">, options: DartsOrakelScraperOptions = {}) {
     this.client = client;
     this.now = options.now ?? (() => new Date());
+    this.enrichStatistics = options.enrichStatistics ?? true;
   }
 
   public async getPlayerMatches(player: PlayerIdentity, limit?: number, dateTo?: string): Promise<Match[]> {
@@ -68,6 +75,7 @@ export class DartsOrakelScraper {
     request: Omit<DartsOrakelMatchRequestOptions, "statistic">,
     average: DartsOrakelMatchesResponse,
   ): Promise<Match[]> {
+    if (!this.enrichStatistics) return parseDartsOrakelMatches(player, average);
     const [oneEighties, checkoutPercentage] = await Promise.all([
       this.client.getPlayerMatches(player.id, { ...request, statistic: "oneEighties" }),
       this.client.getPlayerMatches(player.id, { ...request, statistic: "checkoutPercentage" }),

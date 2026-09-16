@@ -74,6 +74,42 @@ function options(names: readonly string[], harnessValue: Harness, overrides: { r
 }
 
 describe("automatic MODUS report", () => {
+  it("renders paired matchup cards when the fixture source exposes pairings", async () => {
+    const value = harness(["Rob Cross", "Luke Littler"]);
+    const base = options(["Rob Cross", "Luke Littler"], value);
+    const result = await runModusReport({
+      ...base,
+      dependencies: {
+        ...base.dependencies,
+        modusPlayersService: {
+          getModusPlayers: async () => modusPlayers(["fallback player"]),
+          getModusFixtures: async () => ({
+            event: "MODUS Super Series",
+            date: "2026-09-11",
+            fixtures: [{
+              id: "fixture-1",
+              event: "MODUS Super Series",
+              date: "2026-09-11",
+              startTime: "2026-09-11T18:30:00Z",
+              playerOne: "Rob Cross",
+              playerTwo: "Luke Littler",
+              source: "https://example.com/fixture-1",
+            }],
+          }),
+        },
+      },
+    });
+
+    expect(result.players).toEqual(["Rob Cross", "Luke Littler"]);
+    expect(value.getPlayerStats).toHaveBeenCalledTimes(2);
+    expect(value.sendMessage).toHaveBeenCalledTimes(1);
+    const overview = value.sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(overview).toContain("1 scheduled matchup");
+    expect(overview).toContain("1. 20:30 · Rob Cross vs Luke Littler");
+    expect(overview).toContain("Signal: Insufficient form coverage for a reliable comparison");
+    expect(overview).toContain("Confidence: LOW · Avg coverage 2/20");
+  });
+
   it("deduplicates fixture players and sends one compact overview per unique player set", async () => {
     const value = harness(["Rob Cross", " rob   cross ", "Luke Littler"]);
     const result = await runModusReport(options(["Rob Cross", " rob   cross ", "Luke Littler"], value));

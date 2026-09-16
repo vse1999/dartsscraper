@@ -104,23 +104,47 @@ export function createDefaultPlayerStatsService(
   logger?: Logger,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  const client = new DartsOrakelClient({
-    timeoutMs: DARTSORAKEL_TIMEOUT_MS,
-    maxRetries: 0,
-    minRequestIntervalMs: 250,
-    logger: serviceLogger,
-    fetchImpl: createJinaReaderFetch(),
-  });
-  const matchesService = new PlayerMatchesService({
-    resolver: new PlayerResolver(client),
-    scraper: new DartsOrakelScraper(client),
-    logger: serviceLogger,
-  });
-  const dartsStats = new DartsPlayerStatsService(matchesService);
+  const dartsStats = createDartsPlayerStatsService(serviceLogger, true, 250, 0);
   const modusHistory = new ModusPlayerHistoryService({
     source: new OfficialModusHistorySource({ logger: serviceLogger }),
     index: bundledModusIndex,
     logger: serviceLogger,
   });
   return new SourceRoutedPlayerStatsService(modusHistory, dartsStats);
+}
+
+/**
+ * Upcoming cards can contain dozens of players. Fetching three optional metric
+ * views per player exceeds the public Reader transport's burst allowance, so
+ * bulk research deliberately loads the canonical average/result view once per
+ * player. The response still contains every latest-match row, score, opponent,
+ * tournament, round, and three-dart average; optional 180/checkout fields are
+ * rendered as unavailable instead of making the whole card fail.
+ */
+export function createDefaultBulkPlayerStatsService(
+  logger?: Logger,
+): PlayerStatsReader {
+  const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
+  return createDartsPlayerStatsService(serviceLogger, false, 500, 1);
+}
+
+function createDartsPlayerStatsService(
+  logger: Logger,
+  enrichStatistics: boolean,
+  minRequestIntervalMs: number,
+  maxRetries: number,
+): PlayerStatsReader {
+  const client = new DartsOrakelClient({
+    timeoutMs: DARTSORAKEL_TIMEOUT_MS,
+    maxRetries,
+    minRequestIntervalMs,
+    logger,
+    fetchImpl: createJinaReaderFetch(),
+  });
+  const matchesService = new PlayerMatchesService({
+    resolver: new PlayerResolver(client),
+    scraper: new DartsOrakelScraper(client, { enrichStatistics }),
+    logger,
+  });
+  return new DartsPlayerStatsService(matchesService);
 }

@@ -26,12 +26,12 @@ import {
 import { parseStatsBatchQuery, statsQueryUsage, type StatsBatchQuery, type StatsQuery } from "./query.js";
 import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
-import { createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
+import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
 import { normalizePlayerName } from "../player/resolver.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
-export const TELEGRAM_BOT_RELEASE = "modus-dashboard-v5";
+export const TELEGRAM_BOT_RELEASE = "pdc-upcoming-form-v7";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
@@ -196,10 +196,12 @@ export function createConfiguredBot(
 ): Bot<Context> {
   const configuration = readBotConfiguration(environment);
   const modusReportTrigger = createConfiguredModusReportTrigger(environment);
+  const statsService = createDefaultPlayerStatsService(logger);
+  const bulkPlayerStats = createDefaultBulkPlayerStatsService(logger);
   return createBot({
     ...configuration,
-    statsService: createDefaultPlayerStatsService(logger),
-    pdcTournamentService: createDefaultPdcTournamentService(logger),
+    statsService,
+    pdcTournamentService: createDefaultPdcTournamentService(logger, bulkPlayerStats),
     ...(modusReportTrigger === undefined
       ? {}
       : { modusReportTrigger }),

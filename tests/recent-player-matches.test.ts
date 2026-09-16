@@ -54,6 +54,22 @@ describe("bounded DartsOrakel player history", () => {
     expect(getPlayerMatches).toHaveBeenCalledTimes(3);
   });
 
+  it("uses one canonical request per window in bulk mode instead of tripling upstream traffic", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const getPlayerMatches = vi.fn(async (): Promise<DartsOrakelMatchesResponse> => fixture);
+    const scraper = new DartsOrakelScraper({ getPlayerMatches }, {
+      now: () => new Date("2026-08-11T12:00:00Z"),
+      enrichStatistics: false,
+    });
+
+    const matches = await scraper.getRecentPlayerMatches(player, { limit: 10 });
+
+    expect(matches.length).toBeGreaterThanOrEqual(10);
+    expect(getPlayerMatches).toHaveBeenCalledTimes(1);
+    expect(matches[0]).not.toHaveProperty("oneEighties");
+    expect(matches[0]).not.toHaveProperty("checkoutPercentage");
+  });
+
   it("uses complete history only after all bounded windows are insufficient", async () => {
     const fixture = readMatchFixture("rob-cross-matches.json");
     const getPlayerMatches = vi.fn(async (_playerId: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> => {

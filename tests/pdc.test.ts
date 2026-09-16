@@ -5,6 +5,7 @@ import {
   DartsOrakelPdcSource,
   parsePdcTournamentMatches,
 } from "../src/pdc/source.js";
+import { parsePdpaEventFixtures, parsePdpaEventReferences } from "../src/pdc/pdpa-fixture-source.js";
 import { PdcTournamentService } from "../src/pdc/service.js";
 import {
   PdcTournamentEventSchema,
@@ -78,6 +79,33 @@ describe("PDC source parsing", () => {
   });
 });
 
+describe("official PDPA fixture discovery", () => {
+  it("discovers candidate events and extracts only concrete matches for the requested day", () => {
+    const calendar = `<a class="event-tile-small" href="https://pdpa.co.uk/event/world-series/"><div class="title">World Series Finals</div><div class="date">17 September 2026</div></a>`;
+    const references = parsePdpaEventReferences(calendar, "https://pdpa.co.uk/events/calendar/", "2026-09-17");
+    expect(references).toEqual([{
+      title: "World Series Finals",
+      startDate: "2026-09-17",
+      url: "https://pdpa.co.uk/event/world-series/",
+    }]);
+
+    const details = `<h1 class="page-title">World Series Finals 2026</h1>
+      <div class="info-group"><div class="heading">More Information:</div><div class="content">
+      <p><strong>Thursday September 17 (1900 CEST)</strong><br><strong>Round One x8</strong><br>Viktor Tingstrom v Dirk van Duijvenbode<br>Rob Cross v Ryan Searle</p>
+      <p><strong>Friday September 18 (1900 CEST)</strong><br>Winner A/B v Winner C/D</p>
+      </div></div>`;
+    const fixtures = parsePdpaEventFixtures(details, references[0]?.url ?? "", "2026-09-17");
+    expect(fixtures).toHaveLength(2);
+    expect(fixtures[1]).toMatchObject({
+      tournamentName: "World Series Finals 2026",
+      session: "19:00 CEST",
+      round: "Round One x8",
+      playerOne: "Rob Cross",
+      playerTwo: "Ryan Searle",
+    });
+  });
+});
+
 describe("PDC tournament service", () => {
   it("discovers a date independently of MODUS and fetches its tournament results", async () => {
     const source: PdcTournamentSource = {
@@ -121,5 +149,54 @@ describe("PDC tournament service", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.event.eventKey).toBe(8022);
+  });
+
+  it("loads every unique scheduled player through the last-10 DartsOrakel pipeline", async () => {
+    const statsCalls: Array<{ readonly name: string; readonly count: number; readonly source: string | undefined }> = [];
+    const service = new PdcTournamentService({
+      source: {
+        getCalendar: async (): Promise<readonly PdcTournamentEvent[]> => [],
+        getResults: async (): Promise<PdcTournamentResult> => { throw new Error("not used"); },
+      },
+      fixtureSource: {
+        name: "fixture test",
+        getFixtures: async () => [{
+          id: "fixture-1",
+          tournamentName: "World Series Finals 2026",
+          date: "2026-09-17",
+          startTime: null,
+          session: "19:00 CEST",
+          round: "Round One",
+          playerOne: "Rob Cross",
+          playerTwo: "Ryan Searle",
+          sourceUrl: "https://pdpa.co.uk/event/world-series/",
+        }],
+      },
+      playerStats: {
+        getPlayerStats: async (name, count, source) => {
+          statsCalls.push({ name, count, source });
+          return {
+            playerName: name,
+            requestedCount: count,
+            matches: [],
+            meanAverage: null,
+            availableAverageCount: 0,
+            sourceUrl: "https://dartsorakel.com/player/details/1/player",
+            sourceLabel: "DartsOrakel",
+            provider: "dartsorakel",
+            evidenceUrls: [],
+          };
+        },
+      },
+    });
+
+    const report = await service.getUpcomingReportForDate("2026-09-17");
+
+    expect(report.fixtures).toHaveLength(1);
+    expect(report.players).toHaveLength(2);
+    expect(statsCalls).toEqual([
+      { name: "Rob Cross", count: 10, source: "dartsorakel" },
+      { name: "Ryan Searle", count: 10, source: "dartsorakel" },
+    ]);
   });
 });

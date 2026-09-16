@@ -3,7 +3,14 @@ import { ModusSourceUnavailableError } from "../errors.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import { IsoDateSchema } from "../agent/date.js";
-import { ModusPlayersResultSchema, type ModusFixtureSource, type ModusPlayersResult } from "./schemas.js";
+import {
+  ModusFixturesResultSchema,
+  ModusPlayersResultSchema,
+  type ModusFixture,
+  type ModusFixtureSource,
+  type ModusFixturesResult,
+  type ModusPlayersResult,
+} from "./schemas.js";
 
 const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_CURRENT_DATE_CACHE_TTL_MS = 30_000;
@@ -57,12 +64,7 @@ export class ModusPlayersService {
           event: "MODUS Super Series", date: validatedDate,
           players: names.map((name) => ({ name, source: sourceUrl, confidence: 1 })),
         });
-        const localDate = localIsoDate(this.now(), this.timeZone);
-        const cacheTtlMs = validatedDate === localDate
-          ? this.currentDateCacheTtlMs
-          : validatedDate > localDate
-            ? this.upcomingDateCacheTtlMs
-            : this.cacheTtlMs;
+        const cacheTtlMs = this.cacheTtlFor(validatedDate);
         await this.cache?.set(cacheKey, result, cacheTtlMs);
         this.logger.info("MODUS fixture source succeeded.", {
           source: source.name,
@@ -86,6 +88,62 @@ export class ModusPlayersService {
     }
     throw new ModusSourceUnavailableError(validatedDate, failures);
   }
+
+  public async getModusFixtures(date: string): Promise<ModusFixturesResult> {
+    const validatedDate = IsoDateSchema.parse(date);
+    const cacheKey = `modus-fixtures-v1-${validatedDate}`;
+    const cachedResult = ModusFixturesResultSchema.safeParse(await this.cache?.get(cacheKey));
+    if (cachedResult.success) return cachedResult.data;
+
+    const failures: string[] = [];
+    for (const source of this.sources) {
+      if (source.getFixtures === undefined) {
+        failures.push(`${source.name}: paired fixtures are not supported.`);
+        continue;
+      }
+      try {
+        const fixtures = deduplicateFixtures(await source.getFixtures(validatedDate));
+        if (fixtures.length === 0) {
+          failures.push(`${source.name}: no paired fixtures for that date.`);
+          continue;
+        }
+        const result = ModusFixturesResultSchema.parse({
+          event: "MODUS Super Series",
+          date: validatedDate,
+          fixtures,
+        });
+        const cacheTtlMs = this.cacheTtlFor(validatedDate);
+        await this.cache?.set(cacheKey, result, cacheTtlMs);
+        this.logger.info("MODUS paired fixture source succeeded.", {
+          source: source.name,
+          sourceUrl: source.sourceUrl(validatedDate),
+          date: validatedDate,
+          fixturesFound: fixtures.length,
+          cacheTtlMs,
+        });
+        return result;
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "unknown error";
+        failures.push(`${source.name}: ${message}`);
+        this.logger.warn("MODUS paired fixture source failed.", {
+          source: source.name,
+          sourceUrl: safeSourceUrl(source, validatedDate),
+          date: validatedDate,
+          error: message,
+        });
+      }
+    }
+    throw new ModusSourceUnavailableError(validatedDate, failures);
+  }
+
+  private cacheTtlFor(date: string): number {
+    const localDate = localIsoDate(this.now(), this.timeZone);
+    return date === localDate
+      ? this.currentDateCacheTtlMs
+      : date > localDate
+        ? this.upcomingDateCacheTtlMs
+        : this.cacheTtlMs;
+  }
 }
 function localIsoDate(date: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
@@ -103,6 +161,22 @@ function deduplicate(names: readonly string[]): readonly string[] {
     if (normalized === "" || seen.has(normalized)) return false;
     seen.add(normalized); return true;
   });
+}
+
+function deduplicateFixtures(fixtures: readonly ModusFixture[]): readonly ModusFixture[] {
+  const seen = new Set<string>();
+  const unique: ModusFixture[] = [];
+  for (const fixture of fixtures) {
+    const signature = [
+      fixture.startTime ?? fixture.date,
+      normalizePlayerName(fixture.playerOne),
+      normalizePlayerName(fixture.playerTwo),
+    ].join("|");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    unique.push(fixture);
+  }
+  return unique;
 }
 
 function isAbbreviatedFixtureName(name: string): boolean {

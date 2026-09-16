@@ -1,12 +1,12 @@
 import type { Logger } from "../logger.js";
 import type { PdcTournamentResult } from "../pdc/schemas.js";
-import type { PdcTournamentService } from "../pdc/service.js";
-import { formatPdcTournamentMessages } from "./pdc-formatter.js";
+import type { PdcTournamentService, PdcUpcomingReport } from "../pdc/service.js";
+import { formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
 
 export type PdcReportDateExpression = "today" | "tomorrow" | "latest";
 
 export interface PdcTournamentReader {
-  getResultsForDate(date: string): Promise<readonly PdcTournamentResult[]>;
+  getUpcomingReportForDate(date: string): Promise<PdcUpcomingReport>;
   getLatestResults(date: string): Promise<readonly PdcTournamentResult[]>;
 }
 
@@ -45,8 +45,13 @@ export async function handlePdcReportCommand(
   try {
     const latest = expression === "latest";
     const date = latest ? dateResolver("today") : dateResolver(expression);
-    const results = latest ? await reader.getLatestResults(date) : await reader.getResultsForDate(date);
-    for (const message of formatPdcTournamentMessages(date, results, latest)) await responder.reply(message);
+    if (latest) {
+      const results = await reader.getLatestResults(date);
+      for (const message of formatPdcTournamentMessages(date, results, true)) await responder.reply(message);
+    } else {
+      const report = await reader.getUpcomingReportForDate(date);
+      for (const message of formatPdcUpcomingMessages(report)) await responder.reply(message);
+    }
     return "success";
   } catch (error: unknown) {
     logger.warn("PDC tournament report failed.", {

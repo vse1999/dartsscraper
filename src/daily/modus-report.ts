@@ -9,11 +9,14 @@ import {
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import type { ModusPlayersService } from "../modus/service.js";
+import type { ModusFixture, ModusFixturesResult } from "../modus/schemas.js";
 import { IsoDateSchema } from "../agent/date.js";
+import { analyzeMatchup } from "../services/matchup-analysis.js";
 import {
   formatModusOverviewMessages,
   type ModusOverviewPlayer,
 } from "../telegram/modus-overview-formatter.js";
+import { formatModusMatchupMessages } from "../telegram/modus-matchup-formatter.js";
 import { createModusPlayerKeyboard } from "../telegram/modus-player-callback.js";
 import type { PlayerStatsReader, PlayerStatsResult } from "../telegram/stats-service.js";
 import type { TelegramMessageSender } from "../telegram/sender.js";
@@ -27,7 +30,9 @@ export interface ModusReportPlayerResult {
 }
 
 export interface ModusReportDependencies {
-  readonly modusPlayersService: Pick<ModusPlayersService, "getModusPlayers">;
+  readonly modusPlayersService: Pick<ModusPlayersService, "getModusPlayers"> & {
+    readonly getModusFixtures?: (date: string) => Promise<ModusFixturesResult>;
+  };
   readonly playerStatsService: Pick<PlayerStatsReader, "getPlayerStats">;
   readonly telegram: TelegramMessageSender;
   readonly logger?: Logger;
@@ -62,22 +67,44 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
     concurrency,
   });
 
+  let fixtures: readonly ModusFixture[] = [];
   let players: readonly string[] = [];
   let discoverySucceeded = true;
-  try {
-    const discovered = await options.dependencies.modusPlayersService.getModusPlayers(date);
-    players = uniquePlayerNames(discovered.players.map((player) => player.name));
-    logger.info("MODUS daily report fixtures discovered.", {
-      targetDate: date,
-      playersDiscovered: players.length,
-    });
-  } catch (error: unknown) {
-    discoverySucceeded = false;
-    logger.warn("MODUS daily report fixture discovery failed.", {
-      targetDate: date,
-      playersDiscovered: 0,
-      failureCode: errorCode(error),
-    });
+  const fixtureReader = options.dependencies.modusPlayersService.getModusFixtures;
+  if (fixtureReader !== undefined) {
+    try {
+      const discovered = await fixtureReader.call(options.dependencies.modusPlayersService, date);
+      fixtures = discovered.fixtures;
+      players = uniquePlayerNames(fixtures.flatMap((fixture) => [fixture.playerOne, fixture.playerTwo]));
+      logger.info("MODUS daily report paired fixtures discovered.", {
+        targetDate: date,
+        fixturesDiscovered: fixtures.length,
+        playersDiscovered: players.length,
+      });
+    } catch (error: unknown) {
+      logger.warn("MODUS paired fixture discovery failed; falling back to the player roster.", {
+        targetDate: date,
+        failureCode: errorCode(error, "MODUS_PAIRED_FIXTURE_DISCOVERY_FAILED"),
+      });
+    }
+  }
+
+  if (players.length === 0) {
+    try {
+      const discovered = await options.dependencies.modusPlayersService.getModusPlayers(date);
+      players = uniquePlayerNames(discovered.players.map((player) => player.name));
+      logger.info("MODUS daily report player roster discovered.", {
+        targetDate: date,
+        playersDiscovered: players.length,
+      });
+    } catch (error: unknown) {
+      discoverySucceeded = false;
+      logger.warn("MODUS daily report fixture discovery failed.", {
+        targetDate: date,
+        playersDiscovered: 0,
+        failureCode: errorCode(error),
+      });
+    }
   }
 
   if (!discoverySucceeded || players.length === 0) {
@@ -139,13 +166,31 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
     return { player, status: "succeeded", stats };
   });
 
-  const overviewMessages = formatModusOverviewMessages({
-    date,
-    dateLabel: options.dateLabel ?? "tomorrow",
-    matchCount: options.matchCount,
-    players,
-    results: lookupResults,
-  });
+  const statsByPlayer = new Map<string, PlayerStatsResult>();
+  for (const result of lookupResults) {
+    if (result.status === "succeeded" && result.stats !== undefined) {
+      statsByPlayer.set(normalizePlayerName(result.player), result.stats);
+    }
+  }
+  const overviewMessages = fixtures.length > 0
+    ? formatModusMatchupMessages({
+      date,
+      dateLabel: options.dateLabel ?? "tomorrow",
+      matchCount: options.matchCount,
+      analyses: fixtures.map((fixture) => analyzeMatchup(
+        fixture,
+        statsByPlayer.get(normalizePlayerName(fixture.playerOne)),
+        statsByPlayer.get(normalizePlayerName(fixture.playerTwo)),
+        options.matchCount,
+      )),
+    })
+    : formatModusOverviewMessages({
+      date,
+      dateLabel: options.dateLabel ?? "tomorrow",
+      matchCount: options.matchCount,
+      players,
+      results: lookupResults,
+    });
   const playerKeyboard = createModusPlayerKeyboard(players, options.matchCount);
   const overviewDelivered = await sendOverviewMessages(
     options.dependencies.telegram,
