@@ -1,4 +1,3 @@
-import type { ModusFixture } from "../modus/schemas.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import type { Match } from "../schemas/match.js";
 import { calculateMatchSummary, type MatchSummary } from "./statistics.js";
@@ -7,6 +6,14 @@ const MAX_TREND_WINDOW = 5;
 const MIN_TREND_WINDOW = 3;
 const MIN_AVERAGE_ADVANTAGE = 2;
 const MIN_MOMENTUM_ADVANTAGE = 3;
+
+export interface MatchupFixture {
+  readonly id: string;
+  readonly date: string;
+  readonly startTime: string | null;
+  readonly playerOne: string;
+  readonly playerTwo: string;
+}
 
 export interface MatchupPlayerHistory {
   readonly playerName: string;
@@ -45,7 +52,7 @@ export interface MatchupSignal {
 }
 
 export interface MatchupAnalysis {
-  readonly fixture: ModusFixture;
+  readonly fixture: MatchupFixture;
   readonly playerOne: MatchupPlayerAnalysis;
   readonly playerTwo: MatchupPlayerAnalysis;
   readonly headToHead: MatchupHeadToHead;
@@ -56,7 +63,7 @@ export interface MatchupAnalysis {
 }
 
 export function analyzeMatchup(
-  fixture: ModusFixture,
+  fixture: MatchupFixture,
   playerOneHistory: MatchupPlayerHistory | undefined,
   playerTwoHistory: MatchupPlayerHistory | undefined,
   requestedCount: number,
@@ -122,7 +129,7 @@ function calculateWindowAverage(matches: readonly Match[], windowSize: number): 
 }
 
 function calculateHeadToHead(
-  fixture: ModusFixture,
+  fixture: MatchupFixture,
   playerOneHistory: MatchupPlayerHistory | undefined,
   playerTwoHistory: MatchupPlayerHistory | undefined,
 ): MatchupHeadToHead {

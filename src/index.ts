@@ -132,6 +132,7 @@ export type {
   MatchupAnalysis,
   MatchupConfidence,
   MatchupHeadToHead,
+  MatchupFixture,
   MatchupPlayerAnalysis,
   MatchupPlayerHistory,
   MatchupSignal,

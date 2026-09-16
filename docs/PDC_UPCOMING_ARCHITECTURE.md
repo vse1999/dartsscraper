@@ -20,7 +20,7 @@ flowchart LR
     F --> U["Unique player set"]
     U --> R["DartsOrakel player resolution"]
     R --> H["Latest 10 completed matches"]
-    H --> M["Telegram overview + player cards"]
+    H --> M["Paired matchup analysis + player evidence cards"]
 
     L["/pdc latest"] --> C["DartsOrakel completed calendar"]
     C --> E["Completed event result pages"]
@@ -30,6 +30,7 @@ flowchart LR
 - **The live preview owns last-minute changes.** A live row may replace PDPA participants or supply a start time only when it shares at least one normalized player with exactly one unused official fixture. Unrelated MODUS/WDF rows cannot enter the PDC report.
 - **DartsOrakel owns historical form.** Each scheduled name is resolved against its player directory before bounded recent-history retrieval.
 - **The application owns orchestration.** Fixtures and player form have different schemas, caching, failure policy, and freshness. They are joined only in `PdcTournamentService`.
+- **The formatter owns comparison, not prediction.** It deterministically calculates recent form, last-five trend, recent H2H, 180 rate, weighted checkout rate, coverage, and a clearly labelled form signal. It does not claim bookmaker value or a calibrated win probability.
 - **`/pdc latest` remains a completed-results operation.** Upcoming behavior no longer weakens the completed-event invariant.
 
 ## Reliability decisions

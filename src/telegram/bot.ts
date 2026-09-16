@@ -31,7 +31,7 @@ import { normalizePlayerName } from "../player/resolver.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
-export const TELEGRAM_BOT_RELEASE = "pdc-upcoming-form-v7";
+export const TELEGRAM_BOT_RELEASE = "pdc-matchup-cards-v8";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
