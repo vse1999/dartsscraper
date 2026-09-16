@@ -165,12 +165,16 @@ function parseMatchRow(
     opponent,
     score,
     average,
-    ...(enrichment === undefined ? {} : {
-      oneEighties: enrichment.oneEighties,
-      checkoutPercentage: enrichment.checkout.percentage,
-      checkoutHits: enrichment.checkout.hits,
-      checkoutAttempts: enrichment.checkout.attempts,
-    }),
+    ...(enrichment?.oneEighties === null || enrichment?.oneEighties === undefined
+      ? {}
+      : { oneEighties: enrichment.oneEighties }),
+    ...(enrichment?.checkout.percentage === null || enrichment?.checkout.percentage === undefined
+      ? {}
+      : { checkoutPercentage: enrichment.checkout.percentage }),
+    ...(enrichment?.checkout.hits === null || enrichment?.checkout.hits === undefined
+      || enrichment.checkout.attempts === null || enrichment.checkout.attempts === undefined
+      ? {}
+      : { checkoutHits: enrichment.checkout.hits, checkoutAttempts: enrichment.checkout.attempts }),
   });
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

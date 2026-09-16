@@ -10,7 +10,7 @@ import { createConfiguredBot } from "../src/telegram/bot.js";
 const TELEGRAM_SECRET_HEADER = "x-telegram-bot-api-secret-token";
 const MAX_UPDATE_BYTES = 64 * 1_024;
 
-export const config = { maxDuration: 180 };
+export const config = { maxDuration: 300 };
 
 export interface WebhookEnvironment {
   readonly WEBHOOK_SECRET?: string;

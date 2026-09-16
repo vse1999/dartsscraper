@@ -31,6 +31,27 @@ const emptyPlayers = report.players.filter((player) => player.stats?.matches.len
 if (emptyPlayers.length > 0) {
   throw new Error(`No completed match history was returned for: ${emptyPlayers.map((player) => player.requestedName).join(", ")}.`);
 }
+const nullMetricMatches = report.players.flatMap((player) => player.stats?.matches ?? []).filter((match) => (
+  match.oneEighties === null
+  || match.checkoutPercentage === null
+  || match.checkoutHits === null
+  || match.checkoutAttempts === null
+));
+if (nullMetricMatches.length > 0) {
+  throw new Error(`Optional metrics must be undefined when unavailable; received null in ${nullMetricMatches.length} match(es).`);
+}
+const playersWithoutOneEighties = report.players.filter((player) => (
+  player.stats?.matches.every((match) => match.oneEighties === undefined) ?? true
+));
+if (playersWithoutOneEighties.length > 0) {
+  throw new Error(`No 180 history was returned for: ${playersWithoutOneEighties.map((player) => player.requestedName).join(", ")}.`);
+}
+const playersWithoutCheckout = report.players.filter((player) => (
+  player.stats?.matches.every((match) => match.checkoutPercentage === undefined) ?? true
+));
+if (playersWithoutCheckout.length > 0) {
+  throw new Error(`No checkout history was returned for: ${playersWithoutCheckout.map((player) => player.requestedName).join(", ")}.`);
+}
 const messages = formatPdcUpcomingMessages(report);
 if (messages.some((message) => message.length > TELEGRAM_MAX_TEXT_LENGTH)) {
   throw new Error("Upcoming PDC Telegram output exceeded Telegram's message limit.");
@@ -50,6 +71,8 @@ process.stdout.write(`${JSON.stringify({
     requestedName: player.requestedName,
     resolvedName: player.stats?.playerName,
     matches: player.stats?.matches.length,
+    oneEightiesAvailable: player.stats?.matches.filter((match) => match.oneEighties !== undefined).length,
+    checkoutAvailable: player.stats?.matches.filter((match) => match.checkoutPercentage !== undefined).length,
     sourceUrl: player.stats?.sourceUrl,
   })),
   telegramMessages: messages.length,

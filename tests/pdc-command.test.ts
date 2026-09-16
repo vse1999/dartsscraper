@@ -129,4 +129,34 @@ describe("PDC Telegram command", () => {
     expect(replies.join("\n")).toContain("Rob Cross vs Ryan Searle");
     expect(replies.join("\n")).toContain("World Series of Darts Finals 2026");
   });
+
+  it("acknowledges upcoming scans before scheduled background research completes", async () => {
+    const replies: string[] = [];
+    let finishResearch: ((report: PdcUpcomingReport) => void) | undefined;
+    let scheduledTask: Promise<void> | undefined;
+    const pendingReport = new Promise<PdcUpcomingReport>((resolve): void => {
+      finishResearch = resolve;
+    });
+    const reader = {
+      getUpcomingReportForDate: vi.fn(async (): Promise<PdcUpcomingReport> => pendingReport),
+      getLatestResults: vi.fn(async (): Promise<readonly PdcTournamentResult[]> => []),
+    };
+
+    const outcome = await handlePdcReportCommand(
+      "/pdc tomorrow",
+      reader,
+      (): string => "2026-09-17",
+      { reply: async (text: string): Promise<void> => { replies.push(text); } },
+      logger,
+      (task: Promise<void>): void => { scheduledTask = task; },
+    );
+
+    expect(outcome).toBe("success");
+    expect(replies).toEqual(["🎯 Scanning PDC tomorrow tournaments…"]);
+    expect(scheduledTask).toBeDefined();
+
+    finishResearch?.({ date: "2026-09-17", fixtures: [], players: [] });
+    await scheduledTask;
+    expect(replies.at(-1)).toContain("No scheduled PDC match was found");
+  });
 });

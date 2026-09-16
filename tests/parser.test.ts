@@ -212,10 +212,10 @@ describe("DartsOrakel match parser", () => {
     expect(matches[1]).toMatchObject({
       average: 97.41,
       oneEighties: 2,
-      checkoutPercentage: null,
-      checkoutHits: null,
-      checkoutAttempts: null,
     });
+    expect(matches[1]?.checkoutPercentage).toBeUndefined();
+    expect(matches[1]?.checkoutHits).toBeUndefined();
+    expect(matches[1]?.checkoutAttempts).toBeUndefined();
   });
 
   it("leaves ambiguous duplicate enrichment unavailable instead of joining by position", () => {
@@ -234,7 +234,7 @@ describe("DartsOrakel match parser", () => {
     });
 
     expect(matches).toHaveLength(2);
-    expect(matches.every((match) => match.oneEighties === null && match.checkoutPercentage === null)).toBe(true);
+    expect(matches.every((match) => match.oneEighties === undefined && match.checkoutPercentage === undefined)).toBe(true);
   });
 
   it("rejects impossible checkout counts", () => {
@@ -262,11 +262,8 @@ describe("DartsOrakel match parser", () => {
       checkoutPercentage: { ...fixture, data: [{ ...first, stat: 0, stat1: 0, stat2: 0 }] },
     });
 
-    expect(match).toMatchObject({
-      checkoutPercentage: null,
-      checkoutHits: 0,
-      checkoutAttempts: 0,
-    });
+    expect(match?.checkoutPercentage).toBeUndefined();
+    expect(match).toMatchObject({ checkoutHits: 0, checkoutAttempts: 0 });
   });
 
   it("rejects checkout percentages that contradict their raw counts", () => {

@@ -2,6 +2,7 @@ import type { Logger } from "../logger.js";
 import type { PdcTournamentResult } from "../pdc/schemas.js";
 import type { PdcTournamentService, PdcUpcomingReport } from "../pdc/service.js";
 import { formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
+import type { BackgroundTaskScheduler } from "./modus-command.js";
 
 export type PdcReportDateExpression = "today" | "tomorrow" | "latest";
 
@@ -30,6 +31,7 @@ export async function handlePdcReportCommand(
   dateResolver: (expression: Exclude<PdcReportDateExpression, "latest">) => string,
   responder: PdcCommandResponder,
   logger: Logger,
+  scheduleBackgroundTask?: BackgroundTaskScheduler,
 ): Promise<PdcCommandOutcome> {
   const expression = parsePdcReportCommand(text);
   if (expression === null) {
@@ -42,6 +44,21 @@ export async function handlePdcReportCommand(
   }
 
   await responder.reply(`🎯 Scanning PDC ${expression} tournaments…`);
+  const task = runPdcReport(expression, reader, dateResolver, responder, logger);
+  if (expression !== "latest" && scheduleBackgroundTask !== undefined) {
+    scheduleBackgroundTask(task.then((): void => undefined));
+    return "success";
+  }
+  return task;
+}
+
+async function runPdcReport(
+  expression: PdcReportDateExpression,
+  reader: PdcTournamentReader,
+  dateResolver: (expression: Exclude<PdcReportDateExpression, "latest">) => string,
+  responder: PdcCommandResponder,
+  logger: Logger,
+): Promise<Exclude<PdcCommandOutcome, "invalid" | "unavailable">> {
   try {
     const latest = expression === "latest";
     const date = latest ? dateResolver("today") : dateResolver(expression);
@@ -59,7 +76,14 @@ export async function handlePdcReportCommand(
       failureCode: "PDC_REPORT_FAILED",
       errorType: error instanceof Error ? error.name : "UnknownError",
     });
-    await responder.reply("The PDC tournament scan could not be completed. Please try again later.");
+    try {
+      await responder.reply("The PDC tournament scan could not be completed. Please try again later.");
+    } catch {
+      logger.error("PDC tournament report failure message could not be delivered.", {
+        expression,
+        failureCode: "PDC_REPORT_FAILURE_SEND_FAILED",
+      });
+    }
     return "failed";
   }
 }

@@ -137,6 +137,7 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
       (expression): string => resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date,
       { reply: async (text: string): Promise<void> => { await ctx.reply(text); } },
       logger,
+      options.scheduleBackgroundTask,
     );
   });
 

@@ -114,18 +114,17 @@ export function createDefaultPlayerStatsService(
 }
 
 /**
- * Upcoming cards can contain dozens of players. Fetching three optional metric
- * views per player exceeds the public Reader transport's burst allowance, so
- * bulk research deliberately loads the canonical average/result view once per
- * player. The response still contains every latest-match row, score, opponent,
- * tournament, round, and three-dart average; optional 180/checkout fields are
- * rendered as unavailable instead of making the whole card fail.
+ * Upcoming cards can contain dozens of players. The public Reader transport
+ * has a low rolling request allowance, so full average/180/checkout enrichment
+ * is deliberately paced below that limit. PDC commands run as Vercel
+ * background work, allowing correctness without holding Telegram's webhook
+ * acknowledgement open for the whole research job.
  */
 export function createDefaultBulkPlayerStatsService(
   logger?: Logger,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  return createDartsPlayerStatsService(serviceLogger, false, 500, 1);
+  return createDartsPlayerStatsService(serviceLogger, true, 3_200, 2);
 }
 
 function createDartsPlayerStatsService(
