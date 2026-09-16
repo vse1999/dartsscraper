@@ -6,9 +6,11 @@ import {
   parsePdcTournamentMatches,
 } from "../src/pdc/source.js";
 import { parsePdpaEventFixtures, parsePdpaEventReferences } from "../src/pdc/pdpa-fixture-source.js";
+import { parseDartsNerdPdcFixtures, reconcileFixtures } from "../src/pdc/darts-nerd-fixture-source.js";
 import { PdcTournamentService } from "../src/pdc/service.js";
 import {
   PdcTournamentEventSchema,
+  type PdcFixture,
   type PdcTournamentEvent,
   type PdcTournamentResult,
   type PdcTournamentSource,
@@ -103,6 +105,88 @@ describe("official PDPA fixture discovery", () => {
       playerOne: "Rob Cross",
       playerTwo: "Ryan Searle",
     });
+  });
+});
+
+describe("live PDC fixture corroboration", () => {
+  it("parses dated matchups and start times from the live preview", () => {
+    const html = `<div class="hm-match">
+      <span class="hm-time" data-utc="2026-09-17T20:10:00+00:00"></span>
+      <span class="hm-round-badge">1/16-finals</span>
+      <span class="hm-name">van Gerwen M.</span><span class="hm-name">Gurney D.</span>
+    </div>`;
+
+    expect(parseDartsNerdPdcFixtures(html, "2026-09-17")).toMatchObject([{
+      startTime: "2026-09-17T20:10:00+00:00",
+      round: "1/16-finals",
+      playerOne: "van Gerwen M.",
+      playerTwo: "Gurney D.",
+    }]);
+  });
+
+  it("applies a late live replacement only when the row overlaps the official fixture", () => {
+    const official: PdcFixture[] = [{
+      id: "pdpa:1",
+      tournamentName: "World Series of Darts Finals 2026",
+      date: "2026-09-17",
+      startTime: null,
+      session: "19:00 CEST",
+      round: "Round One x8",
+      playerOne: "Michael van Gerwen",
+      playerTwo: "Lourence Ilagan",
+      sourceUrl: "https://pdpa.co.uk/event/world-series/",
+    }];
+    const live: PdcFixture[] = [{
+      id: "live:1",
+      tournamentName: "PDC live fixture",
+      date: "2026-09-17",
+      startTime: "2026-09-17T20:10:00+00:00",
+      session: null,
+      round: "1/16-finals",
+      playerOne: "Michael van Gerwen",
+      playerTwo: "Daryl Gurney",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+
+    expect(reconcileFixtures(official, live)).toMatchObject([{
+      tournamentName: "World Series of Darts Finals 2026",
+      playerOne: "Michael van Gerwen",
+      playerTwo: "Daryl Gurney",
+      evidenceUrls: [
+        "https://pdpa.co.uk/event/world-series/",
+        "https://www.darts-nerd.com/en/matches/preview",
+      ],
+    }]);
+  });
+
+  it("uses the official full name when a globally ambiguous live abbreviation matches in fixture context", () => {
+    const official: PdcFixture[] = [{
+      id: "pdpa:2",
+      tournamentName: "World Series of Darts Finals 2026",
+      date: "2026-09-17",
+      startTime: null,
+      session: "19:00 CEST",
+      round: "Round One x8",
+      playerOne: "Kevin Doets",
+      playerTwo: "Ross Smith",
+      sourceUrl: "https://pdpa.co.uk/event/world-series/",
+    }];
+    const live: PdcFixture[] = [{
+      id: "live:2",
+      tournamentName: "PDC live fixture",
+      date: "2026-09-17",
+      startTime: "2026-09-17T18:40:00+00:00",
+      session: null,
+      round: "1/16-finals",
+      playerOne: "Doets K.",
+      playerTwo: "Smith R.",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+
+    expect(reconcileFixtures(official, live)).toMatchObject([{
+      playerOne: "Kevin Doets",
+      playerTwo: "Ross Smith",
+    }]);
   });
 });
 

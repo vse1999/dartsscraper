@@ -176,7 +176,7 @@ export class PdcTournamentService {
   }
 
   private async getFixtures(date: string): Promise<readonly PdcFixture[]> {
-    const cacheKey = `pdc-fixtures-v1-${date}`;
+    const cacheKey = `pdc-fixtures-v3-${date}`;
     const cached = PdcFixtureSchema.array().safeParse(await this.cache?.get(cacheKey));
     if (cached.success) return cached.data;
     const existing = this.fixturePromises.get(date);

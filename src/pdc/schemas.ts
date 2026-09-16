@@ -84,6 +84,7 @@ export const PdcFixtureSchema = z.object({
   playerOne: z.string().trim().min(1),
   playerTwo: z.string().trim().min(1),
   sourceUrl: z.string().url(),
+  evidenceUrls: z.array(z.string().url()).min(1).optional(),
 }).strict().superRefine((fixture, context) => {
   if (fixture.playerOne.normalize("NFKC").toLocaleLowerCase("en-US")
     === fixture.playerTwo.normalize("NFKC").toLocaleLowerCase("en-US")) {

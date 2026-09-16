@@ -18,7 +18,8 @@ export function formatPdcUpcomingMessages(report: PdcUpcomingReport): readonly s
     "",
     ...report.fixtures.map(formatFixture),
     "",
-    ...[...new Set(report.fixtures.map((fixture) => fixture.sourceUrl))].map((url) => `Schedule source: ${url}`),
+    ...[...new Set(report.fixtures.flatMap((fixture) => fixture.evidenceUrls ?? [fixture.sourceUrl]))]
+      .map((url) => `Schedule source: ${url}`),
   ].join("\n");
   if (overview.length > TELEGRAM_MAX_TEXT_LENGTH) {
     throw new Error("The PDC fixture overview exceeds Telegram's message limit.");

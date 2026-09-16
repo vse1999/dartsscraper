@@ -114,6 +114,8 @@ export { ModusFixtureSchema, ModusFixturesResultSchema } from "./modus/schemas.j
 export type { ModusFixture, ModusFixturesResult, ModusPlayer, ModusPlayersResult } from "./modus/schemas.js";
 export { DartsOrakelPdcSource, PdcSourceUnavailableError, parsePdcTournamentMatches } from "./pdc/source.js";
 export type { DartsOrakelPdcSourceOptions } from "./pdc/source.js";
+export { CorroboratedPdcFixtureSource, DartsNerdPdcFixtureSource, parseDartsNerdPdcFixtures, reconcileFixtures } from "./pdc/darts-nerd-fixture-source.js";
+export type { CorroboratedPdcFixtureSourceOptions, DartsNerdPdcFixtureSourceOptions, PdcFixtureNameResolver } from "./pdc/darts-nerd-fixture-source.js";
 export { PdpaPdcFixtureSource, PdpaFixtureSourceUnavailableError, parsePdpaEventFixtures, parsePdpaEventReferences } from "./pdc/pdpa-fixture-source.js";
 export type { PdpaEventReference, PdpaPdcFixtureSourceOptions } from "./pdc/pdpa-fixture-source.js";
 export { PdcTournamentService } from "./pdc/service.js";

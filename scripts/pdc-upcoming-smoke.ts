@@ -13,6 +13,10 @@ const service = createDefaultPdcTournamentService(logger, playerStats);
 const report = await service.getUpcomingReportForDate(date);
 
 if (report.fixtures.length === 0) throw new Error(`No PDC fixtures were discovered for ${date}.`);
+const uncorroboratedFixtures = report.fixtures.filter((fixture) => (fixture.evidenceUrls?.length ?? 0) < 2);
+if (uncorroboratedFixtures.length > 0) {
+  throw new Error(`Live corroboration was missing for ${uncorroboratedFixtures.length} PDC fixture(s).`);
+}
 const scheduledPlayers = new Set(report.fixtures.flatMap((fixture) => (
   [normalizePlayerName(fixture.playerOne), normalizePlayerName(fixture.playerTwo)]
 )));
@@ -40,6 +44,7 @@ process.stdout.write(`${JSON.stringify({
     playerOne: fixture.playerOne,
     playerTwo: fixture.playerTwo,
     sourceUrl: fixture.sourceUrl,
+    evidenceUrls: fixture.evidenceUrls,
   })),
   players: report.players.map((player) => ({
     requestedName: player.requestedName,
