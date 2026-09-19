@@ -106,6 +106,30 @@ describe("official PDPA fixture discovery", () => {
       playerTwo: "Ryan Searle",
     });
   });
+
+  it("parses live ordinal date headings and keeps the active date across session paragraphs", () => {
+    const details = `<h1 class="page-title">World Series of Darts Finals 2026</h1>
+      <div class="info-group"><div class="heading">More Information:</div><div class="content">
+      <p><strong>FRIDAY SEPTEMBER 18th</strong><br><strong>Round One x8</strong><br>Earlier Player v Earlier Opponent</p>
+      <p><strong>SATURDAY SEPTEMBER 19th</strong><br><strong>Afternoon Session (1300 CEST)</strong><br><strong>Round Two x4</strong><br>Daryl Gurney v Ross Smith<br>Josh Rock v Ryan Searle</p>
+      <p><strong>Evening Session (1900 CEST)</strong><br><strong>Round Two x4</strong><br>Luke Littler v Nathan Aspinall<br>Jonny Clayton v Motomu Sakai</p>
+      <p><strong>SUNDAY SEPTEMBER 20th</strong><br><strong>Quarter-Finals</strong></p>
+      </div></div>`;
+
+    const fixtures = parsePdpaEventFixtures(
+      details,
+      "https://pdpa.co.uk/event/world-series-of-darts-finals-2026/",
+      "2026-09-19",
+    );
+
+    expect(fixtures).toHaveLength(4);
+    expect(fixtures.map((fixture) => [fixture.playerOne, fixture.playerTwo, fixture.session])).toEqual([
+      ["Daryl Gurney", "Ross Smith", "13:00 CEST"],
+      ["Josh Rock", "Ryan Searle", "13:00 CEST"],
+      ["Luke Littler", "Nathan Aspinall", "19:00 CEST"],
+      ["Jonny Clayton", "Motomu Sakai", "19:00 CEST"],
+    ]);
+  });
 });
 
 describe("live PDC fixture corroboration", () => {

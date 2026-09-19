@@ -34,7 +34,7 @@ Send the bot a private message such as `Dylan Slevin last 10 match`, `Jack Drayt
 
 `npm run pdc:smoke` performs a read-only live contract test against the public PDC calendar and a completed DartsOrakel tournament result page. It validates the event, winner, match count, and trusted source URLs without sending a Telegram message.
 
-`npm run pdc:upcoming:smoke` performs the full read-only tomorrow path: official PDPA fixture discovery, unique-player reconciliation, 10 DartsOrakel matches per player, and Telegram message-size validation. It fails if a scheduled player is missing or has no history.
+`npm run pdc:upcoming:smoke` performs the full read-only tomorrow path; pass `today` or an ISO date after `--` to verify another slate. It covers official PDPA fixture discovery, unique-player reconciliation, 10 DartsOrakel matches per player, and Telegram message-size validation. It fails if a scheduled player is missing or has no history.
 
 ## Start the chatbot
 

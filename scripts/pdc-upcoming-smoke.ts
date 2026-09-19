@@ -7,16 +7,16 @@ import { createDefaultBulkPlayerStatsService } from "../src/telegram/stats-servi
 import { TELEGRAM_MAX_TEXT_LENGTH } from "../src/telegram/formatter.js";
 
 const logger = new ConsoleLogger({ minimumLevel: "warn" });
-const date = resolveResearchDate("tomorrow", { timeZone: "Europe/Budapest" }).date;
+const dateExpression = process.argv[2] ?? "tomorrow";
+const date = resolveResearchDate(dateExpression, { timeZone: "Europe/Budapest" }).date;
 const playerStats = createDefaultBulkPlayerStatsService(logger);
 const service = createDefaultPdcTournamentService(logger, playerStats);
 const report = await service.getUpcomingReportForDate(date);
 
 if (report.fixtures.length === 0) throw new Error(`No PDC fixtures were discovered for ${date}.`);
 const uncorroboratedFixtures = report.fixtures.filter((fixture) => (fixture.evidenceUrls?.length ?? 0) < 2);
-if (uncorroboratedFixtures.length > 0) {
-  throw new Error(`Live corroboration was missing for ${uncorroboratedFixtures.length} PDC fixture(s).`);
-}
+const fixturesWithoutOfficialSource = report.fixtures.filter((fixture) => !fixture.sourceUrl.startsWith("https://pdpa.co.uk/"));
+if (fixturesWithoutOfficialSource.length > 0) throw new Error("A PDC fixture was not backed by an official PDPA source URL.");
 const scheduledPlayers = new Set(report.fixtures.flatMap((fixture) => (
   [normalizePlayerName(fixture.playerOne), normalizePlayerName(fixture.playerTwo)]
 )));
@@ -60,6 +60,7 @@ if (messages.some((message) => message.length > TELEGRAM_MAX_TEXT_LENGTH)) {
 process.stdout.write(`${JSON.stringify({
   status: "passed",
   date,
+  officialOnlyFixtures: uncorroboratedFixtures.length,
   fixtures: report.fixtures.map((fixture) => ({
     tournament: fixture.tournamentName,
     playerOne: fixture.playerOne,

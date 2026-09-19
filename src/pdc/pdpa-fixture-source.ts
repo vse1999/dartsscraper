@@ -148,11 +148,11 @@ export function parsePdpaEventFixtures(
   if (details.length === 0) return [];
 
   const fixtures: PdcFixture[] = [];
+  let activeDate = false;
+  let round: string | null = null;
+  let session: string | null = null;
   details.find("p").each((_paragraphIndex, paragraph) => {
     const lines = htmlLines($(paragraph).html() ?? "");
-    let activeDate = false;
-    let round: string | null = null;
-    let session: string | null = null;
     for (const line of lines) {
       const lineDate = dateFromScheduleHeading(line, validatedDate.slice(0, 4));
       if (lineDate !== null) {
@@ -167,7 +167,7 @@ export function parsePdpaEventFixtures(
         continue;
       }
       if (isSessionLabel(line)) {
-        session = line;
+        session = scheduleLabel(line) ?? line;
         continue;
       }
       const players = parseMatchup(line);
@@ -194,8 +194,10 @@ function htmlLines(value: string): readonly string[] {
 
 function dateFromScheduleHeading(value: string, fallbackYear: string): string | null {
   const normalized = normalizeText(value).toLocaleLowerCase("en-US");
-  const monthFirst = /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/u.exec(normalized);
-  const dayFirst = /\b(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)(?:\s+(\d{4}))?\b/u.exec(normalized);
+  const ordinal = "(?:st|nd|rd|th)?";
+  const monthNames = "january|february|march|april|may|june|july|august|september|october|november|december";
+  const monthFirst = new RegExp(`\\b(${monthNames})\\s+(\\d{1,2})${ordinal}(?:,?\\s+(\\d{4}))?\\b`, "u").exec(normalized);
+  const dayFirst = new RegExp(`\\b(\\d{1,2})${ordinal}\\s+(${monthNames})(?:\\s+(\\d{4}))?\\b`, "u").exec(normalized);
   const month = monthFirst?.[1] ?? dayFirst?.[2];
   const day = monthFirst?.[2] ?? dayFirst?.[1];
   const year = monthFirst?.[3] ?? dayFirst?.[3] ?? fallbackYear;

@@ -40,7 +40,7 @@ flowchart LR
 3. Fixtures are deduplicated by date and normalized player pair; players are deduplicated before history work.
 4. Player lookups are bounded to four concurrent jobs and one canonical statistics view per player.
 5. Bulk mode loads all three DartsOrakel views (average, 180s, and checkout percentage) for every player. Request starts are serialized and paced below the public Reader transport's rolling allowance, with bounded retries for transient failures. Upcoming scans are registered with Vercel `waitUntil`, so Telegram receives its acknowledgement immediately while the complete 16-player research job continues in the background. A source metric missing from an individual match is omitted (`undefined`) rather than represented as a misleading zero or `null`.
-6. One player failure does not erase the fixture card; it is surfaced next to that player. The live smoke test is stricter and fails unless every scheduled player has history.
+6. One player failure does not erase the fixture card; it is surfaced next to that player. The live smoke test fails unless every scheduled player has history and every fixture retains its official PDPA source; it reports how many fixtures could not also be corroborated by the optional live feed.
 7. Fixture snapshots cache for five minutes; completed calendars keep their independent 30-second cache.
 8. The fixture cache version is bumped whenever source reconciliation changes, preventing a previously cached stale draw from surviving a deployment.
 
