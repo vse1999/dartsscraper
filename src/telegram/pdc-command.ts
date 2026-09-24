@@ -1,11 +1,9 @@
-import type { Logger } from "../logger.js";
+import { ReportDeadlineExceededError, isReportDeadlineExceeded } from "../daily/report-budget.js";
 import {
-  createReportBudget,
-  isReportDeadlineExceeded,
-  raceWithReportDeadline,
-  ReportDeadlineExceededError,
-  type ReportBudget,
-} from "../daily/report-budget.js";
+  runReportLifecycle,
+  type ReportSession,
+} from "../daily/report-lifecycle.js";
+import type { Logger } from "../logger.js";
 import type { PdcTournamentResult } from "../pdc/schemas.js";
 import type { PdcTournamentService, PdcUpcomingReport } from "../pdc/service.js";
 import { formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
@@ -25,8 +23,18 @@ export interface PdcTournamentReader {
   getLatestResults(date: string, signal?: AbortSignal): Promise<readonly PdcTournamentResult[]>;
 }
 
+export interface PdcAcknowledgement {
+  readonly messageId: number;
+}
+
+export interface PdcDeliveryOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface PdcCommandResponder {
-  reply(text: string, options?: { readonly signal?: AbortSignal }): Promise<void>;
+  /** Reply-only adapters remain valid; production adapters return the message id. */
+  reply(text: string, options?: PdcDeliveryOptions): Promise<void | PdcAcknowledgement>;
+  edit?(messageId: number, text: string, options?: PdcDeliveryOptions): Promise<void>;
 }
 
 export interface PdcReportBudgetOverrides {
@@ -64,32 +72,43 @@ export async function handlePdcReportCommand(
     return "unavailable";
   }
 
-  const budget = createReportBudget({
-    totalMs: budgetOverrides?.totalMs ?? PDC_REPORT_TOTAL_BUDGET_MS,
-    researchMs: budgetOverrides?.researchMs ?? PDC_REPORT_RESEARCH_BUDGET_MS,
-    ...(budgetOverrides?.now === undefined ? {} : { now: budgetOverrides.now }),
+  const lifecycle = await runReportLifecycle<PdcAcknowledgement | void, PdcCommandOutcome>({
+    budget: {
+      totalMs: budgetOverrides?.totalMs ?? PDC_REPORT_TOTAL_BUDGET_MS,
+      researchMs: budgetOverrides?.researchMs ?? PDC_REPORT_RESEARCH_BUDGET_MS,
+      ...(budgetOverrides?.now === undefined ? {} : { now: budgetOverrides.now }),
+    },
+    logger,
+    safeContext: { command: "pdc", expression },
+    acknowledge: (signal: AbortSignal): Promise<void | PdcAcknowledgement> => (
+      responder.reply(`🎯 Scanning PDC ${expression} tournaments…`, { signal })
+    ),
+    report: (session: ReportSession): Promise<PdcCommandOutcome> => (
+      runPdcReport(expression, reader, dateResolver, responder, logger, session)
+    ),
+    ...(expression === "latest" || scheduleBackgroundTask === undefined
+      ? {}
+      : { scheduleBackgroundTask }),
+    ...(responder.edit === undefined
+      ? {}
+      : {
+        schedulingFailureEdit: async (
+          acknowledgement: PdcAcknowledgement | void,
+          signal: AbortSignal,
+        ): Promise<void> => {
+          if (!isPdcAcknowledgement(acknowledgement)) return;
+          await responder.edit?.(
+            acknowledgement.messageId,
+            "⚠️ The PDC report could not be scheduled. Please try again later.",
+            { signal },
+          );
+        },
+      }),
   });
-  try {
-    await raceWithReportDeadline(
-      responder.reply(`🎯 Scanning PDC ${expression} tournaments…`, { signal: budget.totalSignal }),
-      budget.totalSignal,
-      "delivery",
-    );
-  } catch (error: unknown) {
-    logger.warn("PDC tournament report acknowledgement failed.", {
-      expression,
-      failureCode: isReportDeadlineExceeded(error) ? "PDC_TOTAL_DEADLINE_EXCEEDED" : "PDC_ACK_SEND_FAILED",
-    });
-    budget.close();
-    return "failed";
-  }
 
-  const task = runPdcReport(expression, reader, dateResolver, responder, logger, budget);
-  if (expression !== "latest" && scheduleBackgroundTask !== undefined) {
-    scheduleBackgroundTask(task.then((): void => undefined));
-    return "success";
-  }
-  return task;
+  if (lifecycle.status === "completed") return lifecycle.result;
+  if (lifecycle.status === "started") return "success";
+  return "failed";
 }
 
 async function runPdcReport(
@@ -98,37 +117,39 @@ async function runPdcReport(
   dateResolver: (expression: Exclude<PdcReportDateExpression, "latest">) => string,
   responder: PdcCommandResponder,
   logger: Logger,
-  budget: ReportBudget,
+  session: ReportSession,
 ): Promise<Exclude<PdcCommandOutcome, "invalid" | "unavailable">> {
   try {
     const latest = expression === "latest";
-      const date = latest ? dateResolver("today") : dateResolver(expression);
+    const date = latest ? dateResolver("today") : dateResolver(expression);
     if (latest) {
-      if (budget.researchSignal.aborted) throw new ReportDeadlineExceededError("research");
-      const results = await raceWithReportDeadline(
-        reader.getLatestResults(date, budget.researchSignal),
-        budget.researchSignal,
-        "research",
+      const results = await session.research(
+        (signal: AbortSignal): Promise<readonly PdcTournamentResult[]> => (
+          reader.getLatestResults(date, signal)
+        ),
       );
-      await sendPdcMessages(responder, formatPdcTournamentMessages(date, results, true), budget);
+      await sendPdcMessages(responder, formatPdcTournamentMessages(date, results, true), session);
     } else {
-      if (budget.researchSignal.aborted) throw new ReportDeadlineExceededError("research");
       let latestPartial: PdcUpcomingReport | undefined;
       let report: PdcUpcomingReport;
       try {
-        report = await raceWithReportDeadline(
-          reader.getUpcomingReportForDate(date, budget.researchSignal, (partial: PdcUpcomingReport): void => {
-            latestPartial = partial;
-          }),
-          budget.researchSignal,
-          "research",
+        report = await session.research(
+          (signal: AbortSignal): Promise<PdcUpcomingReport> => reader.getUpcomingReportForDate(
+            date,
+            signal,
+            (partial: PdcUpcomingReport): void => {
+              latestPartial = partial;
+            },
+          ),
         );
       } catch (error: unknown) {
-        if (!isReportDeadlineExceeded(error) || latestPartial === undefined) throw error;
-        await sendPdcMessages(responder, formatPdcUpcomingMessages(latestPartial), budget);
+        if (!isReportDeadlineExceeded(error) || error.phase !== "research" || latestPartial === undefined) {
+          throw error;
+        }
+        await sendPdcMessages(responder, formatPdcUpcomingMessages(latestPartial), session);
         return "failed";
       }
-      await sendPdcMessages(responder, formatPdcUpcomingMessages(report), budget);
+      await sendPdcMessages(responder, formatPdcUpcomingMessages(report), session);
     }
     return "success";
   } catch (error: unknown) {
@@ -138,14 +159,12 @@ async function runPdcReport(
       errorType: error instanceof Error ? error.name : "UnknownError",
     });
     try {
-      if (!budget.totalSignal.aborted) {
+      if (session.canDeliver()) {
         const message = isReportDeadlineExceeded(error)
           ? "⚠️ The PDC research deadline was reached before a complete report was available."
           : "The PDC tournament scan could not be completed. Please try again later.";
-        await raceWithReportDeadline(
-          responder.reply(message, { signal: budget.totalSignal }),
-          budget.totalSignal,
-          "delivery",
+        await session.deliver(
+          (signal: AbortSignal): Promise<void | PdcAcknowledgement> => responder.reply(message, { signal }),
         );
       }
     } catch {
@@ -155,24 +174,24 @@ async function runPdcReport(
       });
     }
     return "failed";
-  } finally {
-    budget.close();
   }
 }
 
 async function sendPdcMessages(
   responder: PdcCommandResponder,
   messages: readonly string[],
-  budget: ReportBudget,
+  session: ReportSession,
 ): Promise<void> {
   for (const message of messages) {
-    if (budget.totalSignal.aborted) throw new Error("PDC report total deadline exceeded.");
-    await raceWithReportDeadline(
-      responder.reply(message, { signal: budget.totalSignal }),
-      budget.totalSignal,
-      "delivery",
+    if (!session.canDeliver()) throw new ReportDeadlineExceededError("delivery");
+    await session.deliver(
+      (signal: AbortSignal): Promise<void | PdcAcknowledgement> => responder.reply(message, { signal }),
     );
   }
+}
+
+function isPdcAcknowledgement(value: PdcAcknowledgement | void): value is PdcAcknowledgement {
+  return value !== undefined && Number.isSafeInteger(value.messageId);
 }
 
 export function asPdcTournamentReader(service: PdcTournamentService): PdcTournamentReader {

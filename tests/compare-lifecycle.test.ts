@@ -136,6 +136,30 @@ describe("compare lifecycle", () => {
     expect(scheduled).toBe(0);
   });
 
+  it("does not research after scheduler registration fails and edits the confirmed acknowledgement once", async () => {
+    let lookups = 0;
+    const responder = new LifecycleResponder();
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (): Promise<PlayerStatsResult> => {
+        lookups += 1;
+        return result("Alpha Player");
+      },
+    };
+
+    await expect(handleCompareCommand(
+      "/compare Alpha Player, Beta Player",
+      service,
+      responder,
+      new LifecycleLogger(),
+      20,
+      (): void => { throw new Error("registration failed"); },
+      { totalMs: 1_000, researchMs: 500 },
+    )).resolves.toBe("failed");
+    expect(lookups).toBe(0);
+    expect(responder.edits).toHaveLength(1);
+    expect(responder.replies).toHaveLength(1);
+  });
+
   it("stops after an uncertain edit failure instead of sending a fallback page", async () => {
     const responder = new LifecycleResponder();
     responder.failEdit = true;
@@ -192,6 +216,44 @@ describe("compare lifecycle", () => {
       expect(responder.signals).toHaveLength(2);
       expect(responder.signals[0]).toBe(responder.signals[1]);
       expect(responder.signals[1]?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves partial delivery accounting when a later page hangs at the cutoff", async () => {
+    vi.useFakeTimers();
+    const responder = new LifecycleResponder();
+    responder.reply = async (text: string, options?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
+      responder.replies.push(text);
+      if (options?.signal !== undefined) responder.signals.push(options.signal);
+      if (responder.replies.length > 1) await new Promise<void>(() => undefined);
+      return { messageId: responder.replies.length };
+    };
+    const logger = new LifecycleLogger();
+    const service: PlayerStatsReader = {
+      getPlayerStats: async (playerName: string): Promise<PlayerStatsResult> => result(playerName, 20),
+    };
+
+    try {
+      const pending = handleCompareCommand(
+        "/compare Alpha Player, Beta Player last 20",
+        service,
+        responder,
+        logger,
+        21,
+        undefined,
+        { totalMs: 30, researchMs: 10 },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(responder.edits).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(31);
+      await expect(pending).resolves.toBe("partial");
+      expect(responder.replies).toHaveLength(2);
+      const completed = logger.entries.find((entry) => entry.message === "Player comparison completed.");
+      expect(completed?.context).toMatchObject({
+        delivery: expect.objectContaining({ delivered: 1, failed: 1, uncertain: true }),
+      });
     } finally {
       vi.useRealTimers();
     }

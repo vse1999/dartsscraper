@@ -1,9 +1,8 @@
+import { isReportDeadlineExceeded } from "../daily/report-budget.js";
 import {
-  createReportBudget,
-  isReportDeadlineExceeded,
-  raceWithReportDeadline,
-  type ReportBudget,
-} from "../daily/report-budget.js";
+  runReportLifecycle,
+  type ReportSession,
+} from "../daily/report-lifecycle.js";
 import {
   DartsOrakelRequestError,
   DartsOrakelStructureChangedError,
@@ -98,99 +97,37 @@ export async function handleCompareCommand(
     return "invalid";
   }
 
-  const budget = createReportBudget({
-    totalMs: budgetOverrides?.totalMs ?? COMPARE_TOTAL_BUDGET_MS,
-    researchMs: budgetOverrides?.researchMs ?? COMPARE_RESEARCH_BUDGET_MS,
-    ...(budgetOverrides?.now === undefined ? {} : { now: budgetOverrides.now }),
-  });
-
-  let status: { readonly messageId: number };
-  const ackStartedAt = Date.now();
-  if (!canStartDelivery(budget)) {
-    logger.warn("Player comparison acknowledgement skipped at the total deadline.", {
-      updateId,
-      phase: "ack",
-      durationMs: 0,
-      attempted: 0,
-      delivered: 0,
-      failed: 0,
-      skipped: 1,
-      uncertain: false,
-      failureCode: "COMPARE_ACK_TIMEOUT",
-    });
-    budget.close();
-    return "failed";
-  }
-  try {
-    // The acknowledgement is deliberately awaited before research is started
-    // or handed to a background scheduler. This keeps a failed Telegram send
-    // from creating work the caller cannot observe or retry safely.
-    status = await raceWithReportDeadline(
-      responder.reply(`🔎 Comparing the latest ${query.matchCount} completed matches…`, { signal: budget.totalSignal }),
-      budget.totalSignal,
-      "delivery",
-    );
-    logger.info("Player comparison acknowledgement delivered.", {
-      updateId,
-      phase: "ack",
-      durationMs: Date.now() - ackStartedAt,
-      attempted: 1,
-      delivered: 1,
-      failed: 0,
-      skipped: 0,
-      uncertain: false,
-      failureCode: null,
-    });
-  } catch (error: unknown) {
-    logger.warn("Player comparison acknowledgement failed.", {
-      updateId,
-      phase: "ack",
-      durationMs: Date.now() - ackStartedAt,
-      attempted: 1,
-      delivered: 0,
-      failed: 1,
-      skipped: 0,
-      uncertain: true,
-      failureCode: deliveryFailureCode(error, "ack"),
-      errorType: safeErrorType(error),
-    });
-    budget.close();
-    return "failed";
-  }
-
-  const task = executeCompareCommand(
-    query,
-    statsService,
-    responder,
+  const result = await runReportLifecycle({
+    budget: {
+      totalMs: budgetOverrides?.totalMs ?? COMPARE_TOTAL_BUDGET_MS,
+      researchMs: budgetOverrides?.researchMs ?? COMPARE_RESEARCH_BUDGET_MS,
+      ...(budgetOverrides?.now === undefined ? {} : { now: budgetOverrides.now }),
+    },
     logger,
-    updateId,
-    budget,
-    status.messageId,
-  );
-  if (scheduleBackgroundTask !== undefined) {
-    try {
-      scheduleBackgroundTask(task.then((): void => undefined, (error: unknown): void => {
-        logger.error("Background player comparison failed.", {
-          updateId,
-          code: "COMPARE_BACKGROUND_FAILED",
-          errorType: safeErrorType(error),
-        });
-      }));
-    } catch (error: unknown) {
-      // A scheduler is an application boundary. The task already has a
-      // rejection observer above, but close the budget if registration itself
-      // fails so its timers cannot outlive the failed request.
-      budget.close();
-      logger.error("Background player comparison could not be scheduled.", {
-        updateId,
-        code: "COMPARE_BACKGROUND_SCHEDULE_FAILED",
-        errorType: safeErrorType(error),
-      });
-      return "failed";
-    }
-    return "started";
-  }
-  return task;
+    safeContext: { updateId, command: "compare" },
+    acknowledge: (signal: AbortSignal): Promise<{ readonly messageId: number }> => responder.reply(
+      `🔎 Comparing the latest ${query.matchCount} completed matches…`,
+      { signal },
+    ),
+    report: (session: ReportSession, acknowledgement: { readonly messageId: number }): Promise<CompareCommandOutcome> => executeCompareCommand(
+      query,
+      statsService,
+      responder,
+      logger,
+      updateId,
+      session,
+      acknowledgement.messageId,
+    ),
+    ...(scheduleBackgroundTask === undefined ? {} : { scheduleBackgroundTask }),
+    schedulingFailureEdit: (acknowledgement: { readonly messageId: number }, signal: AbortSignal): Promise<void> => responder.edit(
+      acknowledgement.messageId,
+      "⚠️ The comparison could not be scheduled. Please try again later.",
+      { signal },
+    ),
+  });
+  if (result.status === "completed") return result.result;
+  if (result.status === "started") return "started";
+  return "failed";
 }
 
 export function buildCompareAnalysis(
@@ -219,7 +156,7 @@ async function executeCompareCommand(
   responder: CompareMessageResponder,
   logger: Logger,
   updateId: number,
-  budget: ReportBudget,
+  session: ReportSession,
   statusMessageId: number,
 ): Promise<Exclude<CompareCommandOutcome, "invalid" | "started">> {
   const startedAt = Date.now();
@@ -229,7 +166,7 @@ async function executeCompareCommand(
     const players: ComparePlayerResearch[] = [];
     for (const [index, requestedName] of query.playerNames.entries()) {
       const playerStartedAt = Date.now();
-      const player = await researchPlayer(requestedName, query.matchCount, statsService, budget);
+      const player = await researchPlayer(requestedName, query.matchCount, statsService, session);
       players.push(player);
       const summary = player.result === null ? null : calculateMatchSummary(player.result.matches);
       playerMetrics.push({
@@ -287,7 +224,7 @@ async function executeCompareCommand(
       generatedAt: new Date().toISOString(),
     };
     const pages = formatCompareMessages(report);
-    const delivery = await deliverPages(pages, statusMessageId, responder, budget, logger, updateId);
+    const delivery = await deliverPages(pages, statusMessageId, responder, session, logger, updateId);
 
     const succeeded = players.filter((player): boolean => player.result !== null).length;
     const researchOutcome: Exclude<CompareCommandOutcome, "invalid" | "started"> = succeeded === 2
@@ -333,8 +270,6 @@ async function executeCompareCommand(
       } satisfies CompareDeliveryOutcome,
     });
     return "failed";
-  } finally {
-    budget.close();
   }
 }
 
@@ -342,9 +277,9 @@ async function researchPlayer(
   requestedName: string,
   matchCount: CompareQuery["matchCount"],
   statsService: PlayerStatsReader,
-  budget: ReportBudget,
+  session: ReportSession,
 ): Promise<ComparePlayerResearch> {
-  if (budget.researchSignal.aborted || budget.researchRemainingMs() <= 0 || budget.remainingMs() <= 0) {
+  if (!session.canResearch()) {
     return {
       requestedName,
       result: null,
@@ -354,11 +289,12 @@ async function researchPlayer(
   }
 
   try {
-    const result = await raceWithReportDeadline(
-      statsService.getPlayerStats(requestedName, matchCount, "dartsorakel", budget.researchSignal),
-      budget.researchSignal,
-      "research",
-    );
+    const result = await session.research((signal: AbortSignal): Promise<PlayerStatsResult> => statsService.getPlayerStats(
+      requestedName,
+      matchCount,
+      "dartsorakel",
+      signal,
+    ));
     return { requestedName, result, failureCode: null, failureMessage: "" };
   } catch (error: unknown) {
     return {
@@ -374,7 +310,7 @@ async function deliverPages(
   pages: readonly string[],
   statusMessageId: number,
   responder: CompareMessageResponder,
-  budget: ReportBudget,
+  session: ReportSession,
   logger: Logger,
   updateId: number,
 ): Promise<CompareDeliveryOutcome> {
@@ -404,7 +340,7 @@ async function deliverPages(
   const firstPage = pages[0];
 
   if (firstPage !== undefined) {
-    if (!canStartDelivery(budget)) {
+    if (!session.canDeliver()) {
       skipped = pages.length;
       failureCodes.push("COMPARE_DELIVERY_TIMEOUT");
       logger.warn("Player comparison report delivery skipped at the total deadline.", {
@@ -421,11 +357,7 @@ async function deliverPages(
     } else {
       attempted += 1;
       try {
-        await raceWithReportDeadline(
-          responder.edit(statusMessageId, firstPage, { signal: budget.totalSignal }),
-          budget.totalSignal,
-          "delivery",
-        );
+        await session.deliver((signal: AbortSignal): Promise<void> => responder.edit(statusMessageId, firstPage, { signal }));
         delivered += 1;
       } catch (error: unknown) {
         failed += 1;
@@ -451,7 +383,7 @@ async function deliverPages(
 
   if (failed === 0 && skipped === 0) {
     for (const page of pages.slice(1)) {
-      if (!canStartDelivery(budget)) {
+      if (!session.canDeliver()) {
         skipped += pages.length - attempted;
         failureCodes.push("COMPARE_DELIVERY_TIMEOUT");
         logger.warn("Player comparison report pages skipped at the total deadline.", {
@@ -469,11 +401,7 @@ async function deliverPages(
       }
       attempted += 1;
       try {
-        await raceWithReportDeadline(
-          responder.reply(page, { signal: budget.totalSignal }),
-          budget.totalSignal,
-          "delivery",
-        );
+        await session.deliver((signal: AbortSignal): Promise<{ readonly messageId: number }> => responder.reply(page, { signal }));
         delivered += 1;
       } catch (error: unknown) {
         failed += 1;
@@ -540,10 +468,6 @@ function failureMessage(error: unknown): string {
     return "statistics source returned an unsupported response";
   }
   return "statistics lookup failed";
-}
-
-function canStartDelivery(budget: ReportBudget): boolean {
-  return !budget.totalSignal.aborted && budget.remainingMs() > 0;
 }
 
 function deliveryFailureCode(error: unknown, stage: "ack" | "edit" | "reply"): string {

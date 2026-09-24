@@ -194,13 +194,27 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
   });
 
   bot.command("pdc", async (ctx: Context): Promise<void> => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
     await handlePdcReportCommand(
       ctx.message?.text ?? "",
       options.pdcTournamentService,
       (expression): string => resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date,
-      { reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
-        await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
-      } },
+      {
+        reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
+          const sent = await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
+          return { messageId: sent.message_id };
+        },
+        edit: async (messageId: number, text: string, editOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
+          await ctx.api.editMessageText(
+            chatId,
+            messageId,
+            text,
+            undefined,
+            editOptions?.signal as unknown as GrammyAbortSignal | undefined,
+          );
+        },
+      },
       logger,
       options.scheduleBackgroundTask,
     );
