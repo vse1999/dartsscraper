@@ -4,6 +4,7 @@ import { IsoDateSchema } from "../agent/date.js";
 import type { FixtureNameResolver } from "./fixture-name-resolver.js";
 import { canonicalizeFixtureName } from "./fixture-name-resolver.js";
 import { ModusFixtureSchema, type ModusFixture, type ModusFixtureSource } from "./schemas.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_URL = "https://modussuperseries.com/live-scores-json.php";
 const OfficialCompetitorSchema = z.object({
@@ -34,19 +35,23 @@ export class OfficialModusSource implements ModusFixtureSource {
     this.resolver = options.resolver;
   }
   public sourceUrl(_date: string): string { return this.url; }
-  public async getPlayers(date: string): Promise<readonly string[]> {
+  public async getPlayers(date: string, signal?: AbortSignal): Promise<readonly string[]> {
+    throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
-    const feed = await this.fetchFeed();
+    const feed = await this.fetchFeed(signal);
     if (feed.date !== validatedDate) return [];
     const names = feed.summaries
       .flatMap((summary) => summary.sport_event.competitors?.map((competitor) => canonicalizeFixtureName(competitor.name)) ?? [])
       .filter(isNamedPlayer);
-    return this.resolveNames(names);
+    const resolved = await this.resolveNames(names, signal);
+    throwIfAborted(signal);
+    return resolved;
   }
 
-  public async getFixtures(date: string): Promise<readonly ModusFixture[]> {
+  public async getFixtures(date: string, signal?: AbortSignal): Promise<readonly ModusFixture[]> {
+    throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
-    const feed = await this.fetchFeed();
+    const feed = await this.fetchFeed(signal);
     if (feed.date !== validatedDate) return [];
 
     const fixtures: ModusFixture[] = [];
@@ -55,7 +60,9 @@ export class OfficialModusSource implements ModusFixtureSource {
       if (competitors.length !== 2) continue;
       const rawNames = competitors.map((competitor) => canonicalizeFixtureName(competitor.name));
       if (rawNames.some((name) => !isNamedPlayer(name))) continue;
-      const resolvedNames = await this.resolveNames(rawNames);
+      throwIfAborted(signal);
+      const resolvedNames = await this.resolveNames(rawNames, signal);
+      throwIfAborted(signal);
       const playerOne = resolvedNames[0];
       const playerTwo = resolvedNames[1];
       if (playerOne === undefined || playerTwo === undefined) continue;
@@ -72,24 +79,36 @@ export class OfficialModusSource implements ModusFixtureSource {
     return fixtures;
   }
 
-  private async fetchFeed(): Promise<OfficialFeed> {
+  private async fetchFeed(callerSignal?: AbortSignal): Promise<OfficialFeed> {
+    throwIfAborted(callerSignal);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("MODUS request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("MODUS request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(this.url, {
+      const response = await waitWithSignal(this.fetchImpl(this.url, {
         headers: { Accept: "application/json", "User-Agent": "DartsResearchAgent/0.2" }, signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload: unknown = await response.json();
+      const payload: unknown = await waitWithSignal(response.json(), controller.signal);
+      throwIfAborted(callerSignal);
       const parsed = OfficialFeedSchema.safeParse(payload);
       if (!parsed.success) throw new DartsOrakelStructureChangedError("The official MODUS daily feed changed structure.", parsed.error);
       return parsed.data;
-    } finally { clearTimeout(timeout); }
+    } catch (error: unknown) {
+      throwIfAborted(callerSignal);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
-  private async resolveNames(names: readonly string[]): Promise<readonly string[]> {
+  private async resolveNames(names: readonly string[], signal?: AbortSignal): Promise<readonly string[]> {
     if (this.resolver === undefined) return names;
-    return Promise.all(names.map((name) => isAbbreviatedName(name) ? this.resolver?.resolve(name) ?? name : name));
+    return Promise.all(names.map((name): Promise<string> => isAbbreviatedName(name)
+      ? this.resolver?.resolve(name, signal) ?? Promise.resolve(name)
+      : Promise.resolve(name)));
   }
 }
 

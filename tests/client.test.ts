@@ -26,6 +26,203 @@ describe("DartsOrakelClient", () => {
     expect(sleep).toHaveBeenCalledWith(10);
   });
 
+  it("cancels failed response bodies before retrying", async () => {
+    const cancel = vi.fn<() => Promise<void>>(async (): Promise<void> => undefined);
+    const failedResponse = {
+      ok: false,
+      status: 503,
+      headers: new Headers(),
+      body: { cancel },
+    } as unknown as Response;
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(failedResponse)
+      .mockResolvedValueOnce(Response.json(readMatchFixture("damon-heta-matches.json")));
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      minRequestIntervalMs: 0,
+      backoffMs: 0,
+    });
+
+    await expect(client.getPlayerMatches(13)).resolves.toHaveProperty("recordsTotal", 640);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a transient network failure", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(Response.json(readMatchFixture("damon-heta-matches.json")));
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      minRequestIntervalMs: 0,
+      backoffMs: 0,
+    });
+
+    await expect(client.getPlayerMatches(13)).resolves.toHaveProperty("recordsTotal", 640);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels an active response body parse and its transport", async () => {
+    let beginParsing: () => void = () => undefined;
+    let releaseBody: () => void = () => undefined;
+    const parsing = new Promise<void>((resolve) => { beginParsing = resolve; });
+    const body = new Promise<void>((resolve) => { releaseBody = resolve; });
+    const cancelBody = vi.fn<() => Promise<void>>(async (): Promise<void> => undefined);
+    let requestSignal: AbortSignal | undefined;
+    const fetchImpl: typeof fetch = async (_input, init): Promise<Response> => {
+      requestSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        body: { cancel: cancelBody },
+        json: async (): Promise<unknown> => {
+          beginParsing();
+          await body;
+          return { draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] };
+        },
+      } as unknown as Response;
+    };
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      minRequestIntervalMs: 0,
+      timeoutMs: 10_000,
+      maxRetries: 0,
+    });
+    const controller = new AbortController();
+    const pending = client.getPlayerStats(controller.signal);
+    await parsing;
+
+    controller.abort(new Error("report deadline"));
+    await expect(pending).rejects.toThrow("report deadline");
+    expect(requestSignal?.aborted).toBe(true);
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    releaseBody();
+  });
+
+  it("keeps the per-attempt timeout active while parsing the response body", async () => {
+    vi.useFakeTimers();
+    try {
+      let beginParsing: () => void = () => undefined;
+      let releaseBody: () => void = () => undefined;
+      const parsing = new Promise<void>((resolve) => { beginParsing = resolve; });
+      const body = new Promise<void>((resolve) => { releaseBody = resolve; });
+      const fetchImpl: typeof fetch = async (): Promise<Response> => ({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async (): Promise<unknown> => {
+          beginParsing();
+          await body;
+          return { draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] };
+        },
+      } as Response);
+      const client = new DartsOrakelClient({
+        baseUrl: "https://example.com",
+        fetchImpl,
+        minRequestIntervalMs: 0,
+        timeoutMs: 25,
+        maxRetries: 0,
+      });
+      const pending = client.getPlayerStats();
+      await parsing;
+      vi.advanceTimersByTime(25);
+      await expect(pending).rejects.toBeInstanceOf(DartsOrakelRequestError);
+      releaseBody();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a retry after cancellation during backoff", async () => {
+    let releaseSleep: () => void = () => undefined;
+    const sleep = vi.fn<(milliseconds: number, signal?: AbortSignal) => Promise<void>>(() => new Promise<void>((resolve) => {
+      releaseSleep = resolve;
+    }));
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response("temporary failure", { status: 503 }));
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      sleep,
+      backoffMs: 100,
+      minRequestIntervalMs: 0,
+    });
+    const controller = new AbortController();
+    const pending = client.getPlayerStats(controller.signal);
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledWith(100, controller.signal));
+    controller.abort(new Error("cancelled retry"));
+    await expect(pending).rejects.toThrow("cancelled retry");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    releaseSleep();
+  });
+
+  it("does not issue a queued request after its caller is cancelled", async () => {
+    let startDelayedSleep: () => void = () => undefined;
+    const delayedSleep = new Promise<void>((resolve) => { startDelayedSleep = resolve; });
+    const sleep = vi.fn<(milliseconds: number, signal?: AbortSignal) => Promise<void>>((milliseconds: number) => {
+      return milliseconds > 0 ? delayedSleep : Promise.resolve();
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (): Promise<Response> => {
+      return new Response(JSON.stringify({ draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] }), { status: 200 });
+    });
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      sleep,
+      minRequestIntervalMs: 10_000,
+      maxRetries: 0,
+    });
+    await client.getPlayerStats();
+    const controller = new AbortController();
+    const pending = client.getPlayerStats(controller.signal);
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledWith( expect.any(Number), controller.signal));
+    controller.abort(new Error("cancelled queue"));
+    await expect(pending).rejects.toThrow("cancelled queue");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    startDelayedSleep();
+  });
+
+  it("keeps FIFO ordering when the middle queued request is cancelled", async () => {
+    const sleepReleases: Array<() => void> = [];
+    const sleep = vi.fn<(milliseconds: number, signal?: AbortSignal) => Promise<void>>((milliseconds: number) => {
+      if (milliseconds <= 0) return Promise.resolve();
+      return new Promise<void>((resolve) => sleepReleases.push(resolve));
+    });
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async (): Promise<Response> => {
+      return new Response(JSON.stringify({ draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] }), { status: 200 });
+    });
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      fetchImpl,
+      sleep,
+      minRequestIntervalMs: 10_000,
+      maxRetries: 0,
+    });
+    await client.getPlayerStats();
+
+    const first = client.getPlayerStats();
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledTimes(1));
+    const middleController = new AbortController();
+    const middle = client.getPlayerStats(middleController.signal);
+    const last = client.getPlayerStats();
+    middleController.abort(new Error("middle cancelled"));
+    await expect(middle).rejects.toThrow("middle cancelled");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    const firstSleep = sleepReleases[0];
+    if (firstSleep === undefined) throw new Error("Expected first request to be waiting in the queue.");
+    firstSleep();
+    await first;
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledTimes(2));
+    const lastSleep = sleepReleases[1];
+    if (lastSleep === undefined) throw new Error("Expected last request to wait for pacing.");
+    lastSleep();
+    await last;
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   it("honors a longer Retry-After delay from a rate-limited source", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("rate limited", {

@@ -68,16 +68,24 @@ export async function handleDailyModusReport(
 
   try {
     const result = await dependencies.execute(requestedDate);
-    const succeeded = result.results.filter((player) => player.status === "succeeded").length;
+    const succeeded = result.outcome.data.succeeded;
+    const reportSucceeded = isSuccessfulOutcome(result);
+    const explicitNoRoster = result.outcome.discovery.status === "empty"
+      && result.outcome.data.status === "empty"
+      && result.outcome.delivery.status === "complete"
+      && result.outcome.delivery.failed === 0;
+    const responseStatus = result.outcome.status === "failed" && !explicitNoRoster ? 502 : 200;
     return new Response(JSON.stringify({
-      ok: true,
+      ok: reportSucceeded,
+      status: result.outcome.status,
       date: result.date,
       players: result.players.length,
       succeeded,
-      failed: result.results.length - succeeded,
+      failed: result.outcome.data.failed,
       discoverySucceeded: result.discoverySucceeded,
+      outcome: result.outcome,
     }), {
-      status: 200,
+      status: responseStatus,
       headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8" },
     });
   } catch (error: unknown) {
@@ -91,6 +99,24 @@ export async function handleDailyModusReport(
       headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
     });
   }
+}
+
+function isSuccessfulOutcome(result: ModusReportResult): boolean {
+  return result.outcome.status === "succeeded"
+    && result.players.length > 0
+    && result.outcome.discovery.status === "succeeded"
+    && result.outcome.discovery.playersDiscovered === result.players.length
+    && result.outcome.discovery.warnings.length === 0
+    && result.outcome.data.status === "complete"
+    && result.outcome.data.attempted === result.players.length
+    && result.outcome.data.succeeded === result.players.length
+    && result.outcome.data.failed === 0
+    && (result.outcome.data.unstarted ?? 0) === 0
+    && (result.outcome.data.timedOut ?? 0) === 0
+    && result.outcome.delivery.status === "complete"
+    && result.outcome.delivery.attempted > 0
+    && result.outcome.delivery.succeeded === result.outcome.delivery.attempted
+    && result.outcome.delivery.failed === 0;
 }
 
 async function productionFetch(request: Request): Promise<Response> {

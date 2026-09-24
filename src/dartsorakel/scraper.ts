@@ -6,6 +6,7 @@ import {
 } from "./parser.js";
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
+import { throwIfAborted } from "../services/cancellation.js";
 
 const RECENT_LOOKBACK_DAYS = [90, 180, 365, 730] as const;
 const MINIMUM_REQUEST_ROWS = 50;
@@ -31,55 +32,91 @@ export class DartsOrakelScraper {
     this.enrichStatistics = options.enrichStatistics ?? true;
   }
 
-  public async getPlayerMatches(player: PlayerIdentity, limit?: number, dateTo?: string): Promise<Match[]> {
+  public async getPlayerMatches(
+    player: PlayerIdentity,
+    limit?: number,
+    dateTo?: string,
+    signal?: AbortSignal,
+  ): Promise<Match[]> {
+    throwIfAborted(signal);
     if (limit === undefined) {
-      const average = await this.client.getPlayerMatches(player.id);
-      return this.enrichMatches(player, {}, average);
+      const average = signal === undefined
+        ? await this.client.getPlayerMatches(player.id)
+        : await this.client.getPlayerMatches(player.id, {}, signal);
+      throwIfAborted(signal);
+      return this.enrichMatches(player, {}, average, signal);
     }
-    return this.getRecentPlayerMatches(player, { limit, ...(dateTo === undefined ? {} : { dateTo }) });
+    return this.getRecentPlayerMatches(
+      player,
+      { limit, ...(dateTo === undefined ? {} : { dateTo }) },
+      signal,
+    );
   }
 
-  public async getRecentPlayerMatches(player: PlayerIdentity, options: RecentPlayerMatchesOptions): Promise<Match[]> {
+  public async getRecentPlayerMatches(
+    player: PlayerIdentity,
+    options: RecentPlayerMatchesOptions,
+    signal?: AbortSignal,
+  ): Promise<Match[]> {
     validateLimit(options.limit);
+    throwIfAborted(signal);
     const dateTo = options.dateTo ?? addDays(this.now().toISOString().slice(0, 10), 1);
     const requestRows = Math.min(1_000, Math.max(MINIMUM_REQUEST_ROWS, options.limit * 5));
     for (const lookbackDays of RECENT_LOOKBACK_DAYS) {
-      const response = await this.client.getPlayerMatches(player.id, {
+      const request: DartsOrakelMatchRequestOptions = {
         dateFrom: addDays(dateTo, -lookbackDays),
         dateTo,
         limit: requestRows,
-      });
+      };
+      const response = signal === undefined
+        ? await this.client.getPlayerMatches(player.id, request)
+        : await this.client.getPlayerMatches(player.id, request, signal);
+      throwIfAborted(signal);
       const matches = parseDartsOrakelMatches(player, response);
       if (matches.length >= options.limit) {
         return this.enrichMatches(player, {
           dateFrom: addDays(dateTo, -lookbackDays),
           dateTo,
           limit: requestRows,
-        }, response);
+        }, response, signal);
       }
     }
-    const response = await this.client.getPlayerMatches(player.id, {
+    const request: DartsOrakelMatchRequestOptions = {
       dateFrom: "1900-01-01",
       dateTo,
       limit: requestRows,
-    });
+    };
+    const response = signal === undefined
+      ? await this.client.getPlayerMatches(player.id, request)
+      : await this.client.getPlayerMatches(player.id, request, signal);
+    throwIfAborted(signal);
     return this.enrichMatches(player, {
       dateFrom: "1900-01-01",
       dateTo,
       limit: requestRows,
-    }, response);
+    }, response, signal);
   }
 
   private async enrichMatches(
     player: PlayerIdentity,
     request: Omit<DartsOrakelMatchRequestOptions, "statistic">,
     average: DartsOrakelMatchesResponse,
+    signal?: AbortSignal,
   ): Promise<Match[]> {
+    throwIfAborted(signal);
     if (!this.enrichStatistics) return parseDartsOrakelMatches(player, average);
-    const [oneEighties, checkoutPercentage] = await Promise.all([
-      this.client.getPlayerMatches(player.id, { ...request, statistic: "oneEighties" }),
-      this.client.getPlayerMatches(player.id, { ...request, statistic: "checkoutPercentage" }),
-    ]);
+    const oneEightiesRequest: DartsOrakelMatchRequestOptions = { ...request, statistic: "oneEighties" };
+    const checkoutRequest: DartsOrakelMatchRequestOptions = { ...request, statistic: "checkoutPercentage" };
+    const [oneEighties, checkoutPercentage] = signal === undefined
+      ? await Promise.all([
+        this.client.getPlayerMatches(player.id, oneEightiesRequest),
+        this.client.getPlayerMatches(player.id, checkoutRequest),
+      ])
+      : await Promise.all([
+        this.client.getPlayerMatches(player.id, oneEightiesRequest, signal),
+        this.client.getPlayerMatches(player.id, checkoutRequest, signal),
+      ]);
+    throwIfAborted(signal);
     return parseDartsOrakelMatchesWithStatistics(player, { average, oneEighties, checkoutPercentage });
   }
 }

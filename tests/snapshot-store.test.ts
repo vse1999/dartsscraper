@@ -99,6 +99,33 @@ describe("SnapshotStore", () => {
     });
   });
 
+  it("does not start a refresh when an existing entry is no longer fresh", async () => {
+    let currentTime = 3_000;
+    const loader = vi.fn<() => Promise<string>>().mockResolvedValue("snapshot-1");
+    const store = new SnapshotStore(storeOptions(loader, () => currentTime));
+
+    await store.preload();
+    currentTime = 3_150;
+
+    await expect(store.getExisting()).resolves.toBeUndefined();
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for an existing refresh without starting another one", async () => {
+    const refresh = deferred<string>();
+    const loader = vi.fn<() => Promise<string>>().mockReturnValue(refresh.promise);
+    const store = new SnapshotStore(storeOptions(loader, () => 4_000));
+    const first = store.get();
+    const second = store.getExisting();
+
+    expect(loader).toHaveBeenCalledTimes(1);
+    refresh.resolve("snapshot-1");
+
+    await expect(first).resolves.toMatchObject({ value: "snapshot-1" });
+    await expect(second).resolves.toMatchObject({ value: "snapshot-1" });
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
   it("fails after the cached value exceeds the maximum stale age", async () => {
     let currentTime = 4_000;
     const loader = vi.fn<() => Promise<string>>()

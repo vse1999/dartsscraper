@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PlayerAmbiguousError, PlayerNotFoundError } from "../src/errors.js";
+import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
 import { PlayerResolver, normalizePlayerName, playerIdentityFromStatsRow } from "../src/player/resolver.js";
 import type { PlayerStatsResponse } from "../src/schemas/player.js";
 import { readPlayerStatsFixture } from "./helpers.js";
@@ -83,6 +84,85 @@ describe("player resolver", () => {
     });
     await resolver.resolvePlayer("Damon Heta");
 
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a shared directory load valid when one consumer is cancelled", async () => {
+    let release: () => void = () => undefined;
+    const loading = new Promise<void>((resolve) => { release = resolve; });
+    const getPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => {
+      await loading;
+      return readPlayerStatsFixture();
+    });
+    const resolver = new PlayerResolver({ getPlayerStats });
+    const shared = resolver.resolvePlayer("Damon Heta");
+    const controller = new AbortController();
+    const cancelled = resolver.resolvePlayer("Robert Thornton", controller.signal);
+    controller.abort(new Error("directory deadline"));
+    await expect(cancelled).rejects.toThrow("directory deadline");
+    release();
+    await expect(shared).resolves.toMatchObject({ name: "Damon Heta" });
+    await expect(resolver.resolvePlayer("Robert Thornton")).resolves.toMatchObject({ name: "Robert Thornton" });
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache a directory load that is cancelled by its only consumer", async () => {
+    const getPlayerStats = vi.fn(async (signal?: AbortSignal): Promise<PlayerStatsResponse> => {
+      if (signal !== undefined) {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        throw signal.reason instanceof Error ? signal.reason : new Error("cancelled");
+      }
+      return readPlayerStatsFixture();
+    });
+    const resolver = new PlayerResolver({ getPlayerStats });
+    const controller = new AbortController();
+    const cancelled = resolver.resolvePlayer("Damon Heta", controller.signal);
+    controller.abort(new Error("directory deadline"));
+
+    await expect(cancelled).rejects.toThrow("directory deadline");
+    await expect(resolver.resolvePlayer("Damon Heta")).resolves.toMatchObject({ name: "Damon Heta" });
+    expect(getPlayerStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share a signal-bound fixture directory load across callers", async () => {
+    const first = new AbortController();
+    const second = new AbortController();
+    const getPlayerStats = vi.fn(async (signal?: AbortSignal): Promise<PlayerStatsResponse> => {
+      if (signal === first.signal) {
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      }
+      return readPlayerStatsFixture();
+    });
+    const resolver = new FixtureNameResolver({ getPlayerStats });
+
+    const cancelled = resolver.resolve("Damon Heta", first.signal);
+    await vi.waitFor(() => expect(getPlayerStats).toHaveBeenCalledTimes(1));
+    const surviving = resolver.resolve("Robert Thornton", second.signal);
+    await vi.waitFor(() => expect(getPlayerStats).toHaveBeenCalledTimes(2));
+
+    first.abort(new Error("fixture directory deadline"));
+    await expect(cancelled).rejects.toThrow("fixture directory deadline");
+    await expect(surviving).resolves.toBe("Robert Thornton");
+    expect(getPlayerStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("single-flights signal-bound fixture directory loads for one report", async () => {
+    let release: () => void = () => undefined;
+    const loading = new Promise<void>((resolve) => { release = resolve; });
+    const getPlayerStats = vi.fn(async (_signal?: AbortSignal): Promise<PlayerStatsResponse> => {
+      await loading;
+      return readPlayerStatsFixture();
+    });
+    const resolver = new FixtureNameResolver({ getPlayerStats });
+    const controller = new AbortController();
+    const first = resolver.resolve("Damon Heta", controller.signal);
+    const second = resolver.resolve("Robert Thornton", controller.signal);
+
+    await vi.waitFor(() => expect(getPlayerStats).toHaveBeenCalledTimes(1));
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual(["Damon Heta", "Robert Thornton"]);
     expect(getPlayerStats).toHaveBeenCalledTimes(1);
   });
 

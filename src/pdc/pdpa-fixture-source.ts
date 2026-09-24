@@ -3,6 +3,7 @@ import * as cheerio from "cheerio";
 import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_BASE_URL = "https://pdpa.co.uk";
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -47,11 +48,12 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async getFixtures(date: string): Promise<readonly PdcFixture[]> {
+  public async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
+    throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
     const calendarUrl = new URL("/events/calendar/", this.baseUrl).toString();
     const references = parsePdpaEventReferences(
-      await this.fetchText(calendarUrl),
+      await this.fetchText(calendarUrl, signal),
       calendarUrl,
       validatedDate,
     );
@@ -60,15 +62,18 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
     const fixtures: PdcFixture[] = [];
     let successfulPages = 0;
     for (const reference of references) {
+      throwIfAborted(signal);
       try {
         const eventFixtures = parsePdpaEventFixtures(
-          await this.fetchText(reference.url),
+          await this.fetchText(reference.url, signal),
           reference.url,
           validatedDate,
         );
+        throwIfAborted(signal);
         successfulPages += 1;
         fixtures.push(...eventFixtures);
       } catch (error: unknown) {
+        if (signal?.aborted === true) throw error;
         this.logger.warn("PDPA event schedule could not be parsed.", {
           date: validatedDate,
           event: reference.title,
@@ -83,20 +88,25 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
     return deduplicateFixtures(fixtures);
   }
 
-  private async fetchText(url: string): Promise<string> {
+  private async fetchText(url: string, callerSignal?: AbortSignal): Promise<string> {
+    throwIfAborted(callerSignal);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("PDC fixture request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("PDC fixture request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(url, {
+      const response = await waitWithSignal(this.fetchImpl(url, {
         method: "GET",
         headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.6" },
         signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.text();
+      const body = await waitWithSignal(response.text(), controller.signal);
+      throwIfAborted(callerSignal);
       if (body.trim() === "") throw new Error("empty response");
       return body;
     } catch (error: unknown) {
+      if (callerSignal?.aborted === true) throw error;
       throw new PdpaFixtureSourceUnavailableError(
         controller.signal.aborted
           ? `PDPA request timed out after ${this.timeoutMs} ms: ${url}`
@@ -105,6 +115,7 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
       );
     } finally {
       clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
     }
   }
 }

@@ -182,10 +182,60 @@ describe("automatic MODUS report", () => {
     });
 
     const result = await runModusReport(options(["A", "B", "C"], value));
-    expect(result.results.map((item) => item.status)).toEqual(["failed", "failed", "failed"]);
+    expect(result.results.map((item) => item.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
     expect(value.getPlayerStats).toHaveBeenCalledTimes(3);
     expect(value.sendMessage).toHaveBeenCalledTimes(1);
-    expect(result.results.every((item) => item.error === "TELEGRAM_SEND_FAILED")).toBe(true);
+    expect(result.outcome.status).toBe("failed");
+    expect(result.outcome.data).toMatchObject({ status: "complete", attempted: 3, succeeded: 3, failed: 0 });
+    expect(result.outcome.delivery).toMatchObject({ status: "failed", attempted: 1, succeeded: 0, failed: 1 });
+  });
+
+  it("tracks partial overview delivery while preserving complete player data", async () => {
+    const names = Array.from({ length: 120 }, (_value: undefined, index: number): string => `Player ${index + 1} ${"x".repeat(40)}`);
+    const value = harness(names);
+    let sendCount = 0;
+    value.sendMessage.mockImplementation(async (): Promise<void> => {
+      sendCount += 1;
+      if (sendCount === 2) throw new Error("Telegram unavailable");
+    });
+
+    const result = await runModusReport(options(names, value));
+
+    expect(sendCount).toBeGreaterThanOrEqual(3);
+    expect(result.outcome.data).toMatchObject({ status: "complete", attempted: 120, succeeded: 120, failed: 0 });
+    expect(result.outcome.delivery).toMatchObject({ status: "partial", failed: 1, succeeded: sendCount - 1 });
+    expect(result.results.every((item) => item.status === "succeeded")).toBe(true);
+  });
+
+  it("marks fixture fallback as partial discovery when the roster still succeeds", async () => {
+    const value = harness(["A", "B"]);
+    const base = options(["A", "B"], value);
+    const result = await runModusReport({
+      ...base,
+      dependencies: {
+        ...base.dependencies,
+        modusPlayersService: {
+          getModusFixtures: async (): Promise<never> => { throw new Error("fixture source unavailable"); },
+          getModusPlayers: async () => modusPlayers(["A", "B"]),
+        },
+      },
+    });
+
+    expect(result.outcome).toMatchObject({ status: "partial", discovery: { status: "partial", warnings: ["MODUS_PAIRED_FIXTURE_DISCOVERY_FAILED"] } });
+    expect(result.outcome.data).toMatchObject({ status: "complete", succeeded: 2, failed: 0 });
+    expect(result.outcome.delivery).toMatchObject({ status: "complete", failed: 0 });
+  });
+
+  it("reports all player lookup failures separately from successful delivery", async () => {
+    const value = harness(["A", "B"]);
+    value.getPlayerStats.mockRejectedValue(new Error("upstream unavailable"));
+
+    const result = await runModusReport(options(["A", "B"], value));
+
+    expect(result.results.map((item) => item.status)).toEqual(["failed", "failed"]);
+    expect(result.outcome.status).toBe("failed");
+    expect(result.outcome.data).toMatchObject({ status: "failed", attempted: 2, succeeded: 0, failed: 2 });
+    expect(result.outcome.delivery).toMatchObject({ status: "complete", failed: 0 });
   });
 
   it("keeps overview rows in fixture order even when lookups finish out of order", async () => {
@@ -209,6 +259,23 @@ describe("automatic MODUS report", () => {
     expect(value.getPlayerStats).not.toHaveBeenCalled();
     expect(value.sendMessage).toHaveBeenCalledTimes(3);
     expect(value.sendMessage.mock.calls[1]?.[1]).toContain("No MODUS players");
+    expect(result.discoverySucceeded).toBe(false);
+    expect(result.outcome).toMatchObject({ status: "failed", discovery: { status: "empty" }, data: { status: "empty" }, delivery: { status: "complete" } });
+    expect(value.sendMessage.mock.calls[2]?.[1]).toContain("MODUS research incomplete");
+  });
+
+  it("tracks warning delivery failure without changing the empty discovery outcome", async () => {
+    const value = harness([]);
+    value.sendMessage.mockImplementation(async (_chatId: number | string, text: string): Promise<void> => {
+      if (text.includes("No MODUS players")) throw new Error("Telegram unavailable");
+    });
+
+    const result = await runModusReport(options([], value));
+
+    expect(result.outcome.discovery.status).toBe("empty");
+    expect(result.outcome.data.status).toBe("empty");
+    expect(result.outcome.delivery).toMatchObject({ status: "partial", attempted: 3, succeeded: 2, failed: 1 });
+    expect(result.outcome.delivery.failures).toEqual([{ stage: "warning", failureCode: "TELEGRAM_WARNING_SEND_FAILED" }]);
   });
 
   it("handles fixture source failure without player fan-out", async () => {

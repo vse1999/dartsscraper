@@ -10,6 +10,38 @@ import { readMatchFixture } from "./helpers.js";
 const player: PlayerIdentity = { id: 29, name: "Rob Cross", slug: "rob-cross" };
 
 describe("bounded DartsOrakel player history", () => {
+  it("stops a lookback expansion when its caller is cancelled", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const controller = new AbortController();
+    const getPlayerMatches = vi.fn(async (): Promise<DartsOrakelMatchesResponse> => {
+      controller.abort(new Error("lookback deadline"));
+      return responseWithRows(fixture, 1);
+    });
+    const scraper = new DartsOrakelScraper({ getPlayerMatches }, {
+      now: () => new Date("2026-08-11T12:00:00Z"),
+    });
+
+    await expect(scraper.getRecentPlayerMatches(player, { limit: 5 }, controller.signal))
+      .rejects.toThrow("lookback deadline");
+    expect(getPlayerMatches).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops statistic enrichment when its caller is cancelled", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const controller = new AbortController();
+    const getPlayerMatches = vi.fn(async (_playerId: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> => {
+      if (options.statistic === "oneEighties") controller.abort(new Error("enrichment deadline"));
+      return responseForStatistic(fixture, options.statistic);
+    });
+    const scraper = new DartsOrakelScraper({ getPlayerMatches }, {
+      now: () => new Date("2026-08-11T12:00:00Z"),
+    });
+
+    await expect(scraper.getRecentPlayerMatches(player, { limit: 5 }, controller.signal))
+      .rejects.toThrow("enrichment deadline");
+    expect(getPlayerMatches).toHaveBeenCalledTimes(3);
+  });
+
   it("starts at 90 days and stops expanding as soon as enough completed matches exist", async () => {
     const fixture = readMatchFixture("rob-cross-matches.json");
     const requests: DartsOrakelMatchRequestOptions[] = [];

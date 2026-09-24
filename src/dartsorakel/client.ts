@@ -17,6 +17,7 @@ import {
   DartsOrakelMatchesResponseSchema,
   type DartsOrakelMatchesResponse,
 } from "./parser.js";
+import { abortError, throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_BASE_URL = "https://dartsorakel.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -39,7 +40,7 @@ export interface DartsOrakelClientOptions {
   matchCacheTtlMs?: number;
   logger?: Logger;
   fetchImpl?: typeof fetch;
-  sleep?: (milliseconds: number) => Promise<void>;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
 }
 
@@ -48,6 +49,13 @@ export interface DartsOrakelMatchRequestOptions {
   dateTo?: string;
   limit?: number;
   statistic?: DartsOrakelMatchStatistic;
+}
+
+interface ActiveFetchAttempt {
+  readonly response: Response;
+  readonly signal: AbortSignal;
+  readonly timedOut: () => boolean;
+  readonly cleanup: () => void;
 }
 
 export class DartsOrakelClient {
@@ -62,7 +70,7 @@ export class DartsOrakelClient {
   private readonly matchCacheTtlMs: number;
   private readonly logger: Logger;
   private readonly fetchImpl: typeof fetch;
-  private readonly sleep: (milliseconds: number) => Promise<void>;
+  private readonly sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   private readonly now: () => number;
   private requestQueue: Promise<void> = Promise.resolve();
   private nextRequestAt = 0;
@@ -88,21 +96,39 @@ export class DartsOrakelClient {
     );
     this.logger = options.logger ?? noopLogger;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    this.sleep = options.sleep ?? ((milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, milliseconds);
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        reject(signal === undefined ? new Error("Operation was cancelled.") : abortError(signal));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted === true) onAbort();
+    }));
     this.now = options.now ?? Date.now;
   }
 
-  public async getPlayerStats(): Promise<PlayerStatsResponse> {
+  public async getPlayerStats(signal?: AbortSignal): Promise<PlayerStatsResponse> {
     const url = this.urlFor(DartsOrakelApiPath.playerStats);
     return this.getJson(
       url,
       "player-stats",
       PlayerStatsResponseSchema,
       this.playerCacheTtlMs,
+      signal,
     );
   }
 
-  public async getPlayerMatches(playerId: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> {
+  public async getPlayerMatches(
+    playerId: number,
+    options: DartsOrakelMatchRequestOptions = {},
+    signal?: AbortSignal,
+  ): Promise<DartsOrakelMatchesResponse> {
+    throwIfAborted(signal);
     if (!Number.isInteger(playerId) || playerId <= 0) {
       throw new Error("playerId must be a positive integer.");
     }
@@ -139,6 +165,7 @@ export class DartsOrakelClient {
       ].join("-"),
       DartsOrakelMatchesResponseSchema,
       this.matchCacheTtlMs,
+      signal,
     );
   }
 
@@ -147,18 +174,21 @@ export class DartsOrakelClient {
     cacheKey: string,
     schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } } },
     ttlMs: number,
+    signal?: AbortSignal,
   ): Promise<T> {
-    const cached = await this.cache?.get(cacheKey);
+    throwIfAborted(signal);
+    const cached = await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
     if (cached !== null && cached !== undefined) {
       const cachedResult = schema.safeParse(cached);
       if (cachedResult.success) {
         this.logger.debug("Using cached DartsOrakel response.", { cacheKey });
+        throwIfAborted(signal);
         return cachedResult.data;
       }
       this.logger.warn("Ignoring cached response that no longer matches the schema.", { cacheKey });
     }
 
-    const payload = await this.requestJson(url);
+    const payload = await this.requestJson(url, signal);
     const parsed = schema.safeParse(payload);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -166,22 +196,50 @@ export class DartsOrakelClient {
         `DartsOrakel response at ${url} failed schema validation${issue === undefined ? "." : ` at ${this.formatPath(issue.path)}: ${issue.message}.`}`,
       );
     }
-    await this.cache?.set(cacheKey, parsed.data, ttlMs);
+    throwIfAborted(signal);
+    await waitWithSignal(this.cache?.set(cacheKey, parsed.data, ttlMs) ?? Promise.resolve(), signal);
+    throwIfAborted(signal);
     return parsed.data;
   }
 
-  private async requestJson(url: string): Promise<unknown> {
+  private async requestJson(url: string, signal?: AbortSignal): Promise<unknown> {
     let lastError: DartsOrakelRequestError | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       let retryAfterMs: number | undefined;
+      let activeAttempt: ActiveFetchAttempt | undefined;
       try {
-        const response = await this.rateLimitedFetch(url);
+        throwIfAborted(signal);
+        activeAttempt = await this.rateLimitedFetch(url, signal);
+        const response = activeAttempt.response;
         if (response.ok) {
           try {
-            const payload: unknown = await response.json();
+            // Keep the attempt timeout and external abort linked through body
+            // parsing. Some fetch implementations resolve headers before a
+            // large body has finished arriving.
+            const payload: unknown = await waitWithSignal(
+              Promise.resolve().then(() => response.json()),
+              activeAttempt.signal,
+            );
+            if (activeAttempt.timedOut()) {
+              throw new DartsOrakelRequestError(
+                `DartsOrakel response body timed out after ${this.timeoutMs} ms.`,
+                { url, retryable: true },
+              );
+            }
             return payload;
           } catch (error: unknown) {
+            if (signal?.aborted === true) {
+              cancelResponseBody(response);
+              throw abortError(signal);
+            }
+            if (activeAttempt.timedOut()) {
+              cancelResponseBody(response);
+              throw new DartsOrakelRequestError(
+                `DartsOrakel response body timed out after ${this.timeoutMs} ms.`,
+                { url, retryable: true, cause: error },
+              );
+            }
             throw new DartsOrakelStructureChangedError(
               `DartsOrakel returned invalid JSON from ${url}.`,
               error,
@@ -189,6 +247,10 @@ export class DartsOrakelClient {
           }
         }
 
+        // Release a failed response body before retrying. Leaving an
+        // unconsumed stream open can prevent the underlying HTTP client from
+        // reusing the connection and gradually exhaust its socket pool.
+        cancelResponseBody(response);
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
         retryAfterMs = retryable ? this.retryAfterMilliseconds(response.headers.get("retry-after")) : undefined;
         lastError = new DartsOrakelRequestError(
@@ -199,6 +261,7 @@ export class DartsOrakelClient {
           throw lastError;
         }
       } catch (error: unknown) {
+        if (signal?.aborted === true) throw abortError(signal);
         if (error instanceof DartsOrakelStructureChangedError) {
           throw error;
         }
@@ -216,6 +279,8 @@ export class DartsOrakelClient {
         if (attempt === this.maxRetries) {
           throw lastError;
         }
+      } finally {
+        activeAttempt?.cleanup();
       }
 
       const delay = Math.max(this.backoffMs * (attempt + 1), retryAfterMs ?? 0);
@@ -225,51 +290,100 @@ export class DartsOrakelClient {
         delay,
         ...(lastError?.status === undefined ? {} : { status: lastError.status }),
       });
-      await this.sleep(delay);
+      await waitWithSignal(this.sleepFor(delay, signal), signal);
     }
 
     throw lastError ?? new DartsOrakelRequestError("DartsOrakel request failed.", { url, retryable: false });
   }
 
-  private async rateLimitedFetch(url: string): Promise<Response> {
+  private async rateLimitedFetch(url: string, signal?: AbortSignal): Promise<ActiveFetchAttempt> {
+    throwIfAborted(signal);
     const previous = this.requestQueue;
     let release: () => void = () => undefined;
     this.requestQueue = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await previous;
-
+    let previousSettled = false;
+    let releasePending = false;
+    let released = false;
+    const releaseSlot = (): void => {
+      if (released) return;
+      released = true;
+      release();
+    };
+    void previous.then(
+      (): void => {
+        previousSettled = true;
+        if (releasePending) releaseSlot();
+      },
+      (): void => {
+        previousSettled = true;
+        if (releasePending) releaseSlot();
+      },
+    );
     try {
+      await waitWithSignal(previous, signal);
+      throwIfAborted(signal);
       const delay = Math.max(0, this.nextRequestAt - this.now());
       if (delay > 0) {
-        await this.sleep(delay);
+        await waitWithSignal(this.sleepFor(delay, signal), signal);
       }
+      throwIfAborted(signal);
       this.nextRequestAt = this.now() + this.minRequestIntervalMs;
     } finally {
-      release();
+      releasePending = true;
+      if (previousSettled) releaseSlot();
     }
 
     // Only request starts need serialization. Keeping the queue locked for the
     // full network round-trip made independent player lookups run sequentially.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.timeoutMs);
+    const onAbort = (): void => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let cleaned = false;
+    const cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+    };
     try {
-      return await this.fetchImpl(url, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "User-Agent": this.userAgent,
-        },
-        signal: controller.signal,
-      });
+      throwIfAborted(signal);
+      const response = await waitWithSignal(
+        this.fetchImpl(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "User-Agent": this.userAgent,
+          },
+          signal: controller.signal,
+        }),
+        controller.signal,
+      );
+      return { response, signal: controller.signal, timedOut: () => timedOut, cleanup };
     } catch (error: unknown) {
+      cleanup();
+      if (signal?.aborted === true) throw abortError(signal);
+      if (timedOut) {
+        throw new DartsOrakelRequestError(
+          `DartsOrakel request timed out after ${this.timeoutMs} ms.`,
+          { url, retryable: true, cause: error },
+        );
+      }
       throw new DartsOrakelRequestError(
         `DartsOrakel request failed: ${this.errorMessage(error)}.`,
         { url, retryable: true, cause: error },
       );
-    } finally {
-      clearTimeout(timeout);
     }
+  }
+
+  private sleepFor(milliseconds: number, signal: AbortSignal | undefined): Promise<void> {
+    return signal === undefined ? this.sleep(milliseconds) : this.sleep(milliseconds, signal);
   }
 
   private retryAfterMilliseconds(value: string | null): number | undefined {
@@ -332,5 +446,15 @@ export class DartsOrakelClient {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : "unknown error";
+  }
+}
+
+function cancelResponseBody(response: Response): void {
+  if (response.body === null) return;
+  try {
+    void response.body.cancel().catch((): void => undefined);
+  } catch {
+    // The original HTTP or parsing error is more actionable than a cleanup
+    // failure (for example, a body that is already locked or closed).
   }
 }

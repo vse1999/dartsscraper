@@ -99,11 +99,11 @@ export const PdcFixtureSchema = z.object({
 export type PdcFixture = z.infer<typeof PdcFixtureSchema>;
 
 export interface PdcTournamentSource {
-  getCalendar(year: number, category: PdcCalendarCategory): Promise<readonly PdcTournamentEvent[]>;
-  getResults(event: PdcTournamentEvent): Promise<PdcTournamentResult>;
+  getCalendar(year: number, category: PdcCalendarCategory, signal?: AbortSignal): Promise<readonly PdcTournamentEvent[]>;
+  getResults(event: PdcTournamentEvent, signal?: AbortSignal): Promise<PdcTournamentResult>;
 }
 
 export interface PdcFixtureSource {
   readonly name: string;
-  getFixtures(date: string): Promise<readonly PdcFixture[]>;
+  getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]>;
 }

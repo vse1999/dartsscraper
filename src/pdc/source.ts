@@ -4,6 +4,7 @@ import { z } from "zod";
 import { IsoDateSchema } from "../agent/date.js";
 import type { Logger } from "../logger.js";
 import { noopLogger } from "../logger.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import {
   PDC_TOURNAMENT_NAMES,
   PdcCalendarCategorySchema,
@@ -70,18 +71,20 @@ export class DartsOrakelPdcSource implements PdcTournamentSource {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async getCalendar(year: number, category: PdcCalendarCategory): Promise<readonly PdcTournamentEvent[]> {
+  public async getCalendar(year: number, category: PdcCalendarCategory, signal?: AbortSignal): Promise<readonly PdcTournamentEvent[]> {
+    throwIfAborted(signal);
     validateYear(year);
     const validatedCategory = PdcCalendarCategorySchema.parse(category);
     const url = new URL("/api/events", this.baseUrl);
     url.searchParams.set("year", String(year));
     url.searchParams.set("organCal", validatedCategory);
-    const payload = await this.fetchJson(url.toString());
+    const payload = await this.fetchJson(url.toString(), signal);
     const response = DartsOrakelCalendarResponseSchema.safeParse(payload);
     if (!response.success) throw new PdcSourceUnavailableError("The DartsOrakel PDC calendar changed structure.", url.toString(), response.error);
 
     const events: PdcTournamentEvent[] = [];
     for (const [index, row] of response.data.data.entries()) {
+      throwIfAborted(signal);
       const parsed = parseCalendarRow(row, url.toString(), index);
       if (parsed !== null) events.push(parsed);
     }
@@ -89,9 +92,10 @@ export class DartsOrakelPdcSource implements PdcTournamentSource {
     return events;
   }
 
-  public async getResults(event: PdcTournamentEvent): Promise<PdcTournamentResult> {
+  public async getResults(event: PdcTournamentEvent, signal?: AbortSignal): Promise<PdcTournamentResult> {
+    throwIfAborted(signal);
     const validatedEvent = PdcTournamentEventSchema.parse(event);
-    const response = await this.fetchText(validatedEvent.resultsUrl, "text/html, text/plain");
+    const response = await this.fetchText(validatedEvent.resultsUrl, "text/html, text/plain", signal);
     try {
       return PdcTournamentResultSchema.parse({
         event: validatedEvent,
@@ -107,8 +111,8 @@ export class DartsOrakelPdcSource implements PdcTournamentSource {
     }
   }
 
-  private async fetchJson(url: string): Promise<unknown> {
-    const body = await this.fetchText(url, "application/json");
+  private async fetchJson(url: string, signal?: AbortSignal): Promise<unknown> {
+    const body = await this.fetchText(url, "application/json", signal);
     try {
       return JSON.parse(body) as unknown;
     } catch (error: unknown) {
@@ -116,21 +120,26 @@ export class DartsOrakelPdcSource implements PdcTournamentSource {
     }
   }
 
-  private async fetchText(url: string, accept: string): Promise<string> {
+  private async fetchText(url: string, accept: string, callerSignal?: AbortSignal): Promise<string> {
+    throwIfAborted(callerSignal);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("PDC request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("PDC request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(url, {
+      const response = await waitWithSignal(this.fetchImpl(url, {
         method: "GET",
         cache: "no-store",
         headers: { Accept: accept, "User-Agent": "DartsResearchAgent/0.5" },
         signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new PdcSourceUnavailableError(`DartsOrakel returned HTTP ${response.status}.`, url);
-      const body = await response.text();
+      const body = await waitWithSignal(response.text(), controller.signal);
+      throwIfAborted(callerSignal);
       if (body.trim() === "") throw new PdcSourceUnavailableError("DartsOrakel returned an empty PDC response.", url);
       return body;
     } catch (error: unknown) {
+      if (callerSignal?.aborted === true) throw error;
       if (error instanceof PdcSourceUnavailableError) throw error;
       throw new PdcSourceUnavailableError(
         controller.signal.aborted
@@ -141,6 +150,7 @@ export class DartsOrakelPdcSource implements PdcTournamentSource {
       );
     } finally {
       clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
     }
   }
 }

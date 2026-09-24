@@ -19,6 +19,7 @@ export interface ModusOverviewOptions {
   readonly matchCount: number;
   readonly players: readonly string[];
   readonly results: readonly ModusOverviewPlayer[];
+  readonly incomplete?: boolean;
 }
 
 /**
@@ -64,6 +65,7 @@ function overviewHeader(options: ModusOverviewOptions): string {
     `🎯 MODUS ${options.dateLabel.toLocaleUpperCase("en-US")} · ${formatDate(options.date)}`,
     `${options.players.length} scheduled players`,
     `Form = last ${matchCount} completed DartsOrakel matches`,
+    ...(options.incomplete ? ["⚠️ Research incomplete; unavailable players were not retried."] : []),
     "",
     "PLAYER FORM",
   ].join("\n");
@@ -84,7 +86,9 @@ function overviewFooter(options: ModusOverviewOptions): string {
     ? `${visibleFailed.join(", ")}, +${remainingFailed} more`
     : visibleFailed.join(", ");
   return [
-    `✅ Form available for ${succeeded}/${options.players.length} players`,
+    options.incomplete
+      ? `⚠️ MODUS research incomplete · Form available for ${succeeded}/${options.players.length} players`
+      : `✅ Form available for ${succeeded}/${options.players.length} players`,
     ...(failed.length === 0 ? [] : [`⚠️ ${failed.length} player${failed.length === 1 ? "" : "s"} unavailable: ${failedLabel}`]),
     "",
     "👇 Tap a player below for detailed match statistics.",
@@ -94,7 +98,12 @@ function overviewFooter(options: ModusOverviewOptions): string {
 function formatPlayerRow(result: ModusOverviewPlayer): string {
   const player = truncate(result.player, MAX_PLAYER_NAME_LENGTH);
   if (result.status === "failed" || result.stats === undefined) {
-    return `${player} — unavailable`;
+    const reason = result.error === "MODUS_RESEARCH_DEADLINE_EXCEEDED"
+      ? "timed out at the research deadline"
+      : result.error === "MODUS_RESEARCH_NOT_STARTED"
+        ? "skipped before the research deadline"
+        : "unavailable";
+    return `${player} — ${reason}`;
   }
 
   const summary = calculateMatchSummary(result.stats.matches);

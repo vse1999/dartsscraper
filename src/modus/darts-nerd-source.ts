@@ -4,6 +4,7 @@ import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import type { FixtureNameResolver } from "./fixture-name-resolver.js";
 import { ModusFixtureSchema, type ModusFixture, type ModusFixtureSource } from "./schemas.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_BASE_URL = "https://www.darts-nerd.com";
 const PREVIEW_PATH = "/en/matches/preview";
@@ -49,48 +50,68 @@ export class DartsNerdModusSource implements ModusFixtureSource {
       : this.seasonUrl(validatedDate);
   }
 
-  public async getPlayers(date: string): Promise<readonly string[]> {
+  public async getPlayers(date: string, callerSignal?: AbortSignal): Promise<readonly string[]> {
+    throwIfAborted(callerSignal);
     const validatedDate = IsoDateSchema.parse(date);
     const url = this.sourceUrl(validatedDate);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("MODUS fixture request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("MODUS fixture request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(url, {
+      const response = await waitWithSignal(this.fetchImpl(url, {
         headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.2" }, signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const names = parsePlayersForDate(await response.text(), validatedDate, { modusOnly: url === this.previewUrl });
-      return Promise.all(names.map((name: string): Promise<string> => this.resolveName(name, validatedDate)));
-    } finally { clearTimeout(timeout); }
+      const names = parsePlayersForDate(await waitWithSignal(response.text(), controller.signal), validatedDate, { modusOnly: url === this.previewUrl });
+      throwIfAborted(callerSignal);
+      return Promise.all(names.map((name: string): Promise<string> => this.resolveName(name, validatedDate, callerSignal)));
+    } catch (error: unknown) {
+      throwIfAborted(callerSignal);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
-  public async getFixtures(date: string): Promise<readonly ModusFixture[]> {
+  public async getFixtures(date: string, callerSignal?: AbortSignal): Promise<readonly ModusFixture[]> {
+    throwIfAborted(callerSignal);
     const validatedDate = IsoDateSchema.parse(date);
     const pageUrl = this.sourceUrl(validatedDate);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("MODUS fixture request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("MODUS fixture request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(pageUrl, {
+      const response = await waitWithSignal(this.fetchImpl(pageUrl, {
         headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.2" }, signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const fixtures = parseFixturesForDate(await response.text(), validatedDate, {
+      const fixtures = parseFixturesForDate(await waitWithSignal(response.text(), controller.signal), validatedDate, {
         modusOnly: pageUrl === this.previewUrl,
         baseUrl: this.baseUrl,
         pageUrl,
       });
       return Promise.all(fixtures.map(async (fixture): Promise<ModusFixture> => ModusFixtureSchema.parse({
         ...fixture,
-        playerOne: await this.resolveName(fixture.playerOne, validatedDate),
-        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate),
+        playerOne: await this.resolveName(fixture.playerOne, validatedDate, callerSignal),
+        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate, callerSignal),
       })));
-    } finally { clearTimeout(timeout); }
+    } catch (error: unknown) {
+      throwIfAborted(callerSignal);
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
-  private async resolveName(name: string, date: string): Promise<string> {
+  private async resolveName(name: string, date: string, signal?: AbortSignal): Promise<string> {
     try {
-      return await this.resolver.resolve(name);
+      return await this.resolver.resolve(name, signal);
     } catch (error: unknown) {
+      throwIfAborted(signal);
       this.logger.warn("MODUS fixture player could not be resolved; preserving provider label.", {
         source: this.name,
         date,

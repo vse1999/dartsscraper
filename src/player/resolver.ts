@@ -6,6 +6,7 @@ import {
   type PlayerIdentity,
   type PlayerStatsRow,
 } from "../schemas/player.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const MIN_FUZZY_INPUT_LENGTH = 5;
 const MAX_FUZZY_DISTANCE = 2;
@@ -16,18 +17,20 @@ const MAX_SUGGESTIONS = 3;
 export class PlayerResolver {
   private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
   private directoryPromise: Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> | undefined;
+  private readonly signalDirectoryPromises = new WeakMap<AbortSignal, Promise<ReadonlyMap<string, readonly PlayerIdentity[]>>>();
 
   public constructor(client: Pick<DartsOrakelClient, "getPlayerStats">) {
     this.client = client;
   }
 
-  public async resolvePlayer(name: string): Promise<PlayerIdentity> {
+  public async resolvePlayer(name: string, signal?: AbortSignal): Promise<PlayerIdentity> {
     const normalizedRequestedName = normalizePlayerName(name);
     if (normalizedRequestedName === "") {
       throw new PlayerNotFoundError(name);
     }
 
-    const directory = await this.directory();
+    const directory = await this.directory(signal);
+    throwIfAborted(signal);
     const candidates = directory.get(normalizedRequestedName) ?? [];
     if (candidates.length > 1) {
       throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.name));
@@ -59,14 +62,15 @@ export class PlayerResolver {
     throw new PlayerNotFoundError(name, suggestionNames(fuzzyCandidates));
   }
 
-  public async findMention(text: string): Promise<PlayerIdentity | undefined> {
-    return (await this.findMentions(text))[0];
+  public async findMention(text: string, signal?: AbortSignal): Promise<PlayerIdentity | undefined> {
+    return (await this.findMentions(text, signal))[0];
   }
 
-  public async findMentions(text: string): Promise<readonly PlayerIdentity[]> {
+  public async findMentions(text: string, signal?: AbortSignal): Promise<readonly PlayerIdentity[]> {
     const searchableText = searchable(text);
     if (searchableText === "") return [];
-    const directory = await this.directory();
+    const directory = await this.directory(signal);
+    throwIfAborted(signal);
     const matches: PlayerIdentity[] = [];
     for (const candidates of directory.values()) {
       if (candidates.length !== 1) continue;
@@ -77,26 +81,55 @@ export class PlayerResolver {
     return matches;
   }
 
-  public async preload(): Promise<void> {
-    await this.directory();
+  public async preload(signal?: AbortSignal): Promise<void> {
+    await this.directory(signal);
   }
 
-  private directory(): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
+  private directory(signal?: AbortSignal): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
+    if (signal !== undefined) {
+      throwIfAborted(signal);
+      const sharedRequest = this.directoryPromise;
+      if (sharedRequest !== undefined) return waitWithSignal(sharedRequest, signal);
+      const signalRequest = this.signalDirectoryPromises.get(signal);
+      if (signalRequest !== undefined) return waitWithSignal(signalRequest, signal);
+      const request = this.loadDirectory(signal).then((directory) => {
+        // A completed signal-bound request is valid cache data, but an aborted
+        // request must never become the shared single-flight promise.
+        if (this.directoryPromise === undefined && signal.aborted !== true) {
+          this.directoryPromise = Promise.resolve(directory);
+        }
+        return directory;
+      }).catch((error: unknown) => {
+        if (this.signalDirectoryPromises.get(signal) === request) {
+          this.signalDirectoryPromises.delete(signal);
+        }
+        throw error;
+      });
+      this.signalDirectoryPromises.set(signal, request);
+      return request;
+    }
     if (this.directoryPromise !== undefined) return this.directoryPromise;
-    const request = this.client.getPlayerStats().then((response) => {
-      const directory = new Map<string, PlayerIdentity[]>();
-      for (const row of response.data) {
-        const player = playerIdentityFromStatsRow(row);
-        const key = normalizePlayerName(player.name);
-        directory.set(key, [...(directory.get(key) ?? []), player]);
-      }
-      return directory as ReadonlyMap<string, readonly PlayerIdentity[]>;
-    }).catch((error: unknown) => {
+    const request = this.loadDirectory().catch((error: unknown) => {
       if (this.directoryPromise === request) this.directoryPromise = undefined;
       throw error;
     });
     this.directoryPromise = request;
     return request;
+  }
+
+  private async loadDirectory(signal?: AbortSignal): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
+    throwIfAborted(signal);
+    const response = signal === undefined
+      ? await this.client.getPlayerStats()
+      : await this.client.getPlayerStats(signal);
+    throwIfAborted(signal);
+    const directory = new Map<string, PlayerIdentity[]>();
+    for (const row of response.data) {
+      const player = playerIdentityFromStatsRow(row);
+      const key = normalizePlayerName(player.name);
+      directory.set(key, [...(directory.get(key) ?? []), player]);
+    }
+    return directory as ReadonlyMap<string, readonly PlayerIdentity[]>;
   }
 }
 

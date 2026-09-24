@@ -10,6 +10,7 @@ export interface ModusMatchupFormatterOptions {
   readonly matchCount: number;
   readonly analyses: readonly MatchupAnalysis[];
   readonly timeZone?: string;
+  readonly incomplete?: boolean;
 }
 
 export function formatModusMatchupMessages(options: ModusMatchupFormatterOptions): readonly string[] {
@@ -17,13 +18,17 @@ export function formatModusMatchupMessages(options: ModusMatchupFormatterOptions
     `🎯 MODUS ${options.dateLabel.toLocaleUpperCase("en-US")} · ${formatDate(options.date)}`,
     `${options.analyses.length} scheduled matchup${options.analyses.length === 1 ? "" : "s"}`,
     `Form = last ${options.matchCount} completed DartsOrakel matches`,
+    ...(options.incomplete ? ["⚠️ Research incomplete; unavailable players were not retried."] : []),
   ].join("\n");
   const cards = options.analyses.map((analysis, index) => formatMatchupCard(
     analysis,
     index,
     options.timeZone ?? "Europe/Budapest",
   ));
-  const footer = "👇 Tap a player below for detailed match statistics.";
+  const footer = [
+    ...(options.incomplete ? ["⚠️ MODUS research incomplete; unavailable players were not retried."] : []),
+    "👇 Tap a player below for detailed match statistics.",
+  ].join("\n");
   return splitAtCardBoundaries(header, cards, footer);
 }
 

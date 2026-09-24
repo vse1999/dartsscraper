@@ -4,12 +4,13 @@ import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_PREVIEW_URL = "https://www.darts-nerd.com/en/matches/preview";
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 export interface PdcFixtureNameResolver {
-  resolve(name: string): Promise<string>;
+  resolve(name: string, signal?: AbortSignal): Promise<string>;
 }
 
 export interface DartsNerdPdcFixtureSourceOptions {
@@ -36,37 +37,44 @@ export class DartsNerdPdcFixtureSource implements PdcFixtureSource {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async getFixtures(date: string): Promise<readonly PdcFixture[]> {
+  public async getFixtures(date: string, callerSignal?: AbortSignal): Promise<readonly PdcFixture[]> {
+    throwIfAborted(callerSignal);
     const validatedDate = IsoDateSchema.parse(date);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const abortFromCaller = (): void => controller.abort(callerSignal?.reason ?? new Error("PDC live fixture request cancelled."));
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(new Error("PDC live fixture request timed out.")), this.timeoutMs);
     try {
-      const response = await this.fetchImpl(this.previewUrl, {
+      const response = await waitWithSignal(this.fetchImpl(this.previewUrl, {
         method: "GET",
         headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.7" },
         signal: controller.signal,
-      });
+      }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = await response.text();
+      const body = await waitWithSignal(response.text(), controller.signal);
+      throwIfAborted(callerSignal);
       if (body.trim() === "") throw new Error("empty response");
       const fixtures = parseDartsNerdPdcFixtures(body, validatedDate, this.previewUrl);
       return Promise.all(fixtures.map(async (fixture): Promise<PdcFixture> => PdcFixtureSchema.parse({
         ...fixture,
-        playerOne: await this.resolveName(fixture.playerOne, validatedDate),
-        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate),
+        playerOne: await this.resolveName(fixture.playerOne, validatedDate, callerSignal),
+        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate, callerSignal),
       })));
     } catch (error: unknown) {
+      if (callerSignal?.aborted === true) throw error;
       const reason = controller.signal.aborted ? `timed out after ${this.timeoutMs} ms` : errorMessage(error);
       throw new Error(`Darts Nerd fixture request failed: ${reason}.`, { cause: error });
     } finally {
       clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
-  private async resolveName(name: string, date: string): Promise<string> {
+  private async resolveName(name: string, date: string, signal?: AbortSignal): Promise<string> {
     try {
-      return await this.resolver.resolve(name);
+      return await this.resolver.resolve(name, signal);
     } catch (error: unknown) {
+      if (signal?.aborted === true) throw error;
       this.logger.warn("Live PDC fixture player could not be resolved; preserving provider label.", {
         date,
         player: name,
@@ -134,13 +142,16 @@ export class CorroboratedPdcFixtureSource implements PdcFixtureSource {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async getFixtures(date: string): Promise<readonly PdcFixture[]> {
-    const official = await this.officialSource.getFixtures(date);
+  public async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
+    throwIfAborted(signal);
+    const official = await this.officialSource.getFixtures(date, signal);
+    throwIfAborted(signal);
     if (official.length === 0) return [];
     try {
-      const live = await this.liveSource.getFixtures(date);
+      const live = await this.liveSource.getFixtures(date, signal);
       return reconcileFixtures(official, live);
     } catch (error: unknown) {
+      if (signal?.aborted === true) throw error;
       this.logger.warn("Live PDC fixture corroboration failed; using the official schedule.", {
         date,
         source: this.liveSource.name,

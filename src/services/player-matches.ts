@@ -6,6 +6,7 @@ import type { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import type { PlayerResolver } from "../player/resolver.js";
 import { MatchResultSchema, type MatchResult } from "../schemas/match.js";
 import { SnapshotStore, type SnapshotRead } from "./snapshot-store.js";
+import { throwIfAborted } from "./cancellation.js";
 
 const DEFAULT_FRESH_TTL_MS = 15_000;
 const DEFAULT_MAX_STALE_MS = 5 * 60_000;
@@ -44,20 +45,45 @@ export class PlayerMatchesService {
     this.maxStoreEntries = positiveInteger(dependencies.maxStoreEntries ?? DEFAULT_MAX_STORE_ENTRIES, "maxStoreEntries");
   }
 
-  public async getLastMatches(playerName: string, limit: number): Promise<MatchResult> {
-    return (await this.getLastMatchesSnapshot(playerName, limit)).value;
+  public async getLastMatches(playerName: string, limit: number, signal?: AbortSignal): Promise<MatchResult> {
+    return (await this.getLastMatchesSnapshot(playerName, limit, signal)).value;
   }
 
   public async getLastMatchesSnapshot(playerName: string, limit: number, signal?: AbortSignal): Promise<SnapshotRead<MatchResult>> {
     validateLimit(limit);
+    throwIfAborted(signal);
     const dateTo = addDays(localIsoDate(this.now(), this.timeZone), 1);
     const key = `${normalizePlayerName(playerName)}:${limit}:${dateTo}`;
     let store = this.stores.get(key);
+    if (signal !== undefined) {
+      if (store !== undefined) {
+        // Reuse a fresh or already in-flight snapshot when one exists.
+        // SnapshotStore only cancels this consumer's wait, so a deadline
+        // cannot poison a refresh shared by another caller.
+        this.stores.delete(key);
+        this.stores.set(key, store);
+        const existing = await store.getExisting(signal);
+        throwIfAborted(signal);
+        if (existing !== undefined) return existing;
+      }
+      // SnapshotStore's loader is intentionally shared and has no caller
+      // signal. A report deadline must instead use an isolated load when no
+      // existing snapshot or refresh can be reused.
+      const value = await this.loadMatches(playerName, limit, dateTo, signal);
+      const fetchedAt = this.now();
+      return {
+        value,
+        fetchedAt: fetchedAt.toISOString(),
+        dataAgeMs: 0,
+        stale: false,
+      };
+    }
     if (store === undefined) {
       store = new SnapshotStore<MatchResult>({
         loader: async () => this.loadMatches(playerName, limit, dateTo),
         freshTtlMs: this.freshTtlMs,
         maxStaleMs: this.maxStaleMs,
+        now: () => this.now().getTime(),
         onBackgroundError: (error: unknown) => this.logger.warn("DartsOrakel background refresh failed; keeping recent player data.", {
           player: playerName,
           limit,
@@ -70,12 +96,24 @@ export class PlayerMatchesService {
       this.stores.delete(key);
       this.stores.set(key, store);
     }
-    return store.get(signal);
+    return store.get();
   }
 
-  private async loadMatches(playerName: string, limit: number, dateTo: string): Promise<MatchResult> {
-    const player = await this.resolver.resolvePlayer(playerName);
-    const matches = await this.scraper.getPlayerMatches(player, limit, dateTo);
+  private async loadMatches(
+    playerName: string,
+    limit: number,
+    dateTo: string,
+    signal?: AbortSignal,
+  ): Promise<MatchResult> {
+    throwIfAborted(signal);
+    const player = signal === undefined
+      ? await this.resolver.resolvePlayer(playerName)
+      : await this.resolver.resolvePlayer(playerName, signal);
+    throwIfAborted(signal);
+    const matches = signal === undefined
+      ? await this.scraper.getPlayerMatches(player, limit, dateTo)
+      : await this.scraper.getPlayerMatches(player, limit, dateTo, signal);
+    throwIfAborted(signal);
     if (matches.length === 0) {
       throw new InsufficientMatchDataError(limit, 0);
     }

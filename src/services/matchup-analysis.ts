@@ -62,6 +62,42 @@ export interface MatchupAnalysis {
   readonly expectedAverageCount: number;
 }
 
+/**
+ * The fixture-independent part of a matchup analysis. Manual comparisons use
+ * this shape so their report does not invent an upcoming fixture or a
+ * confidence/signal claim that was not requested.
+ */
+export interface PlayerHistoryComparison {
+  readonly playerOne: MatchupPlayerAnalysis;
+  readonly playerTwo: MatchupPlayerAnalysis;
+  readonly headToHead: MatchupHeadToHead;
+  readonly availableAverageCount: number;
+  readonly expectedAverageCount: number;
+}
+
+export function analyzePlayerHistories(
+  playerOneHistory: MatchupPlayerHistory,
+  playerTwoHistory: MatchupPlayerHistory,
+  requestedCount: number,
+): PlayerHistoryComparison {
+  validateRequestedCount(requestedCount);
+  const playerOne = analyzePlayer(playerOneHistory.playerName, playerOneHistory);
+  const playerTwo = analyzePlayer(playerTwoHistory.playerName, playerTwoHistory);
+  return {
+    playerOne,
+    playerTwo,
+    headToHead: calculateHeadToHeadByNames(
+      playerOneHistory.playerName,
+      playerTwoHistory.playerName,
+      playerOneHistory,
+      playerTwoHistory,
+    ),
+    availableAverageCount: (playerOne.summary?.availableAverageCount ?? 0)
+      + (playerTwo.summary?.availableAverageCount ?? 0),
+    expectedAverageCount: requestedCount * 2,
+  };
+}
+
 export function analyzeMatchup(
   fixture: MatchupFixture,
   playerOneHistory: MatchupPlayerHistory | undefined,
@@ -133,13 +169,22 @@ function calculateHeadToHead(
   playerOneHistory: MatchupPlayerHistory | undefined,
   playerTwoHistory: MatchupPlayerHistory | undefined,
 ): MatchupHeadToHead {
+  return calculateHeadToHeadByNames(fixture.playerOne, fixture.playerTwo, playerOneHistory, playerTwoHistory);
+}
+
+function calculateHeadToHeadByNames(
+  playerOneName: string,
+  playerTwoName: string,
+  playerOneHistory: MatchupPlayerHistory | undefined,
+  playerTwoHistory: MatchupPlayerHistory | undefined,
+): MatchupHeadToHead {
   const fromPlayerOne = playerOneHistory?.matches.filter(
-    (match) => normalizePlayerName(match.opponent) === normalizePlayerName(fixture.playerTwo),
+    (match) => normalizePlayerName(match.opponent) === normalizePlayerName(playerTwoName),
   ) ?? [];
   if (fromPlayerOne.length > 0) return summarizeHeadToHead(fromPlayerOne, false);
 
   const fromPlayerTwo = playerTwoHistory?.matches.filter(
-    (match) => normalizePlayerName(match.opponent) === normalizePlayerName(fixture.playerOne),
+    (match) => normalizePlayerName(match.opponent) === normalizePlayerName(playerOneName),
   ) ?? [];
   return summarizeHeadToHead(fromPlayerTwo, true);
 }

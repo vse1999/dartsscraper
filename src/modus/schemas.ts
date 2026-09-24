@@ -44,7 +44,7 @@ export type ModusFixturesResult = z.infer<typeof ModusFixturesResultSchema>;
 
 export interface ModusFixtureSource {
   readonly name: string;
-  getPlayers(date: string): Promise<readonly string[]>;
-  getFixtures?(date: string): Promise<readonly ModusFixture[]>;
+  getPlayers(date: string, signal?: AbortSignal): Promise<readonly string[]>;
+  getFixtures?(date: string, signal?: AbortSignal): Promise<readonly ModusFixture[]>;
   sourceUrl(date: string): string;
 }

@@ -22,11 +22,34 @@ export type {
   ModusReportDependencies,
   ModusReportPlayerResult,
   ModusReportPlayerStatus,
+  ModusReportDataOutcome,
+  ModusReportDataStatus,
+  ModusReportDeliveryFailure,
+  ModusReportDeliveryOutcome,
+  ModusReportDeliveryStage,
+  ModusReportDeliveryStatus,
+  ModusReportDiscoveryOutcome,
+  ModusReportDiscoveryStatus,
+  ModusReportOutcome,
   ModusReportResult,
+  ModusReportStatus,
   RunModusReportOptions,
 } from "./daily/modus-report.js";
 export { createTelegramSender } from "./telegram/sender.js";
 export type { TelegramMessageSender, TelegramSenderOptions } from "./telegram/sender.js";
+export {
+  createTelegramDeliveryPolicy,
+  getTelegramRetryAfterFromResponse,
+  getTelegramRetryAfterSeconds,
+  TelegramRateLimitError,
+} from "./telegram/delivery-policy.js";
+export type {
+  TelegramAbortSignal,
+  TelegramDeliveryExecuteOptions,
+  TelegramDeliveryPolicy,
+  TelegramDeliveryPolicyOptions,
+  TelegramDeliverySleep,
+} from "./telegram/delivery-policy.js";
 export * from "./errors.js";
 
 export interface DefaultServiceOptions {

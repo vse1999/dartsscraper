@@ -35,16 +35,21 @@ export function formatPdcMatchupMessages(report: PdcUpcomingReport): readonly st
       requestedCount,
     ),
   }));
+  const incomplete = report.players.some((player) => player.failureCode !== null);
   const header = [
     `🎯 PDC MATCHUPS · ${report.date}`,
     `${report.fixtures.length} scheduled matchup${report.fixtures.length === 1 ? "" : "s"}`,
     `Form = last ${requestedCount} completed DartsOrakel matches`,
+    ...(incomplete ? ["⚠️ Research incomplete; unavailable players were not retried."] : []),
   ].join("\n");
   const cards = analyzedFixtures.map(({ fixture, analysis }, index) => formatCard(fixture, analysis, index));
   const evidenceUrls = [...new Set(report.fixtures.flatMap(
     (fixture) => fixture.evidenceUrls ?? [fixture.sourceUrl],
   ))];
   const footer = [
+    ...(incomplete
+      ? ["⚠️ PDC research incomplete; some player form lookups reached the deadline."]
+      : []),
     "Signals compare recent form only; they are not bookmaker-value estimates.",
     ...evidenceUrls.map((url) => `Schedule source: ${url}`),
   ].join("\n");

@@ -2,13 +2,16 @@ import type { DartsOrakelClient } from "../dartsorakel/client.js";
 import { PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import type { PlayerStatsResponse } from "../schemas/player.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 export class FixtureNameResolver {
   private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
   private directoryPromise: Promise<PlayerStatsResponse> | undefined;
+  private readonly signalDirectoryPromises = new WeakMap<AbortSignal, Promise<PlayerStatsResponse>>();
   public constructor(client: Pick<DartsOrakelClient, "getPlayerStats">) { this.client = client; }
-  public async resolve(name: string): Promise<string> {
-    const response = await this.directory();
+  public async resolve(name: string, signal?: AbortSignal): Promise<string> {
+    const response = await this.directory(signal);
+    throwIfAborted(signal);
     const canonicalName = canonicalizeFixtureName(name);
     const normalized = normalizePlayerName(canonicalName);
     const exact = response.data.filter((row) => normalizePlayerName(row.player_name) === normalized);
@@ -30,7 +33,27 @@ export class FixtureNameResolver {
     return candidates[0]?.player_name ?? name;
   }
 
-  private directory(): Promise<PlayerStatsResponse> {
+  private directory(signal?: AbortSignal): Promise<PlayerStatsResponse> {
+    if (signal !== undefined) {
+      throwIfAborted(signal);
+      // A signal-bound load belongs to that caller. Never put its promise in
+      // the shared cache: aborting one report must not cancel/poison another.
+      if (this.directoryPromise !== undefined) return waitWithSignal(this.directoryPromise, signal);
+      const existingSignalRequest = this.signalDirectoryPromises.get(signal);
+      if (existingSignalRequest !== undefined) return waitWithSignal(existingSignalRequest, signal);
+      const request = this.client.getPlayerStats(signal)
+        .then((response: PlayerStatsResponse): PlayerStatsResponse => {
+          if (this.signalDirectoryPromises.get(signal) === request) this.signalDirectoryPromises.delete(signal);
+          if (!signal.aborted && this.directoryPromise === undefined) this.directoryPromise = Promise.resolve(response);
+          return response;
+        })
+        .catch((error: unknown): never => {
+          if (this.signalDirectoryPromises.get(signal) === request) this.signalDirectoryPromises.delete(signal);
+          throw error;
+        });
+      this.signalDirectoryPromises.set(signal, request);
+      return waitWithSignal(request, signal);
+    }
     if (this.directoryPromise !== undefined) return this.directoryPromise;
     const request = this.client.getPlayerStats().catch((error: unknown) => {
       if (this.directoryPromise === request) this.directoryPromise = undefined;

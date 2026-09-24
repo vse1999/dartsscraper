@@ -3,6 +3,7 @@ import { ModusSourceUnavailableError } from "../errors.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
 import { IsoDateSchema } from "../agent/date.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import {
   ModusFixturesResultSchema,
   ModusPlayersResultSchema,
@@ -49,15 +50,17 @@ export class ModusPlayersService {
     this.logger = options.logger ?? noopLogger;
   }
 
-  public async getModusPlayers(date: string): Promise<ModusPlayersResult> {
+  public async getModusPlayers(date: string, signal?: AbortSignal): Promise<ModusPlayersResult> {
+    throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
     const cacheKey = `modus-players-v3-${validatedDate}`;
-    const cachedResult = ModusPlayersResultSchema.safeParse(await this.cache?.get(cacheKey));
+    const cachedResult = ModusPlayersResultSchema.safeParse(await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(undefined), signal));
     if (cachedResult.success) return cachedResult.data;
     const failures: string[] = [];
     for (const source of this.sources) {
       try {
-        const names = deduplicate(await source.getPlayers(validatedDate));
+        throwIfAborted(signal);
+        const names = deduplicate(await waitWithSignal(source.getPlayers(validatedDate, signal), signal));
         if (names.length === 0) { failures.push(`${source.name}: no fixtures for that date.`); continue; }
         const sourceUrl = source.sourceUrl(validatedDate);
         const result = ModusPlayersResultSchema.parse({
@@ -76,6 +79,7 @@ export class ModusPlayersService {
         });
         return result;
       } catch (error: unknown) {
+        if (signal?.aborted === true) throw error;
         const message = error instanceof Error ? error.message : "unknown error";
         failures.push(`${source.name}: ${message}`);
         this.logger.warn("MODUS fixture source failed.", {
@@ -89,10 +93,11 @@ export class ModusPlayersService {
     throw new ModusSourceUnavailableError(validatedDate, failures);
   }
 
-  public async getModusFixtures(date: string): Promise<ModusFixturesResult> {
+  public async getModusFixtures(date: string, signal?: AbortSignal): Promise<ModusFixturesResult> {
+    throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
     const cacheKey = `modus-fixtures-v1-${validatedDate}`;
-    const cachedResult = ModusFixturesResultSchema.safeParse(await this.cache?.get(cacheKey));
+    const cachedResult = ModusFixturesResultSchema.safeParse(await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(undefined), signal));
     if (cachedResult.success) return cachedResult.data;
 
     const failures: string[] = [];
@@ -102,7 +107,8 @@ export class ModusPlayersService {
         continue;
       }
       try {
-        const fixtures = deduplicateFixtures(await source.getFixtures(validatedDate));
+        throwIfAborted(signal);
+        const fixtures = deduplicateFixtures(await waitWithSignal(source.getFixtures(validatedDate, signal), signal));
         if (fixtures.length === 0) {
           failures.push(`${source.name}: no paired fixtures for that date.`);
           continue;
@@ -123,6 +129,7 @@ export class ModusPlayersService {
         });
         return result;
       } catch (error: unknown) {
+        if (signal?.aborted === true) throw error;
         const message = error instanceof Error ? error.message : "unknown error";
         failures.push(`${source.name}: ${message}`);
         this.logger.warn("MODUS paired fixture source failed.", {

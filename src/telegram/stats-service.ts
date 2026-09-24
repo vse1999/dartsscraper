@@ -13,6 +13,7 @@ import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { PlayerMatchesService } from "../services/player-matches.js";
 import { calculateMatchSummary } from "../services/statistics.js";
+import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import type { PlayerStatsSource } from "./query.js";
 
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
@@ -30,11 +31,16 @@ export interface PlayerStatsResult {
 }
 
 export interface PlayerStatsReader {
-  getPlayerStats(playerName: string, matchCount: number, source?: PlayerStatsSource): Promise<PlayerStatsResult>;
+  getPlayerStats(
+    playerName: string,
+    matchCount: number,
+    source?: PlayerStatsSource,
+    signal?: AbortSignal,
+  ): Promise<PlayerStatsResult>;
 }
 
 export interface PlayerMatchesReader {
-  getLastMatches(playerName: string, limit: number): Promise<MatchResult>;
+  getLastMatches(playerName: string, limit: number, signal?: AbortSignal): Promise<MatchResult>;
 }
 
 export class DartsPlayerStatsService implements PlayerStatsReader {
@@ -44,8 +50,16 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
     this.matchesService = matchesService;
   }
 
-  public async getPlayerStats(playerName: string, matchCount: number): Promise<PlayerStatsResult> {
-    const result = await this.matchesService.getLastMatches(playerName, matchCount);
+  public async getPlayerStats(
+    playerName: string,
+    matchCount: number,
+    _source?: PlayerStatsSource,
+    signal?: AbortSignal,
+  ): Promise<PlayerStatsResult> {
+    const result = signal === undefined
+      ? await this.matchesService.getLastMatches(playerName, matchCount)
+      : await this.matchesService.getLastMatches(playerName, matchCount, signal);
+    throwIfAborted(signal);
     const summary = calculateMatchSummary(result.matches);
 
     return {
@@ -75,15 +89,20 @@ export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
     playerName: string,
     matchCount: number,
     source: PlayerStatsSource = "auto",
+    signal?: AbortSignal,
   ): Promise<PlayerStatsResult> {
     if (source !== "modus") {
-      return this.dartsStats.getPlayerStats(playerName, matchCount, source);
+      return signal === undefined
+        ? this.dartsStats.getPlayerStats(playerName, matchCount, source)
+        : this.dartsStats.getPlayerStats(playerName, matchCount, source, signal);
     }
-    const modus = await this.modusHistory.findPlayerHistory(
+    throwIfAborted(signal);
+    const modus = await waitWithSignal(this.modusHistory.findPlayerHistory(
       playerName,
       matchCount,
       { forceLiveLookup: source === "modus" },
-    );
+    ), signal);
+    throwIfAborted(signal);
     if (modus === null) throw new InsufficientMatchDataError(matchCount, 0);
     const summary = calculateMatchSummary(modus.matches);
     return {

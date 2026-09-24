@@ -18,7 +18,12 @@ export function formatPdcUpcomingMessages(report: PdcUpcomingReport): readonly s
     const schedule = scheduled.map((fixture) => opponentLabel(fixture, player.requestedName)).join(" · ");
     const prefix = `📅 Scheduled: ${schedule === "" ? player.requestedName : schedule}`;
     if (player.stats === null) {
-      messages.push(`${prefix}\n⚠️ Last-10 form could not be loaded for ${player.requestedName}.`);
+      const reason = player.failureCode === "timeout"
+        ? "timed out at the research deadline"
+        : player.failureCode === "unstarted"
+          ? "was skipped because the research deadline was reached before this lookup started"
+          : "could not be loaded";
+      messages.push(`${prefix}\n⚠️ Last-10 form ${reason} for ${player.requestedName}.`);
       continue;
     }
     const body = formatPlayerStats(player.stats);

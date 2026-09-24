@@ -1,4 +1,5 @@
-import { Bot, type BotConfig, type Context, type NextFunction } from "grammy";
+import { Bot, type BotConfig, type Context, type NextFunction, type Transformer } from "grammy";
+import type { AbortSignal as GrammyAbortSignal } from "abort-controller";
 import type { UserFromGetMe } from "grammy/types";
 
 import { resolveResearchDate } from "../agent/date.js";
@@ -27,11 +28,19 @@ import { parseStatsBatchQuery, statsQueryUsage, type StatsBatchQuery, type Stats
 import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
+import { handleCompareCommand, type CompareMessageResponder } from "./compare-command.js";
+import { compareQueryUsage } from "./compare-query.js";
 import { normalizePlayerName } from "../player/resolver.js";
+import {
+  createTelegramDeliveryPolicy,
+  getTelegramRetryAfterFromResponse,
+  getTelegramRetryAfterSeconds,
+  type TelegramDeliveryPolicy,
+} from "./delivery-policy.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
-export const TELEGRAM_BOT_RELEASE = "pdc-matchup-cards-v8";
+export const TELEGRAM_BOT_RELEASE = "pdc-matchup-cards-v9";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
@@ -47,6 +56,7 @@ export interface CreateBotOptions {
   readonly statsService: PlayerStatsReader;
   readonly logger?: Logger;
   readonly apiFetch?: typeof fetch;
+  readonly deliveryPolicy?: TelegramDeliveryPolicy;
   readonly botInfo?: UserFromGetMe;
   readonly modusReportTrigger?: ModusReportTrigger;
   readonly pdcTournamentService?: PdcTournamentReader;
@@ -91,6 +101,27 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     ...(options.botInfo === undefined ? {} : { botInfo: options.botInfo }),
   };
   const bot = new Bot<Context>(options.token, botConfig);
+  const deliveryPolicy = options.deliveryPolicy ?? createTelegramDeliveryPolicy();
+  const deliveryTransformer: Transformer = async (previous, method, payload, signal) => {
+    if (method !== "sendMessage" && method !== "editMessageText") {
+      return previous(method, payload, signal);
+    }
+    const chatId = getTelegramChatId(payload);
+    if (chatId === undefined) return previous(method, payload, signal);
+    const previousSignal = signal as unknown as GrammyAbortSignal | undefined;
+    const delivered = await deliveryPolicy.execute(
+      makeTelegramChatKey(chatId),
+      (): ReturnType<typeof previous> => previous(method, payload, previousSignal),
+      {
+        ...(signal === undefined ? {} : { signal }),
+        retryAfterFromResult: getTelegramRetryAfterFromResponse,
+        retryAfterFromError: getTelegramRetryAfterSeconds,
+      },
+    );
+    // grammY keeps the API result type private inside its generic Transformer type.
+    return delivered as unknown as Awaited<ReturnType<typeof previous>>;
+  };
+  bot.api.config.use(deliveryTransformer);
 
   bot.catch((error): void => {
     logger.error("Telegram update escaped handler error handling.", {
@@ -120,6 +151,38 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     await ctx.reply(`Bot online. Telegram delivery is working.\nRelease: ${TELEGRAM_BOT_RELEASE}`);
   });
 
+  bot.command("compare", async (ctx: Context): Promise<void> => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    const responder: CompareMessageResponder = {
+      reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
+        const sent = await ctx.reply(
+          text,
+          undefined,
+          replyOptions?.signal as unknown as GrammyAbortSignal | undefined,
+        );
+        return { messageId: sent.message_id };
+      },
+      edit: async (messageId: number, text: string, editOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
+        await ctx.api.editMessageText(
+          chatId,
+          messageId,
+          text,
+          undefined,
+          editOptions?.signal as unknown as GrammyAbortSignal | undefined,
+        );
+      },
+    };
+    await handleCompareCommand(
+      ctx.message?.text ?? "",
+      options.statsService,
+      responder,
+      logger,
+      ctx.update.update_id,
+      options.scheduleBackgroundTask,
+    );
+  });
+
   bot.command("modus", async (ctx: Context): Promise<void> => {
     await handleModusReportCommand(
       ctx.message?.text ?? "",
@@ -135,7 +198,9 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
       ctx.message?.text ?? "",
       options.pdcTournamentService,
       (expression): string => resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date,
-      { reply: async (text: string): Promise<void> => { await ctx.reply(text); } },
+      { reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
+        await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
+      } },
       logger,
       options.scheduleBackgroundTask,
     );
@@ -209,6 +274,24 @@ export function createConfiguredBot(
     ...(scheduleBackgroundTask === undefined ? {} : { scheduleBackgroundTask }),
     logger,
   });
+}
+
+function getTelegramChatId(value: unknown): number | string | undefined {
+  if (typeof value !== "object" || value === null || !("chat_id" in value)) return undefined;
+  const chatId: unknown = Reflect.get(value, "chat_id");
+  return typeof chatId === "number" || typeof chatId === "string" ? chatId : undefined;
+}
+
+function makeTelegramChatKey(chatId: number | string): string {
+  if (typeof chatId === "number") return `numeric:${String(chatId)}`;
+  if (/^-?\d+$/u.test(chatId)) {
+    try {
+      return `numeric:${BigInt(chatId).toString()}`;
+    } catch {
+      return `text:${chatId}`;
+    }
+  }
+  return `text:${chatId}`;
 }
 
 function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusReportTrigger | undefined {
@@ -419,7 +502,7 @@ async function handleStatsQuery(
 }
 
 function botHelpText(): string {
-  return `${statsQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
+  return `${statsQueryUsage()}\n\n${compareQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
 function formatResolvedPlayerStats(

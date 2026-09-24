@@ -71,7 +71,7 @@ describe("PDC Telegram command", () => {
     );
 
     expect(outcome).toBe("success");
-    expect(reader.getLatestResults).toHaveBeenCalledWith("2026-09-13");
+    expect(reader.getLatestResults).toHaveBeenCalledWith("2026-09-13", expect.any(AbortSignal));
     expect(reader.getUpcomingReportForDate).not.toHaveBeenCalled();
     expect(replies[0]).toContain("Scanning PDC latest");
     expect(replies.join("\n")).toContain("European Tour 12");
@@ -124,7 +124,7 @@ describe("PDC Telegram command", () => {
     );
 
     expect(outcome).toBe("success");
-    expect(reader.getUpcomingReportForDate).toHaveBeenCalledWith("2026-09-17");
+    expect(reader.getUpcomingReportForDate).toHaveBeenCalledWith("2026-09-17", expect.any(AbortSignal), expect.any(Function));
     expect(reader.getLatestResults).not.toHaveBeenCalled();
     expect(replies.join("\n")).toContain("Rob Cross vs Ryan Searle");
     expect(replies.join("\n")).toContain("World Series of Darts Finals 2026");
