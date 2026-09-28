@@ -153,48 +153,47 @@ export function parsePdpaEventFixtures(
   const $ = cheerio.load(html);
   const tournamentName = normalizeText($("h1.page-title").first().text());
   if (tournamentName === "") throw new Error("The PDPA event page had no title.");
-  const details = $(".info-group").filter((_index, element) => (
-    normalizeText($(element).find(".heading").first().text()).toLocaleLowerCase("en-US") === "more information:"
-  )).find(".content").first();
-  if (details.length === 0) return [];
-
   const fixtures: PdcFixture[] = [];
-  let activeDate = false;
-  let round: string | null = null;
-  let session: string | null = null;
-  details.find("p").each((_paragraphIndex, paragraph) => {
-    const lines = htmlLines($(paragraph).html() ?? "");
-    for (const line of lines) {
-      const lineDate = dateFromScheduleHeading(line, validatedDate.slice(0, 4));
-      if (lineDate !== null) {
-        activeDate = lineDate === validatedDate;
-        session = activeDate ? scheduleLabel(line) : null;
-        round = null;
-        continue;
+  // PDPA places dated schedules in Entries as well as More Information.
+  // Scope date/session state to each section so undated draws cannot inherit it.
+  $(".info-group .content").each((_sectionIndex, section) => {
+    let activeDate = false;
+    let round: string | null = null;
+    let session: string | null = null;
+    $(section).find("p").each((_paragraphIndex, paragraph) => {
+      const lines = htmlLines($(paragraph).html() ?? "");
+      for (const line of lines) {
+        const lineDate = dateFromScheduleHeading(line, validatedDate.slice(0, 4));
+        if (lineDate !== null) {
+          activeDate = lineDate === validatedDate;
+          session = activeDate ? scheduleLabel(line) : null;
+          round = null;
+          continue;
+        }
+        if (!activeDate) continue;
+        if (isRoundLabel(line)) {
+          round = line;
+          continue;
+        }
+        if (isSessionLabel(line)) {
+          session = scheduleLabel(line) ?? line;
+          continue;
+        }
+        const players = parseMatchup(line);
+        if (players === null) continue;
+        fixtures.push(PdcFixtureSchema.parse({
+          id: `pdpa:${validatedDate}:${fixtures.length + 1}:${normalizeId(players.playerOne)}:${normalizeId(players.playerTwo)}`,
+          tournamentName,
+          date: validatedDate,
+          startTime: null,
+          session,
+          round,
+          playerOne: players.playerOne,
+          playerTwo: players.playerTwo,
+          sourceUrl: trustedSource,
+        }));
       }
-      if (!activeDate) continue;
-      if (isRoundLabel(line)) {
-        round = line;
-        continue;
-      }
-      if (isSessionLabel(line)) {
-        session = scheduleLabel(line) ?? line;
-        continue;
-      }
-      const players = parseMatchup(line);
-      if (players === null) continue;
-      fixtures.push(PdcFixtureSchema.parse({
-        id: `pdpa:${validatedDate}:${fixtures.length + 1}:${normalizeId(players.playerOne)}:${normalizeId(players.playerTwo)}`,
-        tournamentName,
-        date: validatedDate,
-        startTime: null,
-        session,
-        round,
-        playerOne: players.playerOne,
-        playerTwo: players.playerTwo,
-        sourceUrl: trustedSource,
-      }));
-    }
+    });
   });
   return deduplicateFixtures(fixtures);
 }

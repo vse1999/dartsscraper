@@ -221,7 +221,7 @@ export class PdcTournamentService {
   }
 
   private async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
-    const cacheKey = `pdc-fixtures-v4-${date}`;
+    const cacheKey = `pdc-fixtures-v5-${date}`;
     const cached = PdcFixtureSchema.array().safeParse(await withOptionalDeadline(this.cache?.get(cacheKey) ?? Promise.resolve(undefined), signal));
     if (cached.success) return cached.data;
     const existing = signal === undefined ? this.fixturePromises.get(date) : undefined;
