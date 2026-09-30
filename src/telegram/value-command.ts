@@ -105,6 +105,7 @@ async function executeValueReport(
 ): Promise<Exclude<ValueCommandOutcome, "invalid" | "unavailable" | "started">> {
   try {
     const report = await session.research((signal: AbortSignal): Promise<ValueReport> => reader.getReport(day, signal));
+    logValueResearchCompleted(logger, day, report);
     const messages = formatValueMessages(report);
     await deliverValueMessages(messages, acknowledgement, responder, session);
     const outcome: Exclude<ValueCommandOutcome, "invalid" | "unavailable" | "started"> = report.cards.length === 0
@@ -112,13 +113,6 @@ async function executeValueReport(
       : report.status === "partial" || report.cards.some((card): boolean => card.status !== "complete")
         ? "partial"
         : "success";
-    logger.info("Value research completed.", {
-      command: "value",
-      day,
-      date: report.odds.date,
-      returnedCount: report.cards.length,
-      status: report.status,
-    });
     return outcome;
   } catch (error: unknown) {
     logger.warn("Value research failed.", {
@@ -147,6 +141,25 @@ async function executeValueReport(
     }
     throw new ValueReportHandledFailure();
   }
+}
+
+function logValueResearchCompleted(logger: Logger, day: ValueReaderDay, report: ValueReport): void {
+  logger.info("Value report research completed.", {
+    command: "value",
+    day,
+    date: report.odds.date,
+    status: report.status,
+    oddsMatches: report.counts.oddsMatches,
+    cards: report.counts.cards,
+    completeCards: report.counts.completeCards,
+    partialCards: report.counts.partialCards,
+    unresolvedCards: report.counts.unresolvedCards,
+    timedOutCards: report.counts.timedOutCards,
+    cancelledCards: report.counts.cancelledCards,
+    failedCards: report.counts.failedCards,
+    resolvedPlayers: report.counts.resolvedPlayers,
+    unresolvedPlayers: report.counts.unresolvedPlayers,
+  });
 }
 
 class ValueReportHandledFailure extends Error {

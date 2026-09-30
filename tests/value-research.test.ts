@@ -271,4 +271,23 @@ describe("value research", () => {
     expect(report.cards[0]?.player1.status).toBe("failed");
     expect(report.cards[0]?.player1.last20).toBeNull();
   });
+
+  it("preserves identity-provider failure state and skips stats for the affected abbreviated slot", async () => {
+    const getPlayerStats = vi.fn<PlayerStatsReader["getPlayerStats"]>(async (name: string): Promise<PlayerStatsResult> => history(name === alice.name ? alice : bob));
+    const getIdentityEvidence = vi.fn(async (): Promise<ReadonlyMap<string, never>> => { throw new Error("provider unavailable"); });
+    const reader = new DefaultValueReader({
+      oddsReader: {
+        getOdds: vi.fn(async (): Promise<OddsReport> => odds([oddsMatch("A. Smith", "Bob Jones")])),
+        getIdentityEvidence,
+        maxIdentityEvidenceMatches: 5,
+      },
+      playerStatsReader: { getPlayerStats },
+      playerDirectory: { getPlayers: vi.fn(async (): Promise<readonly PlayerIdentity[]> => [alice, bob]) },
+    });
+    const report = await reader.getReport("today");
+    expect(report.cards[0]?.player1.status).toBe("failed");
+    expect(report.cards[0]?.player2.status).toBe("available");
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+    expect(report.warnings.some((warning: string): boolean => warning.includes("identity verification failed"))).toBe(true);
+  });
 });

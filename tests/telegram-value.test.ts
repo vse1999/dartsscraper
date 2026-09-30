@@ -255,6 +255,41 @@ describe("Telegram value command", () => {
     expect(replies).toHaveLength(1);
   });
 
+  it("logs bounded completion counts after research without chat or payload data", async () => {
+    const records: Array<{ readonly message: string; readonly context: Readonly<Record<string, unknown>> | undefined }> = [];
+    const completionLogger: Logger = {
+      debug: (): void => undefined,
+      info: (message: string, context?: Readonly<Record<string, unknown>>): void => { records.push({ message, context }); },
+      warn: (): void => undefined,
+      error: (): void => undefined,
+    };
+    const outcome = await handleValueCommand(
+      "/value",
+      { getReport: async (): Promise<ValueReport> => report([card(1), card(2, "partial")]) },
+      responder([], []),
+      completionLogger,
+    );
+    expect(outcome).toBe("partial");
+    const completion = records.find((entry): boolean => entry.message === "Value report research completed.");
+    expect(completion?.context).toMatchObject({
+      command: "value",
+      day: "today",
+      status: "partial",
+      oddsMatches: 2,
+      cards: 2,
+      completeCards: 1,
+      partialCards: 1,
+      unresolvedCards: 0,
+      timedOutCards: 0,
+      cancelledCards: 0,
+      failedCards: 0,
+      resolvedPlayers: 4,
+      unresolvedPlayers: 0,
+    });
+    const serialized = JSON.stringify(completion?.context);
+    expect(serialized).not.toMatch(/chat|token|secret|message/iu);
+  });
+
   it("keeps backend failure details out of Telegram", async () => {
     const replies: string[] = [];
     const edits: Array<{ readonly messageId: number; readonly text: string }> = [];

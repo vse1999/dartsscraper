@@ -108,7 +108,7 @@ function formatPlayer(player: ValuePlayerAssessment, position: 1 | 2): string {
   const state = player.status === "available" ? "resolved" : player.status;
   const lines = [`Player ${position}: ${name} · ${state}`];
   if (player.status !== "available" && player.status !== "partial") {
-    lines.push(`Cannot compare: ${safePlayerFailure(player.status)}.`);
+    lines.push(`Cannot compare: ${safePlayerFailure(player)}.`);
   } else if (player.status === "partial") {
     // The backend deliberately supplies public state, not provider exception
     // text. Keep this boundary defensive for injected/test reports as well.
@@ -125,10 +125,16 @@ function formatPlayer(player: ValuePlayerAssessment, position: 1 | 2): string {
   return lines.join("\n");
 }
 
-function safePlayerFailure(status: ValuePlayerAssessment["status"]): string {
-  if (status === "unresolved") return "player identity could not be verified";
-  if (status === "timed_out") return "statistics research deadline reached";
-  if (status === "cancelled") return "statistics research was cancelled";
+function safePlayerFailure(player: ValuePlayerAssessment): string {
+  if (player.status === "unresolved") return "player identity could not be verified";
+  if (player.error === "Player directory lookup timed out.") return "player identity directory lookup timed out";
+  if (player.error === "Player directory lookup cancelled.") return "player identity directory lookup was cancelled";
+  if (player.error === "Player directory unavailable.") return "player identity directory unavailable";
+  if (player.error === "Source identity verification timed out.") return "source identity verification timed out";
+  if (player.error === "Source identity verification was cancelled.") return "source identity verification was cancelled";
+  if (player.error === "Source identity verification failed.") return "source identity verification failed";
+  if (player.status === "timed_out") return "statistics research deadline reached";
+  if (player.status === "cancelled") return "statistics research was cancelled";
   return "statistics source unavailable";
 }
 

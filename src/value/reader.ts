@@ -87,6 +87,7 @@ export class DefaultValueReader implements ValueReader {
       const requestedNames = uniqueRequestedNames(odds.matches);
       let resolutions: ReadonlyMap<string, Resolution>;
       let directoryPlayers: readonly PlayerIdentity[] = [];
+      let directoryWarning: string | undefined;
       try {
         const loaded = await this.resolveNames(requestedNames, researchSignal);
         resolutions = loaded.resolutions;
@@ -98,6 +99,11 @@ export class DefaultValueReader implements ValueReader {
           name,
           { status: directoryStatus, identity: null, error: directoryStatus === "timed_out" ? "Player directory lookup timed out." : directoryStatus === "cancelled" ? "Player directory lookup cancelled." : "Player directory unavailable." },
         ]));
+        directoryWarning = directoryStatus === "timed_out"
+          ? "Player identity directory lookup timed out; all player statistics were withheld."
+          : directoryStatus === "cancelled"
+            ? "Player identity directory lookup was cancelled; all player statistics were withheld."
+            : "Player identity directory was unavailable; all player statistics were withheld.";
       }
 
       const slotResolutionResult = await this.resolveMatchSlots(odds, resolutions, directoryPlayers, researchSignal);
@@ -125,9 +131,11 @@ export class DefaultValueReader implements ValueReader {
         cards,
         counts: countsFromCards(cards),
         status: reportStatus(cards, researchSignal),
-        warnings: slotResolutionResult.identityCoverageWarning === undefined
-          ? [...odds.warnings]
-          : [...odds.warnings, slotResolutionResult.identityCoverageWarning],
+        warnings: [
+          ...odds.warnings,
+          ...(directoryWarning === undefined ? [] : [directoryWarning]),
+          ...(slotResolutionResult.identityCoverageWarning === undefined ? [] : [slotResolutionResult.identityCoverageWarning]),
+        ],
       };
     } finally {
       clearTimeout(cutoff);
@@ -174,8 +182,8 @@ export class DefaultValueReader implements ValueReader {
       const match = odds.matches.find((candidate: OddsMatch): boolean => candidate.eventId === eventId);
       const current = slots.get(eventId);
       if (match === undefined || current === undefined) continue;
-      const first = this.resolveSourceParticipant(detail.home, match.player1, directoryPlayers);
-      const second = this.resolveSourceParticipant(detail.away, match.player2, directoryPlayers);
+      const first = preserveProviderFailure(current.first, this.resolveSourceParticipant(detail.home, match.player1, directoryPlayers));
+      const second = preserveProviderFailure(current.second, this.resolveSourceParticipant(detail.away, match.player2, directoryPlayers));
       slots.set(eventId, { first, second });
     }
     const candidates = odds.matches.filter((match: OddsMatch): boolean => {
@@ -187,11 +195,16 @@ export class DefaultValueReader implements ValueReader {
       ? candidates
       : candidates.slice(0, Math.max(0, Math.floor(providerLimit)));
     let evidence: ReadonlyMap<string, OddsMatchIdentityEvidence> = new Map<string, OddsMatchIdentityEvidence>();
+    let providerFailure = false;
+    let providerFailureStatus: Resolution["status"] | undefined;
     if (provider !== undefined && providerCandidates.length > 0 && directoryPlayers.length > 0) {
       try {
         evidence = await waitForSignal(provider.call(this.oddsReader, providerCandidates, odds.date, signal), signal ?? new AbortController().signal);
-      } catch (error: unknown) {
-        void error;
+      } catch (_error: unknown) {
+        providerFailure = true;
+        providerFailureStatus = signal?.aborted === true
+          ? signalStatus(signal)
+          : isTimeout(_error) ? "timed_out" : "failed";
       }
     }
     for (const match of candidates) {
@@ -199,8 +212,8 @@ export class DefaultValueReader implements ValueReader {
       const detail = evidence.get(match.eventId);
       if (current === undefined || detail === undefined || !validEvidenceContext(detail, match, odds.date)) continue;
       verifiedEvidence.set(match.eventId, detail);
-      const first = this.resolveSourceParticipant(detail.home, match.player1, directoryPlayers);
-      const second = this.resolveSourceParticipant(detail.away, match.player2, directoryPlayers);
+      const first = preserveProviderFailure(current.first, this.resolveSourceParticipant(detail.home, match.player1, directoryPlayers));
+      const second = preserveProviderFailure(current.second, this.resolveSourceParticipant(detail.away, match.player2, directoryPlayers));
       slots.set(match.eventId, { first, second });
     }
     if (providerConfigured) {
@@ -210,8 +223,12 @@ export class DefaultValueReader implements ValueReader {
         const current = slots.get(match.eventId);
         if (current === undefined) continue;
         slots.set(match.eventId, {
-          first: needsSourceVerification(match.player1) ? unavailableSourceResolution() : current.first,
-          second: needsSourceVerification(match.player2) ? unavailableSourceResolution() : current.second,
+          first: needsSourceVerification(match.player1)
+            ? preserveProviderFailure(current.first, unavailableSourceResolution(providerFailureStatus))
+            : current.first,
+          second: needsSourceVerification(match.player2)
+            ? preserveProviderFailure(current.second, unavailableSourceResolution(providerFailureStatus))
+            : current.second,
         });
       }
     }
@@ -225,20 +242,30 @@ export class DefaultValueReader implements ValueReader {
       if (current === undefined) continue;
       const blocked = (participant: OddsParticipantIdentityEvidence): boolean => this.conflictingSourcePlayerIds.has(participant.sourcePlayerId);
       slots.set(eventId, {
-        first: blocked(detail.home) ? conflictingSourceResolution() : current.first,
-        second: blocked(detail.away) ? conflictingSourceResolution() : current.second,
+        first: blocked(detail.home) ? preserveProviderFailure(current.first, conflictingSourceResolution()) : current.first,
+        second: blocked(detail.away) ? preserveProviderFailure(current.second, conflictingSourceResolution()) : current.second,
       });
     }
     for (const [eventId, detail] of verifiedEvidence) {
       if (this.conflictingSourcePlayerIds.has(detail.home.sourcePlayerId) || this.conflictingSourcePlayerIds.has(detail.away.sourcePlayerId)) verifiedEvidence.delete(eventId);
     }
     const omitted = providerLimit === undefined ? 0 : Math.max(0, candidates.length - providerCandidates.length);
+    const unresolvedCandidates = candidates.filter((match: OddsMatch): boolean => {
+      const slot = slots.get(match.eventId);
+      return slot !== undefined && (slot.first.status === "unresolved" || slot.second.status === "unresolved");
+    }).length;
+    const identityWarnings: string[] = [];
+    if (providerFailure) identityWarnings.push(providerFailureStatus === "timed_out"
+      ? "Source identity verification timed out; affected abbreviated odds names remain unverified."
+      : providerFailureStatus === "cancelled"
+        ? "Source identity verification was cancelled; affected abbreviated odds names remain unverified."
+        : "Source identity verification failed; affected abbreviated odds names remain unverified.");
+    if (omitted > 0) identityWarnings.push(`Source identity verification was bounded to ${providerCandidates.length} of ${candidates.length} odds matchups; ${omitted} remaining abbreviated or unresolved matchup(s) remain unverified.`);
+    if (!providerFailure && unresolvedCandidates > 0 && providerConfigured) identityWarnings.push(`${unresolvedCandidates} odds matchup(s) retain unresolved source identity coverage.`);
     return {
       slots,
       evidence: verifiedEvidence,
-      ...(omitted === 0 ? {} : {
-        identityCoverageWarning: `Source identity verification was bounded to ${providerCandidates.length} of ${candidates.length} odds matchups; ${omitted} remaining abbreviated or unresolved matchup(s) remain unresolved.`,
-      }),
+      ...(identityWarnings.length === 0 ? {} : { identityCoverageWarning: identityWarnings.join(" ") }),
     };
   }
 
@@ -385,9 +412,19 @@ function conflictingSourceResolution(): Resolution {
   return { status: "unresolved", identity: null, error: "Source profile ID was observed with conflicting full names." };
 }
 
-function unavailableSourceResolution(): Resolution {
+function unavailableSourceResolution(status?: Resolution["status"]): Resolution {
+  if (status === "timed_out") return { status, identity: null, error: "Source identity verification timed out." };
+  if (status === "cancelled") return { status, identity: null, error: "Source identity verification was cancelled." };
+  if (status === "failed") return { status, identity: null, error: "Source identity verification failed." };
   return { status: "unresolved", identity: null, error: "Verified source identity evidence was unavailable for this abbreviated odds slot." };
 }
+
+function preserveProviderFailure(existing: Resolution, candidate: Resolution): Resolution {
+  return existing.status === "failed" || existing.status === "timed_out" || existing.status === "cancelled"
+    ? existing
+    : candidate;
+}
+
 
 function validIdentityEvidenceLimit(value: number | undefined): number | undefined {
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;

@@ -185,7 +185,7 @@ describe("value source identity joins", () => {
     const reader = makeReader([current], () => new Map(), [raymond, cameron], provider);
     const result = await reader.getReport("today", controller.signal);
     expect(result.cards[0]?.player1.identity).toBeNull();
-    expect(result.cards[0]?.player1.status).toBe("unresolved");
+    expect(result.cards[0]?.player1.status).toBe("cancelled");
   });
 
   it("retains every card and discloses bounded identity coverage", async () => {
@@ -201,6 +201,6 @@ describe("value source identity joins", () => {
     expect(result.cards).toHaveLength(13);
     expect(result.cards.slice(0, 12).every((card): boolean => card.player1.identity?.id === ross.id)).toBe(true);
     expect(result.cards[12]?.player1.identity).toBeNull();
-    expect(result.warnings).toContain("Source identity verification was bounded to 12 of 13 odds matchups; 1 remaining abbreviated or unresolved matchup(s) remain unresolved.");
+    expect(result.warnings.join("\n")).toContain("Source identity verification was bounded to 12 of 13 odds matchups; 1 remaining abbreviated or unresolved matchup(s) remain unverified.");
   });
 });

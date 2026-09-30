@@ -4,6 +4,7 @@ import { parseEredmenyekMatchIdentity, parseEredmenyekPlayerProfile, profileUrls
 import { parseEredmenyekRenderedOdds, type EredmenyekRenderedOddsResult } from "./parser.js";
 import { abortError, throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import { appendCleanupError, closeLateBrowser, closeLateContext, enqueueBrowserRun, ensureHttpStatus, errorMessage, filterElapsedMatches, hasTippmixProMapping, requestedDateFor, safeUrl } from "./runtime.js";
+import { ConsoleLogger } from "../logger.js";
 
 const SOURCE_ORIGIN = "https://www.eredmenyek.com";
 const TODAY_PATH = "/darts/oddsok/";
@@ -13,6 +14,9 @@ const CACHE_TTL_MS = 5 * 60 * 1_000;
 const TOTAL_TIMEOUT_MS = 45_000;
 const NAVIGATION_TIMEOUT_MS = 20_000;
 const RENDER_TIMEOUT_MS = 15_000;
+const IDENTITY_REQUEST_TIMEOUT_MS = 8_000;
+const IDENTITY_MAX_HTML_BYTES = 2_500_000;
+const IDENTITY_TIMEOUT_MESSAGE = "Eredmenyek identity read timed out.";
 // Keep profile verification within the shared source latency budget. The value
 // layer exposes this declared capacity and abstains from any residual guesses.
 const IDENTITY_MAX_MATCHES = 12;
@@ -28,6 +32,22 @@ export interface DefaultOddsReaderOptions {
   readonly executablePath?: string;
   /** Injectable wall clock for deterministic date/cache tests. */
   readonly now?: () => Date;
+  /** Internal identity wall-clock bound; injectable only for deterministic tests. */
+  readonly identityTimeoutMs?: number;
+  /** Per-document public identity request bound; injectable only for deterministic tests. */
+  readonly identityRequestTimeoutMs?: number;
+  /** Optional structured identity summary sink; defaults to safe console info/warn output. */
+  readonly identityLogger?: (summary: OddsIdentitySummary) => void;
+}
+
+export interface OddsIdentitySummary {
+  readonly stage: "complete" | "partial-timeout" | "cancelled" | "failed";
+  readonly requestedMatches: number;
+  readonly detailRequests: number;
+  readonly profileRequests: number;
+  readonly verifiedMatches: number;
+  readonly failedMatches: number;
+  readonly timedOut: boolean;
 }
 
 export class OddsSourceError extends Error {
@@ -49,10 +69,23 @@ interface SharedRun {
   settled: boolean;
 }
 
+interface IdentityRunStats {
+  readonly requestedMatches: number;
+  detailRequests: number;
+  profileRequests: number;
+  verifiedMatches: number;
+  failedMatches: number;
+  timedOut: boolean;
+  externallyAborted: boolean;
+}
+
 class EredmenyekOddsReader implements OddsReader, OddsIdentityReader {
   public readonly maxIdentityEvidenceMatches = IDENTITY_MAX_MATCHES;
   private readonly executablePath: string | undefined;
   private readonly now: () => Date;
+  private readonly identityTimeoutMs: number;
+  private readonly identityRequestTimeoutMs: number;
+  private readonly identityLogger: (summary: OddsIdentitySummary) => void;
   private readonly cache = new Map<OddsDay, CachedReport>();
   private readonly inFlight = new Map<OddsDay, SharedRun>();
 
@@ -60,6 +93,9 @@ class EredmenyekOddsReader implements OddsReader, OddsIdentityReader {
     const configuredPath = options.executablePath ?? process.env.ODDS_BROWSER_EXECUTABLE_PATH;
     this.executablePath = configuredPath === undefined || configuredPath.trim() === "" ? undefined : configuredPath;
     this.now = options.now ?? ((): Date => new Date());
+    this.identityTimeoutMs = positiveTimeout(options.identityTimeoutMs ?? TOTAL_TIMEOUT_MS, "identityTimeoutMs");
+    this.identityRequestTimeoutMs = positiveTimeout(options.identityRequestTimeoutMs ?? IDENTITY_REQUEST_TIMEOUT_MS, "identityRequestTimeoutMs");
+    this.identityLogger = options.identityLogger ?? defaultIdentityLogger;
   }
 
   public async getOdds(day: OddsDay, signal?: AbortSignal): Promise<OddsReport> {
@@ -94,18 +130,53 @@ class EredmenyekOddsReader implements OddsReader, OddsIdentityReader {
   ): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> {
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(date)) throw new OddsSourceError("Eredmenyek identity date must be YYYY-MM-DD.");
     throwIfAborted(signal);
-    if (matches.length === 0) return new Map<string, OddsMatchIdentityEvidence>();
+    if (matches.length === 0) {
+      emitIdentitySummary(this.identityLogger, { requestedMatches: 0, detailRequests: 0, profileRequests: 0, verifiedMatches: 0, failedMatches: 0, timedOut: false, externallyAborted: false }, "complete");
+      return new Map<string, OddsMatchIdentityEvidence>();
+    }
     const controller = new AbortController();
-    const timeout = setTimeout((): void => controller.abort(new Error("Eredmenyek identity read timed out.")), TOTAL_TIMEOUT_MS);
-    const onAbort = (): void => controller.abort(signal?.reason);
+    const timeout = setTimeout((): void => controller.abort(new Error(IDENTITY_TIMEOUT_MESSAGE)), this.identityTimeoutMs);
+    const stats: IdentityRunStats = { requestedMatches: Math.min(matches.length, IDENTITY_MAX_MATCHES), detailRequests: 0, profileRequests: 0, verifiedMatches: 0, failedMatches: 0, timedOut: false, externallyAborted: false };
+    const onAbort = (): void => { stats.externallyAborted = true; controller.abort(signal?.reason); };
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       throwIfAborted(signal);
       const operation = enqueueBrowserRun(
-        (): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> => this.fetchIdentityEvidence(matches.slice(0, IDENTITY_MAX_MATCHES), date, controller.signal),
+        (): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> => this.fetchIdentityEvidence(matches.slice(0, IDENTITY_MAX_MATCHES), date, controller.signal, stats),
         controller.signal,
       );
-      return await waitWithSignal(operation, controller.signal);
+      try {
+        const result = await waitWithSignal(operation, controller.signal);
+        if (stats.externallyAborted) throw abortError(signal ?? controller.signal);
+        emitIdentitySummary(this.identityLogger, stats, "complete");
+        if (stats.externallyAborted) throw abortError(signal ?? controller.signal);
+        return result;
+      } catch (error: unknown) {
+        if (!isInternalIdentityTimeout(controller.signal, stats.externallyAborted)) {
+          emitIdentitySummary(this.identityLogger, stats, stats.externallyAborted ? "cancelled" : "failed");
+          throw error;
+        }
+        stats.timedOut = true;
+        try {
+          const partial = await operation;
+          if (stats.externallyAborted) {
+            emitIdentitySummary(this.identityLogger, stats, "cancelled");
+            throw abortError(signal ?? controller.signal);
+          }
+          emitIdentitySummary(this.identityLogger, stats, "partial-timeout");
+          if (stats.externallyAborted) throw abortError(signal ?? controller.signal);
+          return partial;
+        } catch (operationError: unknown) {
+          if (stats.externallyAborted) {
+            emitIdentitySummary(this.identityLogger, stats, "cancelled");
+            throw abortError(signal ?? controller.signal);
+          }
+          void operationError;
+          emitIdentitySummary(this.identityLogger, stats, "partial-timeout");
+          if (stats.externallyAborted) throw abortError(signal ?? controller.signal);
+          return new Map<string, OddsMatchIdentityEvidence>();
+        }
+      }
     } finally {
       clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
@@ -330,103 +401,59 @@ class EredmenyekOddsReader implements OddsReader, OddsIdentityReader {
     matches: readonly OddsMatch[],
     date: string,
     timeoutSignal: AbortSignal,
+    stats: IdentityRunStats,
   ): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> {
-    let browser: Browser | undefined;
-    let context: BrowserContext | undefined;
-    let lateBrowserCleanup: Promise<void> | undefined;
-    let lateContextCleanup: Promise<void> | undefined;
-    let operationError: unknown;
     const evidence = new Map<string, OddsMatchIdentityEvidence>();
-    try {
-      throwIfAborted(timeoutSignal);
-      const playwright = await waitWithSignal(import("playwright-core"), timeoutSignal);
-      const chromiumModule = await waitWithSignal(import("@sparticuz/chromium"), timeoutSignal);
-      const chromiumRuntime = chromiumModule.default;
-      const executablePath = this.executablePath ?? await waitWithSignal(chromiumRuntime.executablePath(), timeoutSignal);
-      const launchPromise = playwright.chromium.launch({
-        headless: true,
-        executablePath,
-        ...(this.executablePath === undefined ? { args: chromiumRuntime.args } : {}),
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
+    for (const match of matches) {
       try {
-        browser = await waitWithSignal(launchPromise, timeoutSignal);
-      } catch (error: unknown) {
-        lateBrowserCleanup = closeLateBrowser(launchPromise);
-        throw error;
-      }
-      const contextPromise = browser.newContext({ locale: "hu-HU", timezoneId: TIME_ZONE, serviceWorkers: "block" });
-      try {
-        context = await waitWithSignal(contextPromise, timeoutSignal);
-      } catch (error: unknown) {
-        lateContextCleanup = closeLateContext(contextPromise);
-        throw error;
-      }
-      const page = await waitWithSignal(context.newPage(), timeoutSignal);
-      page.setDefaultTimeout(RENDER_TIMEOUT_MS);
-      const allowedDocumentUrls = new Set<string>();
-      await this.configurePage(page, requestedUrl("today"), allowedDocumentUrls);
-      for (const match of matches) {
         throwIfAborted(timeoutSignal);
         const detailUrl = validatedDetailUrl(match.sourceUrl, match.eventId);
         if (detailUrl === undefined) continue;
-        allowedDocumentUrls.add(detailUrl);
-        try {
-          const response = await waitWithSignal(page.goto(detailUrl, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS }), timeoutSignal);
-          if (response === null) continue;
-          ensureHttpStatus(response, `match detail ${match.eventId}`);
-          if (page.url() !== detailUrl) continue;
-          const html = await waitWithSignal(page.evaluate((): string => document.documentElement?.outerHTML ?? ""), timeoutSignal);
-          const profileUrls = profileUrlsFromDetailUrl(detailUrl, match.eventId);
-          const verifiedProfiles = await this.verifyPlayerProfiles(page, profileUrls, timeoutSignal, allowedDocumentUrls);
-          if (verifiedProfiles === undefined) continue;
-          const parsed = parseEredmenyekMatchIdentity({ html, detailUrl, match, date, profileUrls, verifiedProfiles });
-          evidence.set(match.eventId, parsed);
-        } catch (error: unknown) {
-          if (timeoutSignal.aborted) throw error;
-          // A single stale or unavailable detail must not make other verified
-          // slots unsafe; the value layer will leave this candidate unresolved.
+        stats.detailRequests += 1;
+        const html = await this.fetchIdentityDocument(detailUrl, timeoutSignal);
+        const profileUrls = profileUrlsFromDetailUrl(detailUrl, match.eventId);
+        const verifiedProfiles: EredmenyekPlayerProfile[] = [];
+        for (const profileUrl of profileUrls) {
+          stats.profileRequests += 1;
+          const profileHtml = await this.fetchIdentityDocument(profileUrl, timeoutSignal);
+          verifiedProfiles.push(parseEredmenyekPlayerProfile({ html: profileHtml, profileUrl }));
         }
-      }
-    } catch (error: unknown) {
-      operationError = error;
-    } finally {
-      if (lateBrowserCleanup !== undefined) {
-        try { await lateBrowserCleanup; } catch (error: unknown) { operationError = appendCleanupError(operationError, "late browser", error); }
-      }
-      if (lateContextCleanup !== undefined) {
-        try { await lateContextCleanup; } catch (error: unknown) { operationError = appendCleanupError(operationError, "late browser context", error); }
-      }
-      if (context !== undefined) {
-        try { await context.close(); } catch (error: unknown) { operationError = appendCleanupError(operationError, "browser context", error); }
-      }
-      if (browser !== undefined) {
-        try { await browser.close(); } catch (error: unknown) { operationError = appendCleanupError(operationError, "browser", error); }
+        const parsed = parseEredmenyekMatchIdentity({ html, detailUrl, match, date, profileUrls, verifiedProfiles });
+        evidence.set(match.eventId, parsed);
+        stats.verifiedMatches += 1;
+      } catch (error: unknown) {
+        if (isInternalIdentityTimeout(timeoutSignal, stats.externallyAborted)) {
+          stats.timedOut = true;
+          return evidence;
+        }
+        if (timeoutSignal.aborted) throw toSourceError(error);
+        stats.failedMatches += 1;
+        // A single stale, redirected, oversized, or unavailable document must
+        // not make other already-verifiable matchups unsafe.
       }
     }
-    if (operationError !== undefined) throw toSourceError(operationError);
     return evidence;
   }
 
-  private async verifyPlayerProfiles(
-    page: Page,
-    profileUrls: readonly string[],
-    timeoutSignal: AbortSignal,
-    allowedDocumentUrls: Set<string>,
-  ): Promise<readonly EredmenyekPlayerProfile[] | undefined> {
-    const verifiedProfiles: EredmenyekPlayerProfile[] = [];
-    for (const profileUrl of profileUrls) {
+  private async fetchIdentityDocument(url: string, timeoutSignal: AbortSignal): Promise<string> {
+    const requestController = new AbortController();
+    const abortRequest = (): void => requestController.abort(timeoutSignal.reason);
+    timeoutSignal.addEventListener("abort", abortRequest, { once: true });
+    const requestTimeout = setTimeout((): void => requestController.abort(new Error(`Eredmenyek identity document timed out: ${url}`)), this.identityRequestTimeoutMs);
+    try {
       throwIfAborted(timeoutSignal);
-      allowedDocumentUrls.add(profileUrl);
-      const response = await waitWithSignal(page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS }), timeoutSignal);
-      if (response === null) return undefined;
-      ensureHttpStatus(response, `player profile ${profileUrl}`);
-      if (page.url() !== profileUrl) return undefined;
-      await waitWithSignal(page.waitForFunction((): boolean => document.querySelectorAll("h1").length === 1 && document.querySelectorAll(".heading__name").length === 1 && document.querySelector("link[rel='canonical'][href]") !== null, undefined, { timeout: RENDER_TIMEOUT_MS }), timeoutSignal);
-      const html = await waitWithSignal(page.evaluate((): string => document.documentElement?.outerHTML ?? ""), timeoutSignal);
-      verifiedProfiles.push(parseEredmenyekPlayerProfile({ html, profileUrl }));
+      const response = await waitWithSignal(fetch(url, { redirect: "error", signal: requestController.signal, headers: { accept: "text/html" } }), requestController.signal);
+      if (response.url !== url) throw new OddsSourceError("Eredmenyek identity document redirected away from its validated URL.");
+      ensureIdentityHttpStatus(response, url);
+      const contentLength = response.headers.get("content-length");
+      if (contentLength !== null && Number.isFinite(Number(contentLength)) && Number(contentLength) > IDENTITY_MAX_HTML_BYTES) {
+        throw new OddsSourceError("Eredmenyek identity document exceeded the bounded HTML size.");
+      }
+      return await readBoundedIdentityHtml(response, requestController.signal);
+    } finally {
+      clearTimeout(requestTimeout);
+      timeoutSignal.removeEventListener("abort", abortRequest);
     }
-    return verifiedProfiles;
   }
 
   private async configurePage(page: Page, targetUrl: string, allowedDocumentUrls: Set<string> = new Set([targetUrl])): Promise<void> {
@@ -478,4 +505,87 @@ function toSourceError(error: unknown): OddsSourceError {
 function validNow(value: Date): Date {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new OddsSourceError("Odds reader clock returned an invalid date.");
   return value;
+}
+
+function positiveTimeout(value: number, label: string): number {
+  if (!Number.isFinite(value) || value <= 0) throw new OddsSourceError(`${label} must be a positive finite number.`);
+  return value;
+}
+
+function isInternalIdentityTimeout(signal: AbortSignal, externallyAborted: boolean): boolean {
+  return !externallyAborted && signal.aborted && signal.reason instanceof Error && signal.reason.message === IDENTITY_TIMEOUT_MESSAGE;
+}
+
+function emitIdentitySummary(logger: (summary: OddsIdentitySummary) => void, stats: IdentityRunStats, stage: OddsIdentitySummary["stage"]): void {
+  try {
+    logger({
+      stage,
+      requestedMatches: stats.requestedMatches,
+      detailRequests: stats.detailRequests,
+      profileRequests: stats.profileRequests,
+      verifiedMatches: stats.verifiedMatches,
+      failedMatches: stats.failedMatches,
+      timedOut: stats.timedOut,
+    });
+  } catch (error: unknown) {
+    void error;
+  }
+}
+
+function defaultIdentityLogger(summary: OddsIdentitySummary): void {
+  const logger = defaultIdentityLoggerInstance();
+  const message = "eredmenyek_identity_summary";
+  const context = { ...summary };
+  if (summary.stage === "complete") logger.info(message, context);
+  else logger.warn(message, context);
+}
+
+let identityLoggerInstance: ConsoleLogger | undefined;
+
+function defaultIdentityLoggerInstance(): ConsoleLogger {
+  identityLoggerInstance ??= new ConsoleLogger({ minimumLevel: "info" });
+  return identityLoggerInstance;
+}
+
+function ensureIdentityHttpStatus(response: globalThis.Response, url: string): void {
+  if (response.status === 401 || response.status === 403 || response.status === 429) throw new OddsSourceError(`Eredmenyek identity document ${url} is unavailable (HTTP ${response.status}).`);
+  if (!response.ok) throw new OddsSourceError(`Eredmenyek identity document ${url} returned HTTP ${response.status}.`);
+}
+
+async function readBoundedIdentityHtml(response: globalThis.Response, signal: AbortSignal): Promise<string> {
+  const body = response.body;
+  if (body === null) {
+    const text = await waitWithSignal(response.text(), signal);
+    if (new TextEncoder().encode(text).byteLength > IDENTITY_MAX_HTML_BYTES) throw new OddsSourceError("Eredmenyek identity document exceeded the bounded HTML size.");
+    return text;
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let readPending = false;
+  try {
+    while (true) {
+      throwIfAborted(signal);
+      readPending = true;
+      const result = await waitWithSignal(reader.read(), signal);
+      readPending = false;
+      if (result.done) break;
+      totalBytes += result.value.byteLength;
+      if (totalBytes > IDENTITY_MAX_HTML_BYTES) {
+        void reader.cancel().catch((): void => undefined);
+        throw new OddsSourceError("Eredmenyek identity document exceeded the bounded HTML size.");
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    if (!readPending) reader.releaseLock();
+    void reader.cancel().catch((): void => undefined);
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }

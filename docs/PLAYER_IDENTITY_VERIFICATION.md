@@ -6,7 +6,7 @@
 
 1. Preserve the displayed home/away odds slots and source event ID.
 2. Read that event's exact public Eredmenyek match detail; verify its date and full participant names.
-3. Verify both public player profile pages using matching name headings and canonical profile IDs. URL slug order is not participant order.
+3. Verify both public player profile pages using matching name headings and canonical profile IDs from their initial public HTML, without launching a second browser or waiting for client rendering. URL slug order is not participant order.
 4. Cross-check detail links against verified profiles, then join full names to exactly one DartsOrakel directory identity.
 5. Quarantine conflicting IDs, reject mismatched evidence and leave missing/ambiguous identities unresolved. Do not retain a unique abbreviated directory guess when source verification fails.
 
@@ -65,7 +65,25 @@ Public evidence outputs are stored locally in ignored `.tmp/` files. They contai
 
 ## Honest bounds
 
-- Default source identity verification is limited to 12 candidate matchups and 45 seconds per lookup. Larger reports retain all cards, disclose the capacity bound, and do not guess unverified abbreviated players. A lookup timeout can leave all abbreviated candidates unresolved.
+- Default source identity verification is limited to 12 candidate matchups, 45 seconds per lookup and 8 seconds per document. Larger reports retain all cards, disclose the capacity bound, and do not guess unverified abbreviated players. An internal lookup timeout preserves already verified matches; external cancellation still cancels the operation. Unverified identities remain unavailable.
 - Source changes, unavailable profiles, same-name people or absent directory players can still prevent identification. Passing these cases is not proof of universal 100% future accuracy or coverage.
 - The intended safety contract is abstention instead of attaching uncertain statistics; tests do not certify that upstream websites never publish incorrect data.
-- Production Linux browser execution and actual Telegram delivery were not exercised here. Deployment remains necessary; this task did not commit, push or deploy.
+- At the initial verification above, production Linux browser execution and actual Telegram delivery had not been exercised, and no commit, push or deployment had yet been performed.
+
+## Production incident follow-up: 2026-09-30
+
+The owner's deployed report collected four odds matchups but resolved no players. Its odds observation was `2026-09-30T15:39:51.500Z` and generation time `2026-09-30T15:40:42.102Z` (50.6 seconds later).
+
+Verified code defects: the old identity path started a second Chromium run with sequential match/profile navigations, discarded all completed identity evidence when its 45-second deadline expired, and masked provider/directory errors as generic unresolved identities. No statistics requests could start for those unverified slots. The duration is consistent with identity timeout; the old deployment did not log the failed identity stage, so the exact failing navigation cannot be recovered from those logs.
+
+The fix verifies the same source authorities through ordinary fixed-URL public HTML requests, rejects redirects and source challenges, bounds streamed HTML, preserves completed evidence on internal timeout, and keeps external cancellation authoritative. It does not weaken name/profile/event/date verification or change the DartsOrakel statistics pipeline. Failed directory/provider states now stay explicit; structured logs contain only stage/status/counts, never credentials or raw source responses.
+
+Independent local public-source evidence after the fix:
+
+- Match detail and two profile initial-HTML requests returned HTTP 200 with the expected names and canonical metadata (291–678 milliseconds in one sample).
+- `/value` backend: four complete cards, eight resolved players, zero unresolved players; observed `2026-09-30T17:13:12.862Z`, 87,849 milliseconds total.
+- Final source smoke: four verified matchups, eight verified profiles, zero failures; 2,625 milliseconds total, with clean machine-readable stdout.
+- Final build and complete automated suite passed: 577 tests across 62 files, no unhandled errors; production dependency audit reported zero vulnerabilities.
+- New regressions exercise SSR authority without browser launch, retained partial evidence, unresponsive fetch/body timeouts, external cancellation precedence, HTTP 403/429, redirects, size limits, safe error reporting and private smoke-request validation.
+
+`scripts/value-telegram-smoke.ts` is an explicit, real-send verification tool, not an automatic test. It is restricted to the verified production origin, requires owner/webhook configuration, sends one private `/value` request, and reports HTTP receipt only. End-to-end success must additionally be confirmed from the completion/delivery logs; HTTP 200 alone does not prove that statistics were fetched or delivered. Use it only with explicit permission.
