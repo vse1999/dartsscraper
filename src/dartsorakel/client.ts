@@ -113,6 +113,15 @@ export class DartsOrakelClient {
   }
 
   public async getPlayerStats(signal?: AbortSignal): Promise<PlayerStatsResponse> {
+    return this.loadPlayerStats(false, signal);
+  }
+
+  /** Fetch a fresh player directory even when a previous raw response is cached. */
+  public async refreshPlayerStats(signal?: AbortSignal): Promise<PlayerStatsResponse> {
+    return this.loadPlayerStats(true, signal);
+  }
+
+  private async loadPlayerStats(forceRefresh: boolean, signal?: AbortSignal): Promise<PlayerStatsResponse> {
     const url = this.urlFor(DartsOrakelApiPath.playerStats);
     return this.getJson(
       url,
@@ -120,6 +129,7 @@ export class DartsOrakelClient {
       PlayerStatsResponseSchema,
       this.playerCacheTtlMs,
       signal,
+      forceRefresh,
     );
   }
 
@@ -175,9 +185,10 @@ export class DartsOrakelClient {
     schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } } },
     ttlMs: number,
     signal?: AbortSignal,
+    forceRefresh: boolean = false,
   ): Promise<T> {
     throwIfAborted(signal);
-    const cached = await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
+    const cached = forceRefresh ? null : await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
     if (cached !== null && cached !== undefined) {
       const cachedResult = schema.safeParse(cached);
       if (cachedResult.success) {

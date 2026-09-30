@@ -9,7 +9,7 @@ if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 
 }
 
 const startedAt = Date.now();
-const result = await createDefaultPlayerStatsService().getPlayerStats(playerName, requestedCount);
+const result = await createDefaultPlayerStatsService().getPlayerStats(playerName, requestedCount, "modus");
 if (result.provider !== "modus-official") {
   throw new Error(`${JSON.stringify(playerName)} did not resolve to the official MODUS source.`);
 }

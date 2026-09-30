@@ -145,6 +145,15 @@ function parseMatchRow(
   row: DartsOrakelMatchRow,
   enrichment?: ParsedEnrichment,
 ): Match {
+  if (!isBye(row) && !isIncompleteResult(row.result)) {
+    const playerIsWinner = row.winner_key === player.id;
+    const playerIsLoser = row.loser_key === player.id;
+    if (Number(playerIsWinner) + Number(playerIsLoser) !== 1) {
+      throw new DartsOrakelStructureChangedError(
+        `DartsOrakel returned a completed match row that does not identify player ${player.id} exactly once.`,
+      );
+    }
+  }
   const date = parseDate(row.match_date);
   const tournament = formatTournament(row.tournament_name, row.tournament_no);
   const opponent = parseOpponent(row.opponent);

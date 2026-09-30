@@ -5,6 +5,7 @@ import { noopLogger, type Logger } from "../logger.js";
 import type { FixtureNameResolver } from "./fixture-name-resolver.js";
 import { ModusFixtureSchema, type ModusFixture, type ModusFixtureSource } from "./schemas.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
+import type { ModusFixtureIdentityFallback, ModusFixtureIdentityPair } from "./fixture-identity-source.js";
 
 const DEFAULT_BASE_URL = "https://www.darts-nerd.com";
 const PREVIEW_PATH = "/en/matches/preview";
@@ -19,6 +20,7 @@ export interface DartsNerdModusSourceOptions {
   now?: () => Date;
   timeZone?: string;
   logger?: Logger;
+  fixtureIdentityFallback?: ModusFixtureIdentityFallback;
 }
 
 export class DartsNerdModusSource implements ModusFixtureSource {
@@ -31,6 +33,7 @@ export class DartsNerdModusSource implements ModusFixtureSource {
   private readonly now: () => Date;
   private readonly timeZone: string;
   private readonly logger: Logger;
+  private readonly fixtureIdentityFallback: ModusFixtureIdentityFallback | undefined;
 
   public constructor(options: DartsNerdModusSourceOptions) {
     this.resolver = options.resolver;
@@ -41,6 +44,7 @@ export class DartsNerdModusSource implements ModusFixtureSource {
     this.now = options.now ?? (() => new Date());
     this.timeZone = options.timeZone ?? "Europe/Budapest";
     this.logger = options.logger ?? noopLogger;
+    this.fixtureIdentityFallback = options.fixtureIdentityFallback;
   }
 
   public sourceUrl(date: string): string {
@@ -63,8 +67,31 @@ export class DartsNerdModusSource implements ModusFixtureSource {
         headers: { Accept: "text/html", "User-Agent": "DartsResearchAgent/0.2" }, signal: controller.signal,
       }), controller.signal);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const names = parsePlayersForDate(await waitWithSignal(response.text(), controller.signal), validatedDate, { modusOnly: url === this.previewUrl });
+      const html = await waitWithSignal(response.text(), controller.signal);
+      const parseOptions = { modusOnly: url === this.previewUrl };
+      const names = parsePlayersForDate(html, validatedDate, parseOptions);
       throwIfAborted(callerSignal);
+      if (this.fixtureIdentityFallback !== undefined) {
+        const fixtures = parseFixturesForDate(html, validatedDate, {
+          ...parseOptions,
+          baseUrl: this.baseUrl,
+          pageUrl: url,
+        });
+        if (fixtures.length > 0) {
+          const resolvedBySourceName = new Map<string, Set<string>>();
+          await Promise.all(fixtures.map(async (fixture): Promise<void> => {
+            const resolved = await this.resolveFixturePair(fixture.playerOne, fixture.playerTwo, validatedDate, callerSignal);
+            rememberResolvedName(resolvedBySourceName, fixture.playerOne, resolved[0]);
+            rememberResolvedName(resolvedBySourceName, fixture.playerTwo, resolved[1]);
+          }));
+          return Promise.all(names.map(async (name): Promise<string> => {
+            const resolved = resolvedBySourceName.get(normalizeFixtureName(name));
+            if (resolved?.size === 1) return [...resolved][0] ?? name;
+            if (resolved !== undefined) return name;
+            return this.resolveName(name, validatedDate, callerSignal);
+          }));
+        }
+      }
       return Promise.all(names.map((name: string): Promise<string> => this.resolveName(name, validatedDate, callerSignal)));
     } catch (error: unknown) {
       throwIfAborted(callerSignal);
@@ -93,11 +120,15 @@ export class DartsNerdModusSource implements ModusFixtureSource {
         baseUrl: this.baseUrl,
         pageUrl,
       });
-      return Promise.all(fixtures.map(async (fixture): Promise<ModusFixture> => ModusFixtureSchema.parse({
-        ...fixture,
-        playerOne: await this.resolveName(fixture.playerOne, validatedDate, callerSignal),
-        playerTwo: await this.resolveName(fixture.playerTwo, validatedDate, callerSignal),
-      })));
+      return Promise.all(fixtures.map(async (fixture): Promise<ModusFixture> => {
+        const [playerOne, playerTwo] = await this.resolveFixturePair(
+          fixture.playerOne,
+          fixture.playerTwo,
+          validatedDate,
+          callerSignal,
+        );
+        return ModusFixtureSchema.parse({ ...fixture, playerOne, playerTwo });
+      }));
     } catch (error: unknown) {
       throwIfAborted(callerSignal);
       throw error;
@@ -108,8 +139,16 @@ export class DartsNerdModusSource implements ModusFixtureSource {
   }
 
   private async resolveName(name: string, date: string, signal?: AbortSignal): Promise<string> {
+    return (await this.resolveNameWithStatus(name, date, signal)).name;
+  }
+
+  private async resolveNameWithStatus(
+    name: string,
+    date: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly name: string; readonly resolved: boolean }> {
     try {
-      return await this.resolver.resolve(name, signal);
+      return { name: await this.resolver.resolve(name, signal), resolved: true };
     } catch (error: unknown) {
       throwIfAborted(signal);
       this.logger.warn("MODUS fixture player could not be resolved; preserving provider label.", {
@@ -118,7 +157,34 @@ export class DartsNerdModusSource implements ModusFixtureSource {
         player: name,
         errorType: error instanceof Error ? error.name : "UnknownError",
       });
-      return name;
+      return { name, resolved: false };
+    }
+  }
+
+  private async resolveFixturePair(
+    sourcePlayerOne: string,
+    sourcePlayerTwo: string,
+    date: string,
+    signal?: AbortSignal,
+  ): Promise<ModusFixtureIdentityPair> {
+    const [first, second] = await Promise.all([
+      this.resolveNameWithStatus(sourcePlayerOne, date, signal),
+      this.resolveNameWithStatus(sourcePlayerTwo, date, signal),
+    ]);
+    if ((first.resolved && second.resolved) || this.fixtureIdentityFallback === undefined) {
+      return [first.name, second.name];
+    }
+    try {
+      const recovered = await this.fixtureIdentityFallback.resolvePair(date, sourcePlayerOne, sourcePlayerTwo, signal);
+      throwIfAborted(signal);
+      return recovered ?? [first.name, second.name];
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("MODUS fixture identity fallback failed; preserving verified and unresolved source labels.", {
+        date,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return [first.name, second.name];
     }
   }
 
@@ -215,6 +281,13 @@ function resolveMatchUrl(match: cheerio.Cheerio<Element>, baseUrl: string): stri
 
 function normalizeFixtureName(value: string): string {
   return value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+}
+
+function rememberResolvedName(mapping: Map<string, Set<string>>, sourceName: string, resolvedName: string): void {
+  const key = normalizeFixtureName(sourceName);
+  const existing = mapping.get(key) ?? new Set<string>();
+  existing.add(resolvedName);
+  mapping.set(key, existing);
 }
 
 function isNamedPlayer(name: string): boolean {

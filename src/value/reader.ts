@@ -232,6 +232,7 @@ export class DefaultValueReader implements ValueReader {
         });
       }
     }
+    await this.refreshMissingSourceParticipants(odds, verifiedEvidence, slots, directoryPlayers, signal);
     // A source profile ID is a stable key. If one ID was observed with two
     // full names anywhere in this report, quarantine every slot using it,
     // including the first occurrence that initially looked valid.
@@ -267,6 +268,42 @@ export class DefaultValueReader implements ValueReader {
       evidence: verifiedEvidence,
       ...(identityWarnings.length === 0 ? {} : { identityCoverageWarning: identityWarnings.join(" ") }),
     };
+  }
+
+  private async refreshMissingSourceParticipants(
+    odds: OddsReport,
+    evidence: ReadonlyMap<string, OddsMatchIdentityEvidence>,
+    slots: Map<string, MatchSlotResolutions>,
+    players: readonly PlayerIdentity[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const refresh = this.directory.refreshAfterMiss;
+    if (refresh === undefined || players.length === 0 || signal?.aborted === true) return;
+    const needsRefresh = [...evidence.values()].some((detail: OddsMatchIdentityEvidence): boolean => (
+      [detail.home, detail.away].some((participant: OddsParticipantIdentityEvidence): boolean => (
+        validSourceProfileUrl(participant.profileUrl, participant.sourcePlayerId)
+        && !this.conflictingSourcePlayerIds.has(participant.sourcePlayerId)
+        && !players.some((player: PlayerIdentity): boolean => samePlayerName(player.name, participant.fullName))
+      ))
+    ));
+    if (!needsRefresh) return;
+    let refreshed: readonly PlayerIdentity[];
+    try {
+      refreshed = await waitForSignal(refresh.call(this.directory, signal), signal ?? new AbortController().signal);
+    } catch (_error: unknown) {
+      // A recovery failure must not erase independently verified completed slots.
+      return;
+    }
+    if (signal !== undefined && signal.aborted) return;
+    for (const match of odds.matches) {
+      const detail = evidence.get(match.eventId);
+      const current = slots.get(match.eventId);
+      if (detail === undefined || current === undefined) continue;
+      slots.set(match.eventId, {
+        first: preserveProviderFailure(current.first, this.resolveSourceParticipant(detail.home, match.player1, refreshed)),
+        second: preserveProviderFailure(current.second, this.resolveSourceParticipant(detail.away, match.player2, refreshed)),
+      });
+    }
   }
 
   private resolveSourceParticipant(

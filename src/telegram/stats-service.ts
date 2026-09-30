@@ -1,8 +1,8 @@
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
-import { InsufficientMatchDataError } from "../errors.js";
-import { ConsoleLogger, type Logger } from "../logger.js";
+import { DartsOrakelRequestError, DartsOrakelStructureChangedError, InsufficientMatchDataError, ModusHistoryUnavailableError, PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
+import { ConsoleLogger, noopLogger, type Logger } from "../logger.js";
 import bundledModusIndex from "../../data/modus-results-index.json" with { type: "json" };
 import { OfficialModusHistorySource } from "../modus/history-source.js";
 import {
@@ -45,9 +45,11 @@ export interface PlayerMatchesReader {
 
 export class DartsPlayerStatsService implements PlayerStatsReader {
   private readonly matchesService: PlayerMatchesReader;
+  private readonly logger: Logger;
 
-  public constructor(matchesService: PlayerMatchesReader) {
+  public constructor(matchesService: PlayerMatchesReader, logger: Logger = noopLogger) {
     this.matchesService = matchesService;
+    this.logger = logger;
   }
 
   public async getPlayerStats(
@@ -56,6 +58,10 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
     _source?: PlayerStatsSource,
     signal?: AbortSignal,
   ): Promise<PlayerStatsResult> {
+    return observePlayerStats((): Promise<PlayerStatsResult> => this.readPlayerStats(playerName, matchCount, signal), this.logger, "dartsorakel", signal);
+  }
+
+  private async readPlayerStats(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PlayerStatsResult> {
     const result = signal === undefined
       ? await this.matchesService.getLastMatches(playerName, matchCount)
       : await this.matchesService.getLastMatches(playerName, matchCount, signal);
@@ -79,10 +85,12 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
 export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
   private readonly modusHistory: ModusPlayerHistoryReader;
   private readonly dartsStats: PlayerStatsReader;
+  private readonly logger: Logger;
 
-  public constructor(modusHistory: ModusPlayerHistoryReader, dartsStats: PlayerStatsReader) {
+  public constructor(modusHistory: ModusPlayerHistoryReader, dartsStats: PlayerStatsReader, logger: Logger = noopLogger) {
     this.modusHistory = modusHistory;
     this.dartsStats = dartsStats;
+    this.logger = logger;
   }
 
   public async getPlayerStats(
@@ -96,11 +104,15 @@ export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
         ? this.dartsStats.getPlayerStats(playerName, matchCount, source)
         : this.dartsStats.getPlayerStats(playerName, matchCount, source, signal);
     }
+    return observePlayerStats((): Promise<PlayerStatsResult> => this.readModusStats(playerName, matchCount, signal), this.logger, "modus-official", signal);
+  }
+
+  private async readModusStats(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PlayerStatsResult> {
     throwIfAborted(signal);
     const modus = await waitWithSignal(this.modusHistory.findPlayerHistory(
       playerName,
       matchCount,
-      { forceLiveLookup: source === "modus" },
+      { forceLiveLookup: true, ...(signal === undefined ? {} : { signal }) },
     ), signal);
     throwIfAborted(signal);
     if (modus === null) throw new InsufficientMatchDataError(matchCount, 0);
@@ -129,7 +141,7 @@ export function createDefaultPlayerStatsService(
     index: bundledModusIndex,
     logger: serviceLogger,
   });
-  return new SourceRoutedPlayerStatsService(modusHistory, dartsStats);
+  return new SourceRoutedPlayerStatsService(modusHistory, dartsStats, serviceLogger);
 }
 
 /**
@@ -164,5 +176,44 @@ function createDartsPlayerStatsService(
     scraper: new DartsOrakelScraper(client, { enrichStatistics }),
     logger,
   });
-  return new DartsPlayerStatsService(matchesService);
+  return new DartsPlayerStatsService(matchesService, logger);
+}
+
+async function observePlayerStats(
+  read: () => Promise<PlayerStatsResult>,
+  logger: Logger,
+  provider: PlayerStatsResult["provider"],
+  signal?: AbortSignal,
+): Promise<PlayerStatsResult> {
+  const startedAt = performance.now();
+  try {
+    const result = await read();
+    logger.info("player_research_outcome", {
+      provider,
+      outcome: "available",
+      returnedMatches: result.matches.length,
+      requestedMatches: result.requestedCount,
+      availableAverages: result.availableAverageCount,
+      latencyMs: Math.round(performance.now() - startedAt),
+    });
+    return result;
+  } catch (error: unknown) {
+    logger.warn("player_research_outcome", {
+      provider,
+      outcome: playerResearchFailure(error, signal),
+      latencyMs: Math.round(performance.now() - startedAt),
+    });
+    throw error;
+  }
+}
+
+function playerResearchFailure(error: unknown, signal?: AbortSignal): string {
+  if (signal?.aborted === true) return "cancelled";
+  if (error instanceof PlayerAmbiguousError) return "identity_ambiguous";
+  if (error instanceof PlayerNotFoundError) return "identity_not_found";
+  if (error instanceof InsufficientMatchDataError) return "history_empty";
+  if (error instanceof DartsOrakelStructureChangedError) return "source_structure_changed";
+  if (error instanceof DartsOrakelRequestError) return error.status === 429 ? "source_rate_limited" : /timed out/iu.test(error.message) ? "source_timeout" : "source_unavailable";
+  if (error instanceof ModusHistoryUnavailableError) return "official_history_unavailable";
+  return "failed";
 }

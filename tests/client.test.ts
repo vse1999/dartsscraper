@@ -2,9 +2,40 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DartsOrakelClient } from "../src/dartsorakel/client.js";
 import { DartsOrakelRequestError, DartsOrakelStructureChangedError } from "../src/errors.js";
-import { readMatchFixture } from "./helpers.js";
+import { readMatchFixture, readPlayerStatsFixture } from "./helpers.js";
 
 describe("DartsOrakelClient", () => {
+  it("bypasses the raw cached player directory during an explicit refresh", async () => {
+    const cachedDirectory = readPlayerStatsFixture();
+    const fetchedDirectory = {
+      ...cachedDirectory,
+      data: [
+        ...cachedDirectory.data,
+        {
+          player_key: 999_001,
+          player_name: "New Entrant",
+          player_profile_url: "https://dartsorakel.com/player/details/999001/new-entrant",
+        },
+      ],
+    };
+    const cacheGet = vi.fn(async (): Promise<unknown> => cachedDirectory);
+    const cacheSet = vi.fn(async (): Promise<void> => undefined);
+    const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => Response.json(fetchedDirectory));
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      cache: { get: cacheGet, set: cacheSet },
+      fetchImpl,
+      minRequestIntervalMs: 0,
+    });
+
+    await expect(client.getPlayerStats()).resolves.toEqual(cachedDirectory);
+    await expect(client.refreshPlayerStats()).resolves.toEqual(fetchedDirectory);
+
+    expect(cacheGet).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(cacheSet).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a transient HTTP failure with deterministic backoff", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("temporary failure", { status: 503 }))

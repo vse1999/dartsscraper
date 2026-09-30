@@ -1,4 +1,5 @@
 import * as cheerio from "cheerio";
+import type { AnyNode } from "domhandler";
 
 import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
@@ -96,16 +97,24 @@ export function parseDartsNerdPdcFixtures(
   const fixtures: PdcFixture[] = [];
   $(".hm-match").each((index, element) => {
     const match = $(element);
+    const competition = match.closest("[data-competition-group]");
+    if (
+      competition.length > 0
+      && normalizeText(competition.attr("data-federation") ?? "").toLocaleLowerCase("en-US") !== "pdc"
+    ) return;
     const startTime = match.find(".hm-time[data-utc]").first().attr("data-utc");
     if (startTime?.slice(0, 10) !== validatedDate) return;
     const names = match.find(".hm-name").map((_nameIndex, nameElement) => normalizeText($(nameElement).text())).get();
     const playerOne = names[0];
     const playerTwo = names[1];
     if (playerOne === undefined || playerTwo === undefined || !isNamedPlayer(playerOne) || !isNamedPlayer(playerTwo)) return;
+    const eventContext = livePdcEventContext(match, competition, trustedSource);
+    if (competition.length > 0 && eventContext === null) return;
+    const tournamentName = eventContext ?? "PDC live fixture";
     const roundText = normalizeText(match.find(".hm-round-badge").first().text()).replace(/\\\//gu, "/");
     fixtures.push(PdcFixtureSchema.parse({
       id: `darts-nerd:${validatedDate}:${index + 1}:${normalizeId(playerOne)}:${normalizeId(playerTwo)}`,
-      tournamentName: "PDC live fixture",
+      tournamentName,
       date: validatedDate,
       startTime,
       session: null,
@@ -127,8 +136,8 @@ export interface CorroboratedPdcFixtureSourceOptions {
 /**
  * PDPA establishes that a fixture belongs to an official PDC event. The live
  * feed then supplies late withdrawals, replacements, and match-level times.
- * A live row is accepted only when it shares a participant with one official
- * row, preventing unrelated darts fixtures from leaking into the PDC report.
+ * Exact two-player rows need a unique participant pairing. A one-player
+ * replacement needs unique pairing evidence plus a matching PDC event label.
  */
 export class CorroboratedPdcFixtureSource implements PdcFixtureSource {
   public readonly name = "official PDPA schedule corroborated by live fixtures";
@@ -166,12 +175,10 @@ export function reconcileFixtures(
   officialFixtures: readonly PdcFixture[],
   liveFixtures: readonly PdcFixture[],
 ): readonly PdcFixture[] {
-  const unusedLive = new Set(liveFixtures.map((_fixture, index) => index));
-  return officialFixtures.map((official): PdcFixture => {
-    const match = bestLiveMatch(official, liveFixtures, unusedLive);
-    if (match === undefined) return official;
-    unusedLive.delete(match.index);
-    const live = match.fixture;
+  const matches = matchLiveFixtures(officialFixtures, liveFixtures);
+  return officialFixtures.map((official, officialIndex): PdcFixture => {
+    const live = matches.get(officialIndex);
+    if (live === undefined) return official;
     const officialPlayers = [official.playerOne, official.playerTwo];
     return PdcFixtureSchema.parse({
       ...official,
@@ -184,22 +191,146 @@ export function reconcileFixtures(
   });
 }
 
-function bestLiveMatch(
-  official: PdcFixture,
+function matchLiveFixtures(
+  officialFixtures: readonly PdcFixture[],
   liveFixtures: readonly PdcFixture[],
-  unused: ReadonlySet<number>,
-): { readonly index: number; readonly fixture: PdcFixture } | undefined {
-  const officialNames = [official.playerOne, official.playerTwo];
-  let best: { readonly index: number; readonly fixture: PdcFixture; readonly overlap: number } | undefined;
-  for (const index of unused) {
-    const fixture = liveFixtures[index];
-    if (fixture === undefined || fixture.date !== official.date) continue;
-    const overlap = [fixture.playerOne, fixture.playerTwo]
-      .filter((name) => officialNames.some((officialName) => samePlayerLabel(name, officialName))).length;
-    if (overlap === 0 || (best !== undefined && best.overlap >= overlap)) continue;
-    best = { index, fixture, overlap };
+): ReadonlyMap<number, PdcFixture> {
+  const exactEdges: Array<{ readonly officialIndex: number; readonly liveIndex: number }> = [];
+  const replacementEdges: Array<{ readonly officialIndex: number; readonly liveIndex: number }> = [];
+  for (const [officialIndex, official] of officialFixtures.entries()) {
+    for (const [liveIndex, live] of liveFixtures.entries()) {
+      const overlap = liveOverlap(official, live);
+      if (overlap === 2 && (official.round === null || live.round === null || hasMatchingRoundContext(official, live))) {
+        exactEdges.push({ officialIndex, liveIndex });
+      }
+      else if (overlap === 1 && hasMatchingEventContext(official, live) && hasMatchingRoundContext(official, live)) {
+        replacementEdges.push({ officialIndex, liveIndex });
+      }
+    }
   }
-  return best;
+
+  const matches = new Map<number, PdcFixture>();
+  const reservedOfficial = new Set<number>();
+  const reservedLive = new Set<number>();
+  const exactOfficialCounts = countEdges(exactEdges, "officialIndex");
+  const exactLiveCounts = countEdges(exactEdges, "liveIndex");
+  for (const edge of exactEdges) {
+    reservedOfficial.add(edge.officialIndex);
+    reservedLive.add(edge.liveIndex);
+    if (exactOfficialCounts.get(edge.officialIndex) !== 1 || exactLiveCounts.get(edge.liveIndex) !== 1) continue;
+    const fixture = liveFixtures[edge.liveIndex];
+    if (fixture !== undefined) matches.set(edge.officialIndex, fixture);
+  }
+
+  const eligibleReplacementEdges = replacementEdges.filter((edge) => (
+    !reservedOfficial.has(edge.officialIndex) && !reservedLive.has(edge.liveIndex)
+  ));
+  const replacementOfficialCounts = countEdges(eligibleReplacementEdges, "officialIndex");
+  const replacementLiveCounts = countEdges(eligibleReplacementEdges, "liveIndex");
+  for (const edge of eligibleReplacementEdges) {
+    if (replacementOfficialCounts.get(edge.officialIndex) !== 1 || replacementLiveCounts.get(edge.liveIndex) !== 1) continue;
+    const fixture = liveFixtures[edge.liveIndex];
+    if (fixture !== undefined) matches.set(edge.officialIndex, fixture);
+  }
+  return matches;
+}
+
+function liveOverlap(official: PdcFixture, live: PdcFixture): number {
+  if (official.date !== live.date || hasExplicitEventContext(live) && !hasMatchingEventContext(official, live)) return 0;
+  const officialNames = [official.playerOne, official.playerTwo];
+  const matchedOfficialIndices = new Set<number>();
+  for (const liveName of [live.playerOne, live.playerTwo]) {
+    const matches = officialNames
+      .map((officialName, index) => samePlayerLabel(liveName, officialName) ? index : -1)
+      .filter((index) => index >= 0);
+    // Abbreviations such as "Smith R." can describe more than one player in
+    // a draw. Such evidence cannot safely identify a participant or fixture.
+    if (matches.length > 1) return 0;
+    const officialIndex = matches[0];
+    if (officialIndex !== undefined) matchedOfficialIndices.add(officialIndex);
+  }
+  return matchedOfficialIndices.size;
+}
+
+function hasMatchingEventContext(official: PdcFixture, live: PdcFixture): boolean {
+  return hasExplicitEventContext(live)
+    && normalizeEventName(official.tournamentName) !== ""
+    && normalizeEventName(official.tournamentName) === normalizeEventName(live.tournamentName);
+}
+
+function hasMatchingRoundContext(official: PdcFixture, live: PdcFixture): boolean {
+  if (official.round === null || live.round === null) return false;
+  const officialRound = roundIdentity(official.round, official.tournamentName);
+  return officialRound !== "" && !/^(?:tbc|tba|unknown|to be confirmed)$/u.test(officialRound)
+    && officialRound === roundIdentity(live.round, live.tournamentName);
+}
+
+function roundIdentity(round: string, tournamentName: string): string {
+  const text = normalizeText(round).toLocaleLowerCase("en-US")
+    .replace(/\bx\d+\b/gu, " ").replace(/[^a-z0-9/]+/gu, " ").trim().replace(/\s+/gu, " ");
+  const fraction = /^1\/(\d+)(?:\s+finals?)?$/u.exec(text);
+  if (fraction !== null) return `last ${Number(fraction[1]) * 2}`;
+  if (/^(?:quarter finals?|quarterfinals?|qf)$/u.test(text)) return "last 8";
+  if (/^(?:semi finals?|semifinals?|sf)$/u.test(text)) return "last 4";
+  if (/^finals?$/u.test(text)) return "last 2";
+  const last = /^(?:last|round of)\s+(\d+)$/u.exec(text);
+  if (last !== null) return `last ${last[1] ?? ""}`;
+  const ordinal = /^round (one|two|three|four|five|[1-5])$/u.exec(text)?.[1];
+  const numbers: Readonly<Record<string, number>> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const number = ordinal === undefined ? undefined : numbers[ordinal] ?? Number(ordinal);
+  if (number === undefined) return text;
+  // These existing event formats have 32-player main draws. Do not infer a
+  // field size for other tournaments just from a label such as "Round One".
+  const event = normalizeEventName(tournamentName);
+  const known32PlayerEvent = event === "world-grand-prix"
+    || event === "world-series-of-darts-finals" || event === "world-series-finals";
+  return known32PlayerEvent ? `last ${32 / 2 ** (number - 1)}` : `round ${number}`;
+}
+
+function hasExplicitEventContext(fixture: PdcFixture): boolean {
+  return normalizeEventName(fixture.tournamentName) !== normalizeEventName("PDC live fixture");
+}
+
+function normalizeEventName(value: string): string {
+  return normalizeId(value.replace(/\b20\d{2}\b/gu, " "));
+}
+
+function countEdges<T extends "officialIndex" | "liveIndex">(
+  edges: readonly { readonly officialIndex: number; readonly liveIndex: number }[],
+  key: T,
+): ReadonlyMap<number, number> {
+  const counts = new Map<number, number>();
+  for (const edge of edges) counts.set(edge[key], (counts.get(edge[key]) ?? 0) + 1);
+  return counts;
+}
+
+function livePdcEventContext(
+  match: cheerio.Cheerio<AnyNode>,
+  competition: cheerio.Cheerio<AnyNode>,
+  previewUrl: string,
+): string | null {
+  if (competition.length === 0) return null;
+  const header = competition.find(".hm-round-header").first();
+  const headerClone = header.clone();
+  headerClone.find(".hm-round-count").remove();
+  const title = normalizeText(headerClone.text());
+  if (title === "") return null;
+
+  const eventSlug = pdcEventSlug(match.attr("href") ?? "", previewUrl);
+  if (eventSlug === null || eventSlug !== normalizeEventName(title)) return null;
+  return title;
+}
+
+function pdcEventSlug(href: string, previewUrl: string): string | null {
+  try {
+    const url = new URL(href, previewUrl);
+    if (url.protocol !== "https:" || url.hostname !== "www.darts-nerd.com") return null;
+    const match = /^\/en\/federations\/pdc\/([a-z0-9]+(?:-[a-z0-9]+)*)\/\d{4}\/matches\/[a-z0-9]+(?:-[a-z0-9]+)*$/u.exec(url.pathname);
+    return match?.[1] ?? null;
+  } catch (error: unknown) {
+    if (error instanceof TypeError) return null;
+    throw error;
+  }
 }
 
 function contextualPlayerName(liveName: string, officialNames: readonly string[]): string {

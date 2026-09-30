@@ -13,7 +13,24 @@ export interface ModusAbbreviatedName {
 }
 
 export function modusNameKey(value: string): string {
-  return comparableNameParts(value).join(" ");
+  const base = modusNameBaseKey(value);
+  const qualifiers = modusCountryQualifiers(value);
+  return base === "" || qualifiers.length === 0 ? base : `${base} [${qualifiers.join(",")}]`;
+}
+
+/** Normalized name without a source-provided country qualifier. */
+export function modusNameBaseKey(value: string): string {
+  return comparableNameParts(withoutCountryQualifiers(value)).join(" ");
+}
+
+/** Country qualifiers are identity evidence and therefore remain distinct. */
+export function modusCountryQualifiers(value: string): readonly string[] {
+  const qualifiers = new Set<string>();
+  for (const match of value.matchAll(/\(([A-Z]{2,3})\)/gu)) {
+    const qualifier = match[1];
+    if (qualifier !== undefined) qualifiers.add(qualifier);
+  }
+  return [...qualifiers].sort();
 }
 
 export function modusNameParts(value: string): readonly string[] {
@@ -21,7 +38,7 @@ export function modusNameParts(value: string): readonly string[] {
 }
 
 export function parseModusAbbreviatedName(value: string): ModusAbbreviatedName | undefined {
-  const tokens = value.trim().split(/\s+/u).filter((token: string): boolean => token !== "");
+  const tokens = withoutCountryQualifiers(value).trim().split(/\s+/u).filter((token: string): boolean => token !== "");
   const initialTokens: string[] = [];
   while (tokens.length > 0) {
     const token = tokens.at(-1) ?? "";
@@ -38,6 +55,7 @@ export function parseModusAbbreviatedName(value: string): ModusAbbreviatedName |
 
 /** Match a provider abbreviation to one already-known full name. */
 export function modusAbbreviationMatches(abbreviated: string, fullName: string): boolean {
+  if (!countryQualifiersCompatible(abbreviated, fullName)) return false;
   const parsed = parseModusAbbreviatedName(abbreviated);
   if (parsed === undefined) return false;
   const fullParts = comparableNameParts(fullName);
@@ -71,4 +89,15 @@ function comparableNameParts(value: string): string[] {
     .replace(/\bjr\.?$/iu, "jnr")
     .split(/[^\p{L}\p{N}]+/u)
     .filter((part: string): boolean => part !== "");
+}
+
+function withoutCountryQualifiers(value: string): string {
+  return value.replace(/\s*\([A-Z]{2,3}\)/gu, " ");
+}
+
+function countryQualifiersCompatible(left: string, right: string): boolean {
+  const leftQualifiers = modusCountryQualifiers(left);
+  const rightQualifiers = modusCountryQualifiers(right);
+  return leftQualifiers.length === 0
+    || (rightQualifiers.length > 0 && leftQualifiers.join(",") === rightQualifiers.join(","));
 }

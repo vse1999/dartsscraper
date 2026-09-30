@@ -117,6 +117,30 @@ describe("DartsOrakel match parser", () => {
       .toThrow(DartsOrakelStructureChangedError);
   });
 
+  it("rejects a completed match row that does not contain the requested player ID", () => {
+    const fixture = readMatchFixture("damon-heta-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a match.");
+
+    expect(() => parseDartsOrakelMatchRow(damon, {
+      ...first,
+      winner_key: 900_001,
+      loser_key: 900_002,
+    })).toThrow(DartsOrakelStructureChangedError);
+  });
+
+  it("rejects a completed match row that repeats the requested player ID", () => {
+    const fixture = readMatchFixture("damon-heta-matches.json");
+    const first = fixture.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a match.");
+
+    expect(() => parseDartsOrakelMatchRow(damon, {
+      ...first,
+      winner_key: damon.id,
+      loser_key: damon.id,
+    })).toThrow(DartsOrakelStructureChangedError);
+  });
+
   it("removes exact duplicate match rows", () => {
     const fixture = readMatchFixture("damon-heta-matches.json");
     const first = fixture.data[0];

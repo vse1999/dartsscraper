@@ -57,23 +57,49 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
       calendarUrl,
       validatedDate,
     );
-    if (references.length === 0) return [];
+    if (references.length === 0) {
+      this.logger.debug("PDPA calendar had no candidate event references for the requested date.", {
+        date: validatedDate,
+        calendarUrl,
+        status: "no_candidate_event",
+      });
+      return [];
+    }
 
     const fixtures: PdcFixture[] = [];
     let successfulPages = 0;
+    let failedPages = 0;
+    let pagesWithDateSchedule = 0;
     for (const reference of references) {
       throwIfAborted(signal);
       try {
-        const eventFixtures = parsePdpaEventFixtures(
+        const parsedPage = parsePdpaEventFixturesWithDiagnostics(
           await this.fetchText(reference.url, signal),
           reference.url,
           validatedDate,
         );
         throwIfAborted(signal);
         successfulPages += 1;
-        fixtures.push(...eventFixtures);
+        if (parsedPage.hasTargetDateSchedule) pagesWithDateSchedule += 1;
+        if (!parsedPage.hasTargetDateSchedule) {
+          this.logger.debug("PDPA event page has no published schedule heading for the requested date.", {
+            date: validatedDate,
+            event: reference.title,
+            sourceUrl: reference.url,
+            status: "target_date_schedule_not_published",
+          });
+        } else if (parsedPage.fixtures.length === 0) {
+          this.logger.debug("PDPA event page has a dated schedule but no concrete matchups for the requested date.", {
+            date: validatedDate,
+            event: reference.title,
+            sourceUrl: reference.url,
+            status: "target_date_schedule_empty",
+          });
+        }
+        fixtures.push(...parsedPage.fixtures);
       } catch (error: unknown) {
         if (signal?.aborted === true) throw error;
+        failedPages += 1;
         this.logger.warn("PDPA event schedule could not be parsed.", {
           date: validatedDate,
           event: reference.title,
@@ -83,9 +109,25 @@ export class PdpaPdcFixtureSource implements PdcFixtureSource {
       }
     }
     if (successfulPages === 0) {
+      this.logger.debug("Every candidate PDPA event page was unavailable or invalid.", {
+        date: validatedDate,
+        candidateEvents: references.length,
+        failedPages,
+        status: "all_candidate_pages_unavailable",
+      });
       throw new PdpaFixtureSourceUnavailableError(`Every candidate PDPA event page failed for ${validatedDate}.`);
     }
-    return deduplicateFixtures(fixtures);
+    const uniqueFixtures = deduplicateFixtures(fixtures);
+    this.logger.debug("PDPA event schedule discovery completed.", {
+      date: validatedDate,
+      candidateEvents: references.length,
+      successfulPages,
+      failedPages,
+      pagesWithDateSchedule,
+      fixtures: uniqueFixtures.length,
+      status: failedPages > 0 ? "partial_event_page_failure" : uniqueFixtures.length > 0 ? "fixtures_found" : "no_concrete_fixtures",
+    });
+    return uniqueFixtures;
   }
 
   private async fetchText(url: string, callerSignal?: AbortSignal): Promise<string> {
@@ -148,12 +190,26 @@ export function parsePdpaEventFixtures(
   sourceUrl: string,
   targetDate: string,
 ): readonly PdcFixture[] {
+  return parsePdpaEventFixturesWithDiagnostics(html, sourceUrl, targetDate).fixtures;
+}
+
+interface ParsedPdpaEventFixtures {
+  readonly fixtures: readonly PdcFixture[];
+  readonly hasTargetDateSchedule: boolean;
+}
+
+function parsePdpaEventFixturesWithDiagnostics(
+  html: string,
+  sourceUrl: string,
+  targetDate: string,
+): ParsedPdpaEventFixtures {
   const validatedDate = IsoDateSchema.parse(targetDate);
   const trustedSource = validatePdpaUrl(sourceUrl).toString();
   const $ = cheerio.load(html);
   const tournamentName = normalizeText($("h1.page-title").first().text());
   if (tournamentName === "") throw new Error("The PDPA event page had no title.");
   const fixtures: PdcFixture[] = [];
+  let hasTargetDateSchedule = false;
   // PDPA places dated schedules in Entries as well as More Information.
   // Scope date/session state to each section so undated draws cannot inherit it.
   $(".info-group .content").each((_sectionIndex, section) => {
@@ -166,6 +222,7 @@ export function parsePdpaEventFixtures(
         const lineDate = dateFromScheduleHeading(line, validatedDate.slice(0, 4));
         if (lineDate !== null) {
           activeDate = lineDate === validatedDate;
+          if (activeDate) hasTargetDateSchedule = true;
           session = activeDate ? scheduleLabel(line) : null;
           round = null;
           continue;
@@ -195,7 +252,7 @@ export function parsePdpaEventFixtures(
       }
     });
   });
-  return deduplicateFixtures(fixtures);
+  return { fixtures: deduplicateFixtures(fixtures), hasTargetDateSchedule };
 }
 
 function htmlLines(value: string): readonly string[] {

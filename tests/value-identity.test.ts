@@ -103,6 +103,65 @@ function makeReader(
 type IdentityProvider = (candidates: readonly OddsMatch[], date: string, signal?: AbortSignal) => Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>>;
 
 describe("value source identity joins", () => {
+  it("refreshes once after a verified source full name is missing from the directory", async (): Promise<void> => {
+    const current = match("fresh-directory");
+    const refreshAfterMiss = vi.fn(async (): Promise<readonly PlayerIdentity[]> => [ross, raymond, cameron]);
+    const getStats = vi.fn(async (name: string): Promise<PlayerStatsResult> => stats(name === ross.name ? ross : cameron));
+    const reader = new DefaultValueReader({
+      oddsReader: {
+        getOdds: async (): Promise<OddsReport> => report([current]),
+        getIdentityEvidence: async (): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> => new Map([[current.eventId, evidence(current.eventId)]]),
+      },
+      playerDirectory: { getPlayers: async (): Promise<readonly PlayerIdentity[]> => [raymond, cameron], refreshAfterMiss },
+      playerStatsReader: { getPlayerStats: getStats },
+      now: (): Date => new Date("2026-09-30T12:00:00Z"),
+    });
+    const result = await reader.getReport("today");
+    expect(refreshAfterMiss).toHaveBeenCalledTimes(1);
+    expect(result.cards[0]?.player1.identity).toEqual(ross);
+    expect(result.cards[0]?.player2.identity).toEqual(cameron);
+    expect(getStats.mock.calls.map(([name]: [string]): string => name)).not.toContain(raymond.name);
+  });
+
+  it("does not refresh a genuinely ambiguous verified full name", async (): Promise<void> => {
+    const current = match("ambiguous-directory");
+    const otherRoss: PlayerIdentity = { ...ross, id: 111 };
+    const refreshAfterMiss = vi.fn(async (): Promise<readonly PlayerIdentity[]> => [ross, cameron]);
+    const reader = new DefaultValueReader({
+      oddsReader: {
+        getOdds: async (): Promise<OddsReport> => report([current]),
+        getIdentityEvidence: async (): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> => new Map([[current.eventId, evidence(current.eventId)]]),
+      },
+      playerDirectory: { getPlayers: async (): Promise<readonly PlayerIdentity[]> => [ross, otherRoss, cameron], refreshAfterMiss },
+      playerStatsReader: { getPlayerStats: async (): Promise<PlayerStatsResult> => stats(cameron) },
+      now: (): Date => new Date("2026-09-30T12:00:00Z"),
+    });
+    const result = await reader.getReport("today");
+    expect(refreshAfterMiss).not.toHaveBeenCalled();
+    expect(result.cards[0]?.player1.identity).toBeNull();
+    expect(result.cards[0]?.player1.error).toContain("multiple canonical");
+  });
+
+  it("retains independently resolved slots if recovery refresh fails", async (): Promise<void> => {
+    const current = match("failed-refresh");
+    const reader = new DefaultValueReader({
+      oddsReader: {
+        getOdds: async (): Promise<OddsReport> => report([current]),
+        getIdentityEvidence: async (): Promise<ReadonlyMap<string, OddsMatchIdentityEvidence>> => new Map([[current.eventId, evidence(current.eventId)]]),
+      },
+      playerDirectory: {
+        getPlayers: async (): Promise<readonly PlayerIdentity[]> => [raymond, cameron],
+        refreshAfterMiss: async (): Promise<readonly PlayerIdentity[]> => { throw new Error("temporary directory failure"); },
+      },
+      playerStatsReader: { getPlayerStats: async (): Promise<PlayerStatsResult> => stats(cameron) },
+      now: (): Date => new Date("2026-09-30T12:00:00Z"),
+    });
+    const result = await reader.getReport("today");
+    expect(result.cards).toHaveLength(1);
+    expect(result.cards[0]?.player1.identity).toBeNull();
+    expect(result.cards[0]?.player2.identity).toEqual(cameron);
+  });
+
   it("keeps identical directory duplicates but quarantines conflicting canonical IDs", async () => {
     const directory = new DartsOrakelPlayerDirectory({
       getPlayerStats: vi.fn(async () => ({

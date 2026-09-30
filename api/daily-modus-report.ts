@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import bundledModusIndex from "../data/modus-results-index.json" with { type: "json" };
 
 import { DartsOrakelClient } from "../src/dartsorakel/client.js";
 import { createJinaReaderFetch } from "../src/dartsorakel/reader-fetch.js";
@@ -6,6 +7,8 @@ import { DartsOrakelScraper } from "../src/dartsorakel/scraper.js";
 import { resolveResearchDate } from "../src/agent/date.js";
 import { DartsNerdModusSource } from "../src/modus/darts-nerd-source.js";
 import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
+import { ModusFixtureIdentitySource } from "../src/modus/fixture-identity-source.js";
+import { OfficialModusHistorySource } from "../src/modus/history-source.js";
 import { OfficialModusSource } from "../src/modus/official-source.js";
 import { ModusPlayersService } from "../src/modus/service.js";
 import { PlayerResolver } from "../src/player/resolver.js";
@@ -146,12 +149,16 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
     scraper,
     logger,
   });
-  const statsService = new DartsPlayerStatsService(playerMatchesService);
+  const statsService = new DartsPlayerStatsService(playerMatchesService, logger);
   const fixtureNameResolver = new FixtureNameResolver(client);
+  const fixtureIdentityFallback = new ModusFixtureIdentitySource({
+    source: new OfficialModusHistorySource({ logger }), logger,
+    knownIdentityNames: bundledModusIndex.matches.flatMap((reference) => [reference.homeName, reference.awayName]),
+  });
   const modusPlayersService = new ModusPlayersService({
     sources: [
-      new OfficialModusSource({ resolver: fixtureNameResolver }),
-      new DartsNerdModusSource({ resolver: fixtureNameResolver, logger }),
+      new OfficialModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
+      new DartsNerdModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
     ],
     logger,
   });

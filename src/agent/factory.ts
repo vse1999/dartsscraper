@@ -1,10 +1,13 @@
 import path from "node:path";
+import bundledModusIndex from "../../data/modus-results-index.json" with { type: "json" };
 import { FileCache } from "../cache.js";
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import { ConsoleLogger, type LogLevel } from "../logger.js";
 import { DartsNerdModusSource } from "../modus/darts-nerd-source.js";
 import { FixtureNameResolver } from "../modus/fixture-name-resolver.js";
+import { ModusFixtureIdentitySource } from "../modus/fixture-identity-source.js";
+import { OfficialModusHistorySource } from "../modus/history-source.js";
 import { OfficialModusSource } from "../modus/official-source.js";
 import { OfficialModusResultsSource } from "../modus/official-results-source.js";
 import { OfficialModusResultsService } from "../modus/results-service.js";
@@ -43,8 +46,15 @@ export function createDartsResearchRuntime(options: CreateAgentOptions = {}): Da
     logger,
   });
   const fixtureNameResolver = new FixtureNameResolver(dartsClient);
+  const fixtureIdentityFallback = new ModusFixtureIdentitySource({
+    source: new OfficialModusHistorySource({ logger }), logger,
+    knownIdentityNames: bundledModusIndex.matches.flatMap((reference) => [reference.homeName, reference.awayName]),
+  });
   const modusService = new ModusPlayersService({
-    sources: [new OfficialModusSource({ resolver: fixtureNameResolver }), new DartsNerdModusSource({ resolver: fixtureNameResolver })],
+    sources: [
+      new OfficialModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
+      new DartsNerdModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
+    ],
     cache: new FileCache({ directory: path.join(rootCache, "modus"), logger }), logger,
   });
   const modusResultsService = new OfficialModusResultsService({

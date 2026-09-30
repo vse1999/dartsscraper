@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { InsufficientMatchDataError, PlayerAmbiguousError } from "../src/errors.js";
+import { InsufficientMatchDataError, ModusHistoryUnavailableError, PlayerAmbiguousError } from "../src/errors.js";
 import {
   MODUS_RESULTS_URL,
   type ModusHistoricalMatch,
@@ -366,5 +366,140 @@ describe("MODUS player history and routing", () => {
 
     await expect(service.findPlayerHistory("John Smith", 1, { forceLiveLookup: true })).resolves.toBeNull();
     expect(getMatchDetails).not.toHaveBeenCalled();
+  });
+
+  it("preserves country-qualified identities and rejects unqualified history ambiguity", async () => {
+    const references = [
+      reference("19003", 1, ["Lee (ENG) Evans", "First Opponent"]),
+      reference("18819", 0, ["Lee (WAL) Evans", "Second Opponent"]),
+      reference("18818", 0, ["Lee Evans", "Third Opponent"]),
+    ];
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>();
+    const service = new ModusPlayerHistoryService({
+      source: {
+        getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+        getMatchDetails,
+      },
+      index: index(references),
+    });
+
+    await expect(service.findPlayerHistory("Lee Evans", 1, { forceLiveLookup: true }))
+      .rejects.toBeInstanceOf(PlayerAmbiguousError);
+    expect(getMatchDetails).not.toHaveBeenCalled();
+  });
+
+  it("allows an unqualified detail label only when the official catalogue has one qualified identity", async () => {
+    const playerReference = reference("19003", 1, ["Lee (ENG) Evans", "Other Player"]);
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>().mockResolvedValue({
+      matchId: "19003",
+      playedAtLocal: "2026-08-15T19:50",
+      date: "2026-08-15",
+      seriesName: "Series 15",
+      weekName: "Week 2",
+      group: "Final Group 1",
+      home: { name: "Lee Evans", score: 4, average: 97.29 },
+      away: { name: "Other Player", score: 1, average: 88.83 },
+      sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=19003",
+    });
+    const service = new ModusPlayerHistoryService({
+      source: {
+        getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+        getMatchDetails,
+      },
+      index: index([playerReference]),
+    });
+
+    const result = await service.findPlayerHistory("Lee Evans", 1, { forceLiveLookup: true });
+
+    expect(result).toMatchObject({ playerName: "Lee (ENG) Evans", matches: [{ opponent: "Other Player" }] });
+  });
+
+  it("rejects an unqualified detail label when known country-qualified identities conflict", async () => {
+    const references = [
+      reference("19003", 1, ["Lee (ENG) Evans", "First Opponent"]),
+      reference("18819", 0, ["Lee (WAL) Evans", "Second Opponent"]),
+      reference("18818", 0, ["Lee Evans", "Third Opponent"]),
+    ];
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>().mockResolvedValue({
+      matchId: "19003",
+      playedAtLocal: "2026-08-15T19:50",
+      date: "2026-08-15",
+      seriesName: "Series 15",
+      weekName: "Week 2",
+      group: "Final Group 1",
+      home: { name: "Lee Evans", score: 4, average: 97.29 },
+      away: { name: "First Opponent", score: 1, average: 88.83 },
+      sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=19003",
+    });
+    const service = new ModusPlayerHistoryService({
+      source: {
+        getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+        getMatchDetails,
+      },
+      index: index(references),
+    });
+
+    await expect(service.findPlayerHistory("Lee (ENG) Evans", 1, { forceLiveLookup: true }))
+      .rejects.toBeInstanceOf(ModusHistoryUnavailableError);
+  });
+
+  it("lets one history caller cancel without cancelling shared catalogue or match-detail reads", async () => {
+    let releaseCatalogue: ((references: readonly ModusMatchReference[]) => void) | undefined;
+    let releaseDetails: ((details: ModusHistoricalMatch) => void) | undefined;
+    const catalogueRequest = new Promise<readonly ModusMatchReference[]>((resolve): void => {
+      releaseCatalogue = resolve;
+    });
+    const detailRequest = new Promise<ModusHistoricalMatch>((resolve): void => {
+      releaseDetails = resolve;
+    });
+    const getLiveReferences = vi.fn<OfficialModusHistoryReader["getLiveReferences"]>(() => catalogueRequest);
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>(() => detailRequest);
+    const service = new ModusPlayerHistoryService({
+      source: { getLiveReferences, getMatchDetails },
+      index: index([reference("19003", 1, ["Jack Drayton", "Zvonimir Lesic"])]),
+    });
+    const controller = new AbortController();
+    const cancelledCaller = service.findPlayerHistory("Jack Drayton", 1, {
+      forceLiveLookup: true,
+      signal: controller.signal,
+    });
+    void cancelledCaller.catch((): undefined => undefined);
+    const survivingCaller = service.findPlayerHistory("Jack Drayton", 1, { forceLiveLookup: true });
+
+    await vi.waitFor(() => expect(getLiveReferences).toHaveBeenCalledOnce());
+    controller.abort(new Error("caller cancelled"));
+    releaseCatalogue?.([]);
+    await vi.waitFor(() => expect(getMatchDetails).toHaveBeenCalledOnce());
+    releaseDetails?.(detail("19003", "2026-08-15T19:50", 97.29, 88.83));
+
+    await expect(cancelledCaller).rejects.toThrow("caller cancelled");
+    await expect(survivingCaller).resolves.toMatchObject({
+      playerName: "Jack Drayton",
+      matches: [{ opponent: "Zvonimir Lesic" }],
+    });
+    expect(getLiveReferences).toHaveBeenCalledOnce();
+    expect(getMatchDetails).toHaveBeenCalledOnce();
+    expect(getMatchDetails.mock.calls[0]?.[1]).toBeUndefined();
+  });
+
+  it("expires cached official match details after their freshness bound", async () => {
+    let now = 0;
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>()
+      .mockResolvedValue(detail("19003", "2026-08-15T19:50", 97.29, 88.83));
+    const service = new ModusPlayerHistoryService({
+      source: {
+        getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+        getMatchDetails,
+      },
+      index: index([reference("19003", 1, ["Jack Drayton", "Zvonimir Lesic"])]),
+      detailsTtlMs: 10,
+      now: (): number => now,
+    });
+
+    await service.findPlayerHistory("Jack Drayton", 1, { forceLiveLookup: true });
+    now = 11;
+    await service.findPlayerHistory("Jack Drayton", 1, { forceLiveLookup: true });
+
+    expect(getMatchDetails).toHaveBeenCalledTimes(2);
   });
 });

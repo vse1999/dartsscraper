@@ -113,6 +113,65 @@ describe("MODUS discovery", () => {
     await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["Rob Cross", "Luke Littler"]);
     expect(resolve).not.toHaveBeenCalled();
   });
+  it("keeps an official fixture when an abbreviated player cannot be resolved", async () => {
+    const payload = {
+      date: "2026-08-10",
+      summaries: [{
+        sport_event: {
+          id: "sr:match:456",
+          competitors: [{ name: "Rob Cross" }, { name: "Smith J." }],
+        },
+      }],
+    };
+    const resolve = vi.fn(async (): Promise<string> => { throw new Error("directory unavailable"); });
+    const official = new OfficialModusSource({
+      resolver: { resolve },
+      fetchImpl: async (): Promise<Response> => new Response(JSON.stringify(payload), { status: 200 }),
+    });
+
+    await expect(official.getFixtures("2026-08-10")).resolves.toMatchObject([{
+      id: "sr:match:456",
+      playerOne: "Rob Cross",
+      playerTwo: "Smith J.",
+    }]);
+    expect(resolve).toHaveBeenCalledOnce();
+  });
+  it("uses verified MODUS catalogue recovery only after a fixture abbreviation miss", async () => {
+    const payload = {
+      date: "2026-08-10",
+      summaries: [{ sport_event: { competitors: [{ name: "Smith J." }, { name: "Opponent O." }] } }],
+    };
+    const fallback = {
+      resolvePair: vi.fn(async (): Promise<readonly [string, string] | null> => ["John Smith", "Other Opponent"]),
+    };
+    const official = new OfficialModusSource({
+      resolver: { resolve: async (): Promise<string> => { throw new Error("not in DartsOrakel"); } },
+      fixtureIdentityFallback: fallback,
+      fetchImpl: async (): Promise<Response> => new Response(JSON.stringify(payload), { status: 200 }),
+    });
+
+    await expect(official.getFixtures("2026-08-10")).resolves.toMatchObject([{
+      playerOne: "John Smith",
+      playerTwo: "Other Opponent",
+    }]);
+    expect(fallback.resolvePair).toHaveBeenCalledWith("2026-08-10", "Smith J.", "Opponent O.", undefined);
+  });
+  it("uses verified official pair context for the roster response when names are abbreviated", async () => {
+    const payload = {
+      date: "2026-08-10",
+      summaries: [{ sport_event: { competitors: [{ name: "Smith J." }, { name: "Opponent O." }] } }],
+    };
+    const fallback = {
+      resolvePair: vi.fn(async (): Promise<readonly [string, string] | null> => ["John Smith", "Other Opponent"]),
+    };
+    const official = new OfficialModusSource({
+      fixtureIdentityFallback: fallback,
+      fetchImpl: async (): Promise<Response> => new Response(JSON.stringify(payload), { status: 200 }),
+    });
+
+    await expect(official.getPlayers("2026-08-10")).resolves.toEqual(["John Smith", "Other Opponent"]);
+    expect(fallback.resolvePair).toHaveBeenCalledOnce();
+  });
   it("filters the global preview page to MODUS fixtures for the requested date", () => {
     expect(parsePlayersForDate(previewHtml, "2026-09-14", { modusOnly: true })).toEqual([
       "Howson R.",

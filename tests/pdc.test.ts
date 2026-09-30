@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Logger } from "../src/logger.js";
 import { readTextFixture } from "./helpers.js";
 import {
   DartsOrakelPdcSource,
   parsePdcTournamentMatches,
 } from "../src/pdc/source.js";
-import { parsePdpaEventFixtures, parsePdpaEventReferences } from "../src/pdc/pdpa-fixture-source.js";
+import { PdpaPdcFixtureSource, parsePdpaEventFixtures, parsePdpaEventReferences } from "../src/pdc/pdpa-fixture-source.js";
 import { parseDartsNerdPdcFixtures, reconcileFixtures } from "../src/pdc/darts-nerd-fixture-source.js";
 import { PdcTournamentService } from "../src/pdc/service.js";
 import {
@@ -130,6 +131,67 @@ describe("official PDPA fixture discovery", () => {
       ["Jonny Clayton", "Motomu Sakai", "19:00 CEST"],
     ]);
   });
+
+  it("distinguishes an unpublished schedule from a dated empty draw in internal diagnostics", async () => {
+    const unpublishedUrl = "https://pdpa.co.uk/event/unpublished/";
+    const emptyUrl = "https://pdpa.co.uk/event/empty/";
+    const calendar = `<a class="event-tile-small" href="${unpublishedUrl}"><div class="title">Unpublished event</div><div class="date">17 September 2026</div></a>
+      <a class="event-tile-small" href="${emptyUrl}"><div class="title">Empty event</div><div class="date">17 September 2026</div></a>`;
+    const statuses: unknown[] = [];
+    const logger: Logger = {
+      debug: (_message, context): void => { statuses.push(context?.status); },
+      info: (): void => undefined,
+      warn: (): void => undefined,
+      error: (): void => undefined,
+    };
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(calendar))
+      .mockResolvedValueOnce(new Response(`<h1 class="page-title">Unpublished event</h1><div class="info-group"><div class="content"><p>Undated draw</p></div></div>`))
+      .mockResolvedValueOnce(new Response(`<h1 class="page-title">Empty event</h1><div class="info-group"><div class="content"><p>Thursday September 17 (1900 BST)</p></div></div>`));
+
+    await expect(new PdpaPdcFixtureSource({ fetchImpl, logger }).getFixtures("2026-09-17")).resolves.toEqual([]);
+
+    expect(statuses).toEqual([
+      "target_date_schedule_not_published",
+      "target_date_schedule_empty",
+      "no_concrete_fixtures",
+    ]);
+  });
+
+  it("preserves fixtures from successful event pages when another candidate page is unavailable", async () => {
+    const failedUrl = "https://pdpa.co.uk/event/failed/";
+    const workingUrl = "https://pdpa.co.uk/event/working/";
+    const calendar = `<a class="event-tile-small" href="${failedUrl}"><div class="title">Failed event</div><div class="date">17 September 2026</div></a>
+      <a class="event-tile-small" href="${workingUrl}"><div class="title">Working event</div><div class="date">17 September 2026</div></a>`;
+    const statuses: unknown[] = [];
+    const logger: Logger = {
+      debug: (_message, context): void => { statuses.push(context?.status); },
+      info: (): void => undefined,
+      warn: (): void => undefined,
+      error: (): void => undefined,
+    };
+    const workingPage = `<h1 class="page-title">Working event</h1><div class="info-group"><div class="content"><p>Thursday September 17 (1900 BST)<br>Luke Littler v Michael van Gerwen</p></div></div>`;
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(calendar))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(new Response(workingPage));
+
+    const fixtures = await new PdpaPdcFixtureSource({ fetchImpl, logger }).getFixtures("2026-09-17");
+
+    expect(fixtures).toHaveLength(1);
+    expect(fixtures[0]).toMatchObject({ playerOne: "Luke Littler", playerTwo: "Michael van Gerwen" });
+    expect(statuses.at(-1)).toBe("partial_event_page_failure");
+  });
+
+  it("reports every candidate page outage as unavailable rather than as a genuine empty schedule", async () => {
+    const sourceUrl = "https://pdpa.co.uk/event/offline/";
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(`<a class="event-tile-small" href="${sourceUrl}"><div class="title">Offline event</div><div class="date">17 September 2026</div></a>`))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+
+    await expect(new PdpaPdcFixtureSource({ fetchImpl }).getFixtures("2026-09-17"))
+      .rejects.toThrow("Every candidate PDPA event page failed");
+  });
 });
 
 describe("live PDC fixture corroboration", () => {
@@ -148,6 +210,35 @@ describe("live PDC fixture corroboration", () => {
     }]);
   });
 
+  it("attaches the PDC event label only when the group and match route agree", () => {
+    const html = `<div data-competition-group="" data-federation="pdc">
+      <div class="hm-round-header">World Grand Prix 2026 <span class="hm-round-count">1 match</span></div>
+      <div><div class="hm-date-header">Tuesday 29 September 2026 — 1/16</div>
+        <a class="hm-match" href="/en/federations/pdc/world-grand-prix/2026/matches/chris-dobey-vs-jermaine-wattimena-29-09-2026">
+          <span class="hm-time" data-utc="2026-09-29T17:10:00+00:00"></span><span class="hm-round-badge">1/16-finals</span>
+          <span class="hm-name">Dobey C.</span><span class="hm-name">Wattimena J.</span>
+        </a>
+      </div>
+    </div>`;
+
+    expect(parseDartsNerdPdcFixtures(html, "2026-09-29")[0]).toMatchObject({
+      tournamentName: "World Grand Prix 2026",
+      playerOne: "Dobey C.",
+      playerTwo: "Wattimena J.",
+    });
+  });
+
+  it("filters same-day matches grouped under non-PDC competitions", () => {
+    const html = `<div data-competition-group="" data-federation="wdf">
+      <div class="hm-round-header">World Masters 2026 <span class="hm-round-count">1 match</span></div>
+      <a class="hm-match" href="/en/federations/wdf/world-masters/2026/matches/chris-dobey-vs-other-player-29-09-2026">
+        <span class="hm-time" data-utc="2026-09-29T17:10:00+00:00"></span><span class="hm-name">Dobey C.</span><span class="hm-name">Other Player</span>
+      </a>
+    </div>`;
+
+    expect(parseDartsNerdPdcFixtures(html, "2026-09-29")).toEqual([]);
+  });
+
   it("applies a late live replacement only when the row overlaps the official fixture", () => {
     const official: PdcFixture[] = [{
       id: "pdpa:1",
@@ -162,7 +253,7 @@ describe("live PDC fixture corroboration", () => {
     }];
     const live: PdcFixture[] = [{
       id: "live:1",
-      tournamentName: "PDC live fixture",
+      tournamentName: "World Series of Darts Finals 2026",
       date: "2026-09-17",
       startTime: "2026-09-17T20:10:00+00:00",
       session: null,
@@ -197,7 +288,7 @@ describe("live PDC fixture corroboration", () => {
     }];
     const live: PdcFixture[] = [{
       id: "live:2",
-      tournamentName: "PDC live fixture",
+      tournamentName: "World Series of Darts Finals 2026",
       date: "2026-09-17",
       startTime: "2026-09-17T18:40:00+00:00",
       session: null,
@@ -211,6 +302,92 @@ describe("live PDC fixture corroboration", () => {
       playerOne: "Kevin Doets",
       playerTwo: "Ross Smith",
     }]);
+  });
+
+  it("does not let a repeated-player overlap swap an opponent across official fixtures", () => {
+    const official: PdcFixture[] = [
+      {
+        id: "official:1", tournamentName: "World Series Finals 2026", date: "2026-09-17", startTime: null,
+        session: null, round: "Round One", playerOne: "Michael van Gerwen", playerTwo: "Lourence Ilagan",
+        sourceUrl: "https://pdpa.co.uk/event/world-series/",
+      },
+      {
+        id: "official:2", tournamentName: "World Series Finals 2026", date: "2026-09-17", startTime: null,
+        session: null, round: "Round One", playerOne: "Michael van Gerwen", playerTwo: "Rob Cross",
+        sourceUrl: "https://pdpa.co.uk/event/world-series/",
+      },
+    ];
+    const live: PdcFixture[] = [{
+      id: "live:ambiguous", tournamentName: "World Series Finals 2026", date: "2026-09-17",
+      startTime: "2026-09-17T20:10:00+00:00", session: null, round: "Round One",
+      playerOne: "Michael van Gerwen", playerTwo: "Daryl Gurney",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+
+    expect(reconcileFixtures(official, live)).toEqual(official);
+  });
+
+  it("does not reconcile a same-day fixture from a different named event", () => {
+    const official: PdcFixture[] = [{
+      id: "official:grand-prix", tournamentName: "World Grand Prix 2026", date: "2026-09-29", startTime: null,
+      session: null, round: "Round One", playerOne: "Chris Dobey", playerTwo: "Jermaine Wattimena",
+      sourceUrl: "https://pdpa.co.uk/event/world-grand-prix-2026/",
+    }];
+    const live: PdcFixture[] = [{
+      id: "live:other-event", tournamentName: "European Tour 2026", date: "2026-09-29",
+      startTime: "2026-09-29T17:10:00+00:00", session: null, round: "Round One",
+      playerOne: "Chris Dobey", playerTwo: "Other Player",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+
+    expect(reconcileFixtures(official, live)).toEqual(official);
+  });
+
+  it("requires matching explicit event context before accepting a one-player replacement", () => {
+    const official: PdcFixture[] = [{
+      id: "official:1", tournamentName: "World Series Finals 2026", date: "2026-09-17", startTime: null,
+      session: null, round: "Round One", playerOne: "Michael van Gerwen", playerTwo: "Lourence Ilagan",
+      sourceUrl: "https://pdpa.co.uk/event/world-series/",
+    }];
+    const live: PdcFixture[] = [{
+      id: "live:1", tournamentName: "PDC live fixture", date: "2026-09-17",
+      startTime: "2026-09-17T20:10:00+00:00", session: null, round: "Round One",
+      playerOne: "Michael van Gerwen", playerTwo: "Daryl Gurney",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+
+    expect(reconcileFixtures(official, live)).toEqual(official);
+  });
+
+  it("does not enrich an exact player pair from a conflicting round occurrence", (): void => {
+    const official: PdcFixture[] = [{
+      id: "official:rematch", tournamentName: "World Grand Prix 2026", date: "2026-09-29", startTime: null,
+      session: null, round: "Round One", playerOne: "Chris Dobey", playerTwo: "Jermaine Wattimena",
+      sourceUrl: "https://pdpa.co.uk/event/world-grand-prix-2026/",
+    }];
+    const live: PdcFixture[] = [{
+      ...official[0]!, id: "live:rematch", round: "Round Two", startTime: "2026-09-29T17:10:00+00:00",
+      sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+    expect(reconcileFixtures(official, live)).toEqual(official);
+  });
+
+  it.each([
+    ["Round One", "Round Two"],
+    [null, "Round One"],
+    ["Round One", null],
+  ])("does not replace opponents with conflicting or missing round evidence (%s / %s)", (officialRound: string | null, liveRound: string | null): void => {
+    const official: PdcFixture[] = [{
+      id: "official:occurrence", tournamentName: "World Grand Prix 2026", date: "2026-09-29", startTime: null,
+      session: null, round: officialRound, playerOne: "Chris Dobey", playerTwo: "Jermaine Wattimena",
+      sourceUrl: "https://pdpa.co.uk/event/world-grand-prix-2026/",
+    }];
+    const live: PdcFixture[] = [{
+      id: "live:other-occurrence", tournamentName: "World Grand Prix 2026", date: "2026-09-29",
+      startTime: "2026-09-29T17:10:00+00:00", session: null, round: liveRound,
+      playerOne: "Chris Dobey", playerTwo: "Other Player", sourceUrl: "https://www.darts-nerd.com/en/matches/preview",
+    }];
+    expect(reconcileFixtures(official, live)).toEqual(official);
   });
 });
 

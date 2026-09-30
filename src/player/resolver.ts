@@ -1,12 +1,13 @@
 import { DartsOrakelStructureChangedError, PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
 import { DartsOrakelPlayerProfilePattern } from "../dartsorakel/selectors.js";
 import type { DartsOrakelClient } from "../dartsorakel/client.js";
+import { DirectoryLoader, type DirectoryLoaderOptions } from "./directory-loader.js";
 import {
   PlayerIdentitySchema,
   type PlayerIdentity,
   type PlayerStatsRow,
 } from "../schemas/player.js";
-import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
+import { throwIfAborted } from "../services/cancellation.js";
 
 const MIN_FUZZY_INPUT_LENGTH = 5;
 const MAX_FUZZY_DISTANCE = 2;
@@ -15,12 +16,23 @@ const MIN_FUZZY_MARGIN = 0.08;
 const MAX_SUGGESTIONS = 3;
 
 export class PlayerResolver {
-  private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
-  private directoryPromise: Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> | undefined;
-  private readonly signalDirectoryPromises = new WeakMap<AbortSignal, Promise<ReadonlyMap<string, readonly PlayerIdentity[]>>>();
+  private readonly directoryLoader: DirectoryLoader<ReadonlyMap<string, readonly PlayerIdentity[]>>;
 
-  public constructor(client: Pick<DartsOrakelClient, "getPlayerStats">) {
-    this.client = client;
+  public constructor(
+    client: Pick<DartsOrakelClient, "getPlayerStats"> & Partial<Pick<DartsOrakelClient, "refreshPlayerStats">>,
+    options: DirectoryLoaderOptions = {},
+  ) {
+    this.directoryLoader = new DirectoryLoader<ReadonlyMap<string, readonly PlayerIdentity[]>>(
+      async (forceRefresh: boolean, signal?: AbortSignal): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> => {
+        const response = forceRefresh && client.refreshPlayerStats !== undefined
+          ? await client.refreshPlayerStats(signal)
+          : signal === undefined
+            ? await client.getPlayerStats()
+            : await client.getPlayerStats(signal);
+        return directoryFromStatsRows(response.data);
+      },
+      options,
+    );
   }
 
   public async resolvePlayer(name: string, signal?: AbortSignal): Promise<PlayerIdentity> {
@@ -29,37 +41,16 @@ export class PlayerResolver {
       throw new PlayerNotFoundError(name);
     }
 
-    const directory = await this.directory(signal);
+    const directory = await this.directoryLoader.get(signal);
     throwIfAborted(signal);
-    const candidates = directory.get(normalizedRequestedName) ?? [];
-    if (candidates.length > 1) {
-      throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.name));
+    try {
+      return resolveFromDirectory(name, normalizedRequestedName, directory);
+    } catch (error: unknown) {
+      if (!(error instanceof PlayerNotFoundError)) throw error;
+      const refreshedDirectory = await this.directoryLoader.refreshAfterMiss(signal);
+      throwIfAborted(signal);
+      return resolveFromDirectory(name, normalizedRequestedName, refreshedDirectory);
     }
-    const exactCandidate = candidates[0];
-    if (exactCandidate !== undefined) return exactCandidate;
-
-    const uniquePlayers = uniqueDirectoryPlayers(directory);
-    const queryTokens = searchable(name).split(" ").filter((token: string): boolean => token !== "");
-    const partialCandidates = uniquePlayers.filter((candidate: PlayerIdentity): boolean => {
-      return containsTokenPhrase(searchable(candidate.name).split(" "), queryTokens);
-    });
-    if (partialCandidates.length > 1) {
-      throw new PlayerAmbiguousError(name, partialCandidates.map((candidate) => candidate.name));
-    }
-    const partialCandidate = partialCandidates[0];
-    if (partialCandidate !== undefined) return partialCandidate;
-
-    const fuzzyCandidates = rankFuzzyCandidates(name, uniquePlayers);
-    const first = fuzzyCandidates[0];
-    if (first !== undefined && first.score >= MIN_FUZZY_SCORE && first.distance <= MAX_FUZZY_DISTANCE) {
-      const second = fuzzyCandidates[1];
-      if (second !== undefined && first.score - second.score < MIN_FUZZY_MARGIN) {
-        throw new PlayerAmbiguousError(name, fuzzyCandidates.slice(0, MAX_SUGGESTIONS).map((candidate) => candidate.player.name));
-      }
-      return first.player;
-    }
-
-    throw new PlayerNotFoundError(name, suggestionNames(fuzzyCandidates));
   }
 
   public async findMention(text: string, signal?: AbortSignal): Promise<PlayerIdentity | undefined> {
@@ -69,7 +60,7 @@ export class PlayerResolver {
   public async findMentions(text: string, signal?: AbortSignal): Promise<readonly PlayerIdentity[]> {
     const searchableText = searchable(text);
     if (searchableText === "") return [];
-    const directory = await this.directory(signal);
+    const directory = await this.directoryLoader.get(signal);
     throwIfAborted(signal);
     const matches: PlayerIdentity[] = [];
     for (const candidates of directory.values()) {
@@ -82,55 +73,44 @@ export class PlayerResolver {
   }
 
   public async preload(signal?: AbortSignal): Promise<void> {
-    await this.directory(signal);
+    await this.directoryLoader.get(signal);
+  }
+}
+
+function resolveFromDirectory(
+  name: string,
+  normalizedRequestedName: string,
+  directory: ReadonlyMap<string, readonly PlayerIdentity[]>,
+): PlayerIdentity {
+  const candidates = directory.get(normalizedRequestedName) ?? [];
+  if (candidates.length > 1) {
+    throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.name));
+  }
+  const exactCandidate = candidates[0];
+  if (exactCandidate !== undefined) return exactCandidate;
+
+  const uniquePlayers = uniqueDirectoryPlayers(directory);
+  const queryTokens = searchable(name).split(" ").filter((token: string): boolean => token !== "");
+  const partialCandidates = uniquePlayers.filter((candidate: PlayerIdentity): boolean => {
+    return containsTokenPhrase(searchable(candidate.name).split(" "), queryTokens);
+  });
+  if (partialCandidates.length > 1) {
+    throw new PlayerAmbiguousError(name, partialCandidates.map((candidate) => candidate.name));
+  }
+  const partialCandidate = partialCandidates[0];
+  if (partialCandidate !== undefined) return partialCandidate;
+
+  const fuzzyCandidates = rankFuzzyCandidates(name, uniquePlayers);
+  const first = fuzzyCandidates[0];
+  if (first !== undefined && first.score >= MIN_FUZZY_SCORE && first.distance <= MAX_FUZZY_DISTANCE) {
+    const second = fuzzyCandidates[1];
+    if (second !== undefined && first.score - second.score < MIN_FUZZY_MARGIN) {
+      throw new PlayerAmbiguousError(name, fuzzyCandidates.slice(0, MAX_SUGGESTIONS).map((candidate) => candidate.player.name));
+    }
+    return first.player;
   }
 
-  private directory(signal?: AbortSignal): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
-    if (signal !== undefined) {
-      throwIfAborted(signal);
-      const sharedRequest = this.directoryPromise;
-      if (sharedRequest !== undefined) return waitWithSignal(sharedRequest, signal);
-      const signalRequest = this.signalDirectoryPromises.get(signal);
-      if (signalRequest !== undefined) return waitWithSignal(signalRequest, signal);
-      const request = this.loadDirectory(signal).then((directory) => {
-        // A completed signal-bound request is valid cache data, but an aborted
-        // request must never become the shared single-flight promise.
-        if (this.directoryPromise === undefined && signal.aborted !== true) {
-          this.directoryPromise = Promise.resolve(directory);
-        }
-        return directory;
-      }).catch((error: unknown) => {
-        if (this.signalDirectoryPromises.get(signal) === request) {
-          this.signalDirectoryPromises.delete(signal);
-        }
-        throw error;
-      });
-      this.signalDirectoryPromises.set(signal, request);
-      return request;
-    }
-    if (this.directoryPromise !== undefined) return this.directoryPromise;
-    const request = this.loadDirectory().catch((error: unknown) => {
-      if (this.directoryPromise === request) this.directoryPromise = undefined;
-      throw error;
-    });
-    this.directoryPromise = request;
-    return request;
-  }
-
-  private async loadDirectory(signal?: AbortSignal): Promise<ReadonlyMap<string, readonly PlayerIdentity[]>> {
-    throwIfAborted(signal);
-    const response = signal === undefined
-      ? await this.client.getPlayerStats()
-      : await this.client.getPlayerStats(signal);
-    throwIfAborted(signal);
-    const directory = new Map<string, PlayerIdentity[]>();
-    for (const row of response.data) {
-      const player = playerIdentityFromStatsRow(row);
-      const key = normalizePlayerName(player.name);
-      directory.set(key, [...(directory.get(key) ?? []), player]);
-    }
-    return directory as ReadonlyMap<string, readonly PlayerIdentity[]>;
-  }
+  throw new PlayerNotFoundError(name, suggestionNames(fuzzyCandidates));
 }
 
 export function normalizePlayerName(name: string): string {
@@ -167,6 +147,30 @@ function uniqueDirectoryPlayers(
   return [...players.values()];
 }
 
+function directoryFromStatsRows(rows: readonly PlayerStatsRow[]): ReadonlyMap<string, readonly PlayerIdentity[]> {
+  const identitiesById = new Map<number, { readonly identity: PlayerIdentity; readonly normalizedName: string }>();
+  const conflictingIds = new Set<number>();
+  for (const row of rows) {
+    const identity = playerIdentityFromStatsRow(row);
+    const normalizedName = normalizePlayerName(identity.name);
+    const existing = identitiesById.get(identity.id);
+    if (existing === undefined) {
+      identitiesById.set(identity.id, { identity, normalizedName });
+    } else if (existing.normalizedName !== normalizedName) {
+      conflictingIds.add(identity.id);
+    }
+  }
+
+  const directory = new Map<string, PlayerIdentity[]>();
+  for (const [id, entry] of identitiesById) {
+    if (conflictingIds.has(id)) continue;
+    const candidates = directory.get(entry.normalizedName) ?? [];
+    candidates.push(entry.identity);
+    directory.set(entry.normalizedName, candidates);
+  }
+  return directory;
+}
+
 function rankFuzzyCandidates(
   requestedName: string,
   players: readonly PlayerIdentity[],
@@ -178,9 +182,14 @@ function rankFuzzyCandidates(
       const queryTokens = query.split(" ");
       const candidateTokens = searchable(player.name).split(" ");
       const representations = [searchable(player.name), ...tokenWindows(candidateTokens, queryTokens.length)];
-      const distance = Math.min(...representations.map((representation: string): number => levenshteinDistance(query, representation)));
-      const score = 1 - distance / Math.max(query.length, searchable(player.name).length);
-      return { player, distance, score };
+      const bestRepresentation = representations
+        .map((representation: string): { readonly distance: number; readonly score: number } => {
+          const distance = levenshteinDistance(query, representation);
+          return { distance, score: 1 - distance / Math.max(query.length, representation.length) };
+        })
+        .sort((left, right) => right.score - left.score || left.distance - right.distance)[0];
+      if (bestRepresentation === undefined) return { player, distance: Number.POSITIVE_INFINITY, score: 0 };
+      return { player, distance: bestRepresentation.distance, score: bestRepresentation.score };
     })
     .sort((left: FuzzyCandidate, right: FuzzyCandidate): number => {
       return right.score - left.score || left.distance - right.distance || left.player.name.localeCompare(right.player.name);

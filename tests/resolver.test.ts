@@ -64,6 +64,86 @@ describe("player resolver", () => {
     await expect(resolverFor(ambiguous).resolvePlayer(first.player_name)).rejects.toThrow("ambiguous");
   });
 
+  it("deduplicates repeated identical identity claims for one source ID", async () => {
+    const response = readPlayerStatsFixture();
+    const first = response.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a player.");
+    const resolver = resolverFor({ ...response, data: [first, first] });
+
+    await expect(resolver.resolvePlayer(first.player_name)).resolves.toMatchObject({
+      id: first.player_key,
+      name: first.player_name,
+    });
+  });
+
+  it("quarantines a source ID that claims conflicting player names", async () => {
+    const response = readPlayerStatsFixture();
+    const first = response.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a player.");
+    const conflicting = {
+      ...first,
+      player_name: "Unrelated Claim",
+      player_profile_url: `https://dartsorakel.com/player/details/${first.player_key}/unrelated-claim`,
+    };
+    const clientResponse: PlayerStatsResponse = { ...response, data: [first, conflicting] };
+    const refreshPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => clientResponse);
+    const resolver = new PlayerResolver({
+      getPlayerStats: async (): Promise<PlayerStatsResponse> => clientResponse,
+      refreshPlayerStats,
+    });
+
+    await expect(resolver.resolvePlayer(first.player_name)).rejects.toBeInstanceOf(PlayerNotFoundError);
+    expect(refreshPlayerStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the directory once after a genuine miss and finds a newly added player", async () => {
+    const response = readPlayerStatsFixture();
+    const first = response.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a player.");
+    const initial: PlayerStatsResponse = { ...response, data: [first] };
+    const refreshed: PlayerStatsResponse = {
+      ...response,
+      data: [
+        ...initial.data,
+        {
+          ...first,
+          player_key: 999_901,
+          player_name: "New Entrant",
+          player_profile_url: "https://dartsorakel.com/player/details/999901/new-entrant",
+        },
+      ],
+    };
+    const getPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => initial);
+    const refreshPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => refreshed);
+    const resolver = new PlayerResolver({ getPlayerStats, refreshPlayerStats });
+
+    await expect(resolver.resolvePlayer("New Entrant")).resolves.toMatchObject({
+      id: 999_901,
+      name: "New Entrant",
+    });
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+    expect(refreshPlayerStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh an ambiguous directory match", async () => {
+    const response = readPlayerStatsFixture();
+    const first = response.data[0];
+    if (first === undefined) throw new Error("Fixture must contain a player.");
+    const second = {
+      ...first,
+      player_key: 999_902,
+      player_profile_url: "https://dartsorakel.com/player/details/999902/duplicate",
+    };
+    const ambiguous: PlayerStatsResponse = { ...response, data: [first, second] };
+    const getPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => ambiguous);
+    const refreshPlayerStats = vi.fn(async (): Promise<PlayerStatsResponse> => ambiguous);
+    const resolver = new PlayerResolver({ getPlayerStats, refreshPlayerStats });
+
+    await expect(resolver.resolvePlayer(first.player_name)).rejects.toBeInstanceOf(PlayerAmbiguousError);
+    expect(getPlayerStats).toHaveBeenCalledTimes(1);
+    expect(refreshPlayerStats).not.toHaveBeenCalled();
+  });
+
   it("derives ID and slug from the profile URL", () => {
     expect(playerIdentityFromStatsRow({
       player_key: 73,

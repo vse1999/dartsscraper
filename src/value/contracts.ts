@@ -111,6 +111,8 @@ export interface ValueReport {
 
 export interface ValuePlayerDirectory {
   getPlayers(signal?: AbortSignal): Promise<readonly PlayerIdentity[]>;
+  /** Bounded same-provider refresh for a verified full-name miss, never a guessed identity. */
+  refreshAfterMiss?(signal?: AbortSignal): Promise<readonly PlayerIdentity[]>;
 }
 
 export interface ValueReaderDependencies {
