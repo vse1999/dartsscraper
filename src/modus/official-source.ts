@@ -117,5 +117,5 @@ function isNamedPlayer(name: string): boolean {
 }
 
 function isAbbreviatedName(name: string): boolean {
-  return /^.+?\s+[\p{L}]\.$/u.test(name.trim());
+  return /^.+?\s+(?:[\p{L}]\.\s*)+$/u.test(name.trim());
 }

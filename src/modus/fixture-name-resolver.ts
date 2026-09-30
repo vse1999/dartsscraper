@@ -1,8 +1,13 @@
 import type { DartsOrakelClient } from "../dartsorakel/client.js";
 import { PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
-import { normalizePlayerName } from "../player/resolver.js";
 import type { PlayerStatsResponse } from "../schemas/player.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
+import { modusAbbreviationMatches, modusNameKey, parseModusAbbreviatedName } from "./identity.js";
+
+export interface FixtureNameResolution {
+  readonly canonicalName: string;
+  readonly sourceId: string;
+}
 
 export class FixtureNameResolver {
   private readonly client: Pick<DartsOrakelClient, "getPlayerStats">;
@@ -10,27 +15,25 @@ export class FixtureNameResolver {
   private readonly signalDirectoryPromises = new WeakMap<AbortSignal, Promise<PlayerStatsResponse>>();
   public constructor(client: Pick<DartsOrakelClient, "getPlayerStats">) { this.client = client; }
   public async resolve(name: string, signal?: AbortSignal): Promise<string> {
+    return (await this.resolveWithIdentity(name, signal)).canonicalName;
+  }
+
+  public async resolveWithIdentity(name: string, signal?: AbortSignal): Promise<FixtureNameResolution> {
     const response = await this.directory(signal);
     throwIfAborted(signal);
     const canonicalName = canonicalizeFixtureName(name);
-    const normalized = normalizePlayerName(canonicalName);
-    const exact = response.data.filter((row) => normalizePlayerName(row.player_name) === normalized);
-    if (exact.length === 1) return exact[0]?.player_name ?? name;
-    const abbreviated = parseAbbreviatedName(canonicalName);
-    if (abbreviated === undefined) throw new PlayerNotFoundError(name);
-    const candidates = response.data.filter((row) => {
-      const parts = comparableNameParts(row.player_name);
-      const candidateSurnameParts = parts.at(-1) === "jnr" ? parts.slice(0, -1) : parts;
-      if (candidateSurnameParts.length < abbreviated.surnameParts.length) return false;
-      const surnameStart = candidateSurnameParts.length - abbreviated.surnameParts.length;
-      const candidateSurname = candidateSurnameParts.slice(surnameStart);
-      if (candidateSurname.join("") !== abbreviated.surnameParts.join("")) return false;
-      const givenNameParts = candidateSurnameParts.slice(0, surnameStart);
-      return abbreviated.initials.every((initial, index) => givenNameParts[index]?.startsWith(initial) === true);
-    });
-    if (candidates.length === 0) throw new PlayerNotFoundError(name);
-    if (candidates.length > 1) throw new PlayerAmbiguousError(name, candidates.map((candidate) => candidate.player_name));
-    return candidates[0]?.player_name ?? name;
+    if (modusNameKey(canonicalName) === "") throw new PlayerNotFoundError(name);
+    const conflictingSourceIds = conflictingSourceIdsInDirectory(response);
+    const abbreviated = parseModusAbbreviatedName(canonicalName);
+    const candidates = abbreviated === undefined
+      ? response.data.filter((row) => !conflictingSourceIds.has(row.player_key) && modusNameKey(row.player_name) === modusNameKey(canonicalName))
+      : response.data.filter((row) => !conflictingSourceIds.has(row.player_key) && modusAbbreviationMatches(canonicalName, row.player_name));
+    const uniqueCandidates = uniqueRowsBySourceId(candidates);
+    if (uniqueCandidates.length === 0) throw new PlayerNotFoundError(name);
+    if (uniqueCandidates.length > 1) throw new PlayerAmbiguousError(name, uniqueCandidates.map((candidate) => candidate.player_name));
+    const resolved = uniqueCandidates[0];
+    if (resolved === undefined) throw new PlayerNotFoundError(name);
+    return { canonicalName: resolved.player_name, sourceId: String(resolved.player_key) };
   }
 
   private directory(signal?: AbortSignal): Promise<PlayerStatsResponse> {
@@ -64,37 +67,37 @@ export class FixtureNameResolver {
   }
 }
 
-function comparableNameParts(value: string): string[] {
-  return normalizePlayerName(value)
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((part) => part !== "");
-}
-
 export function canonicalizeFixtureName(name: string): string {
   const trimmed = name.replace(/\s+/g, " ").trim();
   const commaName = /^([^,]+),\s*(.+)$/.exec(trimmed);
   return commaName === null ? trimmed : `${commaName[2] ?? ""} ${commaName[1] ?? ""}`.trim();
 }
 
-interface AbbreviatedName {
-  readonly surnameParts: readonly string[];
-  readonly initials: readonly string[];
+function uniqueRowsBySourceId(
+  rows: readonly PlayerStatsResponse["data"][number][],
+): readonly PlayerStatsResponse["data"][number][] {
+  const byId = new Map<number, PlayerStatsResponse["data"][number][]>();
+  for (const row of rows) byId.set(row.player_key, [...(byId.get(row.player_key) ?? []), row]);
+  const resolved: PlayerStatsResponse["data"][number][] = [];
+  for (const candidates of byId.values()) {
+    const names = new Set(candidates.map((candidate) => modusNameKey(candidate.player_name)));
+    // A source id claiming two different names is corrupt identity evidence;
+    // quarantine it rather than selecting by response order.
+    if (names.size !== 1) continue;
+    const first = candidates[0];
+    if (first !== undefined) resolved.push(first);
+  }
+  return resolved;
 }
 
-function parseAbbreviatedName(value: string): AbbreviatedName | undefined {
-  const tokens = value.trim().split(/\s+/u).filter((token) => token !== "");
-  const initialTokens: string[] = [];
-  while (tokens.length > 0) {
-    const token = tokens.at(-1) ?? "";
-    if (!/^[\p{L}]\.$/u.test(token)) break;
-    tokens.pop();
-    initialTokens.unshift(normalizePlayerName(token).replace(/[^\p{L}]/gu, ""));
+function conflictingSourceIdsInDirectory(response: PlayerStatsResponse): ReadonlySet<number> {
+  const namesById = new Map<number, Set<string>>();
+  for (const row of response.data) {
+    const names = namesById.get(row.player_key) ?? new Set<string>();
+    names.add(modusNameKey(row.player_name));
+    namesById.set(row.player_key, names);
   }
-  if (tokens.length === 0 || initialTokens.length === 0) return undefined;
-  const surnameParts = comparableNameParts(tokens.join(" "));
-  const initials = initialTokens.map((initial) => comparableNameParts(initial)[0] ?? "");
-  if (surnameParts.length === 0 || initials.some((initial) => initial === "")) return undefined;
-  return { surnameParts, initials };
+  return new Set([...namesById.entries()]
+    .filter(([, names]: readonly [number, Set<string>]): boolean => names.size > 1)
+    .map(([playerKey]: readonly [number, Set<string>]): number => playerKey));
 }

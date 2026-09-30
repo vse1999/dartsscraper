@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { InsufficientMatchDataError } from "../src/errors.js";
+import { InsufficientMatchDataError, PlayerAmbiguousError } from "../src/errors.js";
 import {
   MODUS_RESULTS_URL,
   type ModusHistoricalMatch,
@@ -133,7 +133,7 @@ describe("official MODUS historical parsers", () => {
 });
 
 describe("MODUS player history and routing", () => {
-  it("handles official reversed-name variants, sorts newest first, and selects the player's side", async () => {
+  it("accepts a source-bound reversed detail spelling without creating a cross-match alias", async () => {
     const references = [
       reference("19003", 1, ["Jack Drayton", "Lesic Zvonimir"]),
       reference("18819", 0, ["Zvonimir Lesic", "Jack Drayton"]),
@@ -154,10 +154,46 @@ describe("MODUS player history and routing", () => {
     const result = await service.findPlayerHistory("Zvonimir Lesic", 2);
     expect(result?.playerName).toBe("Zvonimir Lesic");
     expect(result?.matches.map((match) => [match.date, match.opponent, match.average, match.score])).toEqual([
-      ["2026-08-15", "Jack Drayton", 88.83, "1 V 4"],
       ["2026-08-10", "Jack Drayton", 81, "1 V 4"],
     ]);
-    expect(result?.evidenceUrls).toHaveLength(2);
+    expect(result?.evidenceUrls).toHaveLength(1);
+  });
+
+  it("does not merge two people whose ordered names are reversed in separate matches", async () => {
+    const references = [
+      reference("19003", 1, ["John Smith", "Mike Jones"]),
+      reference("18819", 0, ["Smith John", "Mike Jones"]),
+    ];
+    const details = new Map<string, ModusHistoricalMatch>([
+      ["19003", {
+        matchId: "19003", playedAtLocal: "2026-08-15T19:50", date: "2026-08-15",
+        seriesName: "Series 15", weekName: "Week 2", group: "Final Group 1",
+        home: { name: "John Smith", score: 4, average: 97.29 },
+        away: { name: "Mike Jones", score: 1, average: 88.83 },
+        sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=19003",
+      }],
+      ["18819", {
+        matchId: "18819", playedAtLocal: "2026-08-10T09:38", date: "2026-08-10",
+        seriesName: "Series 15", weekName: "Week 1", group: "Final Group 1",
+        home: { name: "Smith John", score: 4, average: 91.58 },
+        away: { name: "Mike Jones", score: 1, average: 81 },
+        sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=18819",
+      }],
+    ]);
+    const source: OfficialModusHistoryReader = {
+      getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+      getMatchDetails: async (matchId: string): Promise<ModusHistoricalMatch> => {
+        const found = details.get(matchId);
+        if (found === undefined) throw new Error("missing fixture");
+        return found;
+      },
+    };
+    const service = new ModusPlayerHistoryService({ source, index: index(references) });
+
+    const result = await service.findPlayerHistory("John Smith", 10);
+
+    expect(result?.matches).toHaveLength(1);
+    expect(result?.matches[0]).toMatchObject({ date: "2026-08-15", opponent: "Mike Jones" });
   });
 
   it("routes a non-current player immediately without making a live MODUS request", async () => {
@@ -269,5 +305,66 @@ describe("MODUS player history and routing", () => {
       { forceLiveLookup: true },
     );
     expect(darts.getPlayerStats).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an ambiguous explicit abbreviation before fetching match details", async () => {
+    const references = [
+      reference("19003", 1, ["John Smith", "Mike Jones"]),
+      reference("18819", 0, ["Jack Smith", "Mike Jones"]),
+    ];
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>();
+    const source: OfficialModusHistoryReader = {
+      getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+      getMatchDetails,
+    };
+    const service = new ModusPlayerHistoryService({ source, index: index(references) });
+
+    await expect(service.findPlayerHistory("Smith J.", 10, { forceLiveLookup: true }))
+      .rejects.toBeInstanceOf(PlayerAmbiguousError);
+    expect(getMatchDetails).not.toHaveBeenCalled();
+  });
+
+  it("resolves a unique explicit abbreviation to one ordered catalogue identity", async () => {
+    const liveReference = reference("19004", 1, ["John Smith", "Mike Jones"]);
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>()
+      .mockResolvedValue({
+        matchId: "19004",
+        playedAtLocal: "2026-08-17T12:30",
+        date: "2026-08-17",
+        seriesName: "Series 15",
+        weekName: "Week 2",
+        group: "Final Group 1",
+        home: { name: "John Smith", score: 4, average: 96.25 },
+        away: { name: "Mike Jones", score: 2, average: 88.5 },
+        sourceUrl: "https://modussuperseries.com/match-db-stats.php?match_id=19004",
+      });
+    const source: OfficialModusHistoryReader = {
+      getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [liveReference],
+      getMatchDetails,
+    };
+    const service = new ModusPlayerHistoryService({
+      source,
+      index: index([reference("19003", 1, ["Other Player", "Someone Else"])]),
+    });
+
+    const result = await service.findPlayerHistory("Smith J.", 1, { forceLiveLookup: true });
+
+    expect(result?.playerName).toBe("John Smith");
+    expect(getMatchDetails).toHaveBeenCalledOnce();
+  });
+
+  it("does not attach a full request to an ambiguous short catalogue label", async () => {
+    const getMatchDetails = vi.fn<OfficialModusHistoryReader["getMatchDetails"]>();
+    const source: OfficialModusHistoryReader = {
+      getLiveReferences: async (): Promise<readonly ModusMatchReference[]> => [],
+      getMatchDetails,
+    };
+    const service = new ModusPlayerHistoryService({
+      source,
+      index: index([reference("19003", 1, ["Smith J.", "Mike Jones"])]),
+    });
+
+    await expect(service.findPlayerHistory("John Smith", 1, { forceLiveLookup: true })).resolves.toBeNull();
+    expect(getMatchDetails).not.toHaveBeenCalled();
   });
 });

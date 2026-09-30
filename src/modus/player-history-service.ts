@@ -1,4 +1,4 @@
-import { InsufficientMatchDataError, ModusHistoryUnavailableError } from "../errors.js";
+import { InsufficientMatchDataError, ModusHistoryUnavailableError, PlayerAmbiguousError } from "../errors.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { MatchSchema, type Match } from "../schemas/match.js";
 import {
@@ -9,6 +9,12 @@ import {
   type ModusResultsIndex,
 } from "./history-schemas.js";
 import type { OfficialModusHistoryReader } from "./history-source.js";
+import {
+  modusAbbreviationMatches,
+  modusNameKey,
+  modusNamesEquivalent,
+  parseModusAbbreviatedName,
+} from "./identity.js";
 
 const DEFAULT_LIVE_TTL_MS = 30_000;
 const DEFAULT_FAILURE_TTL_MS = 15_000;
@@ -82,7 +88,10 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
     // can be checked before the bundled index is refreshed.
     if (!this.isCurrentModusPlayer(playerName) && options.forceLiveLookup !== true) return null;
     const catalogue = await this.readCatalogue();
-    const candidates = referencesForPlayer(catalogue.references, playerName);
+    const resolvedIdentity = resolveCatalogueIdentity(catalogue.references, playerName);
+    const candidates = resolvedIdentity === undefined
+      ? []
+      : referencesForPlayer(catalogue.references, resolvedIdentity);
     if (candidates.length === 0) {
       if (!catalogue.liveRefreshSucceeded) {
         throw new ModusHistoryUnavailableError("The current official MODUS catalogue could not be verified.");
@@ -102,7 +111,7 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
           return match;
         },
       );
-      historicalMatches.push(...details.filter((match) => matchContainsPlayer(match, playerName)));
+      historicalMatches.push(...details.filter((match) => matchContainsPlayer(match, resolvedIdentity ?? "")));
       if (historicalMatches.length >= limit) break;
     }
     if (historicalMatches.length === 0) throw new InsufficientMatchDataError(limit, 0);
@@ -111,7 +120,7 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
       return right.playedAtLocal.localeCompare(left.playedAtLocal) || Number(right.matchId) - Number(left.matchId);
     });
     const selected = historicalMatches.slice(0, limit);
-    const converted = selected.map((historical) => convertMatch(historical, playerName));
+    const converted = selected.map((historical) => convertMatch(historical, resolvedIdentity ?? ""));
     const newestPlayerName = converted[0]?.playerName;
     if (newestPlayerName === undefined) throw new InsufficientMatchDataError(limit, 0);
     this.logger.info("Official MODUS player history selected.", {
@@ -128,8 +137,13 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
   }
 
   private isCurrentModusPlayer(playerName: string): boolean {
-    return this.currentSeriesPlayerKeys.has(`exact:${identityKey(playerName)}`)
-      || this.currentSeriesPlayerKeys.has(`tokens:${tokenIdentityKey(playerName)}`);
+    const exactKey = `exact:${identityKey(playerName)}`;
+    if (this.currentSeriesPlayerKeys.has(exactKey)) return true;
+    const directMatches = [...this.currentSeriesPlayerKeys].filter((key: string): boolean => {
+      const candidate = key.slice("exact:".length);
+      return modusAbbreviationMatches(playerName, candidate);
+    });
+    return directMatches.length === 1;
   }
 
   private async readCatalogue(): Promise<CatalogueRead> {
@@ -170,14 +184,50 @@ export class ModusPlayerHistoryService implements ModusPlayerHistoryReader {
   }
 }
 
-function referencesForPlayer(references: readonly ModusMatchReference[], playerName: string): ModusMatchReference[] {
-  const exact = identityKey(playerName);
-  const token = tokenIdentityKey(playerName);
+/**
+ * Resolve a request against the complete official catalogue before fetching
+ * detail pages. Abbreviations are accepted only when exactly one full ordered
+ * catalogue name matches; short catalogue labels cannot authorize a full-name
+ * request on their own.
+ */
+function resolveCatalogueIdentity(
+  references: readonly ModusMatchReference[],
+  requestedName: string,
+): string | undefined {
+  const fullNames = uniqueCatalogueFullNames(references);
+  const requestedKey = identityKey(requestedName);
+  if (requestedKey === "") return undefined;
+  if (parseModusAbbreviatedName(requestedName) === undefined) {
+    return fullNames.some((name: string): boolean => identityKey(name) === requestedKey)
+      ? requestedKey
+      : undefined;
+  }
+
+  const candidates = fullNames.filter((name: string): boolean => modusAbbreviationMatches(requestedName, name));
+  const candidateKeys = [...new Set(candidates.map((name: string): string => identityKey(name)))];
+  if (candidateKeys.length > 1) throw new PlayerAmbiguousError(requestedName, candidates);
+  return candidateKeys[0];
+}
+
+function uniqueCatalogueFullNames(references: readonly ModusMatchReference[]): readonly string[] {
+  const names = new Map<string, string>();
+  for (const reference of references) {
+    for (const name of [reference.homeName, reference.awayName]) {
+      if (parseModusAbbreviatedName(name) !== undefined) continue;
+      const key = identityKey(name);
+      if (key !== "" && !names.has(key)) names.set(key, name);
+    }
+  }
+  return [...names.values()];
+}
+
+function referencesForPlayer(
+  references: readonly ModusMatchReference[],
+  canonicalKey: string,
+): ModusMatchReference[] {
   return deduplicateReferences(references.filter((reference) => {
-    return identityKey(reference.homeName) === exact
-      || identityKey(reference.awayName) === exact
-      || tokenIdentityKey(reference.homeName) === token
-      || tokenIdentityKey(reference.awayName) === token;
+    return identityKey(reference.homeName) === canonicalKey
+      || identityKey(reference.awayName) === canonicalKey;
   }));
 }
 
@@ -198,16 +248,23 @@ function compareWeekKeys(left: string, right: string): number {
   return leftSeries - rightSeries || leftWeek - rightWeek;
 }
 
-function matchContainsPlayer(match: ModusHistoricalMatch, playerName: string): boolean {
-  const exact = identityKey(playerName);
-  if (identityKey(match.home.name) === exact || identityKey(match.away.name) === exact) return true;
-  const token = tokenIdentityKey(playerName);
-  return tokenIdentityKey(match.home.name) === token || tokenIdentityKey(match.away.name) === token;
+function matchContainsPlayer(
+  match: ModusHistoricalMatch,
+  canonicalKey: string,
+): boolean {
+  return identityKey(match.home.name) === canonicalKey || identityKey(match.away.name) === canonicalKey;
 }
 
-function assertReferenceMatchesDetails(reference: ModusMatchReference, details: ModusHistoricalMatch): void {
-  const listedPlayers = [tokenIdentityKey(reference.homeName), tokenIdentityKey(reference.awayName)].sort().join("|");
-  const detailedPlayers = [tokenIdentityKey(details.home.name), tokenIdentityKey(details.away.name)].sort().join("|");
+function assertReferenceMatchesDetails(
+  reference: ModusMatchReference,
+  details: ModusHistoricalMatch,
+): void {
+  // This is source-bound verification for one match id, not a reusable player
+  // alias. A catalogue row never authorizes reversing names across matches.
+  const sameOrder = sourceNamesMatch(reference.homeName, details.home.name)
+    && sourceNamesMatch(reference.awayName, details.away.name);
+  const reversedOrder = sourceNamesMatch(reference.homeName, details.away.name)
+    && sourceNamesMatch(reference.awayName, details.home.name);
   // The official "Final" tab contains Group 1/2, semi-finals and the final,
   // so its detail-page phase label intentionally differs from the tab name.
   const groupMatches = reference.group === "Final"
@@ -215,7 +272,7 @@ function assertReferenceMatchesDetails(reference: ModusMatchReference, details: 
     || identityKey(details.group).startsWith(`${identityKey(reference.group)} `);
   if (
     details.matchId !== reference.matchId
-    || listedPlayers !== detailedPlayers
+    || (!sameOrder && !reversedOrder)
     || identityKey(details.seriesName) !== identityKey(reference.seriesName)
     || identityKey(details.weekName) !== identityKey(reference.weekName)
     || !groupMatches
@@ -224,11 +281,12 @@ function assertReferenceMatchesDetails(reference: ModusMatchReference, details: 
   }
 }
 
-function convertMatch(historical: ModusHistoricalMatch, playerName: string): { readonly playerName: string; readonly match: Match } {
-  const exact = identityKey(playerName);
-  const token = tokenIdentityKey(playerName);
-  const homeMatches = identityKey(historical.home.name) === exact || tokenIdentityKey(historical.home.name) === token;
-  const awayMatches = identityKey(historical.away.name) === exact || tokenIdentityKey(historical.away.name) === token;
+function convertMatch(
+  historical: ModusHistoricalMatch,
+  canonicalKey: string,
+): { readonly playerName: string; readonly match: Match } {
+  const homeMatches = identityKey(historical.home.name) === canonicalKey;
+  const awayMatches = identityKey(historical.away.name) === canonicalKey;
   if (homeMatches === awayMatches) {
     throw new ModusHistoryUnavailableError(`Official MODUS match ${historical.matchId} has an ambiguous player identity.`);
   }
@@ -250,17 +308,13 @@ function convertMatch(historical: ModusHistoricalMatch, playerName: string): { r
 }
 
 export function identityKey(value: string): string {
-  return value.normalize("NFKD")
-    .replace(/[\u0300-\u036f]/gu, "")
-    .replace(/\([A-Z]{2,3}\)/gu, " ")
-    .toLocaleLowerCase("en-US")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .replace(/\s+/gu, " ");
+  return modusNameKey(value);
 }
 
 export function tokenIdentityKey(value: string): string {
-  return identityKey(value).split(" ").filter((token) => token !== "").sort().join(" ");
+  // Kept as a compatibility export; token sorting is intentionally forbidden
+  // because it can conflate people whose given and family names are swapped.
+  return identityKey(value);
 }
 
 function buildCurrentSeriesPlayerKeys(index: ModusResultsIndex): ReadonlySet<string> {
@@ -273,11 +327,29 @@ function buildCurrentSeriesPlayerKeys(index: ModusResultsIndex): ReadonlySet<str
     if (match.seriesId !== currentSeries.id) continue;
     for (const name of [match.homeName, match.awayName]) {
       keys.add(`exact:${identityKey(name)}`);
-      keys.add(`tokens:${tokenIdentityKey(name)}`);
     }
   }
   if (keys.size === 0) throw new Error("The bundled official MODUS current series contains no players.");
   return keys;
+}
+
+function namesMatch(requested: string, candidate: string): boolean {
+  return modusNamesEquivalent(requested, candidate)
+    || modusAbbreviationMatches(requested, candidate)
+    || modusAbbreviationMatches(candidate, requested);
+}
+
+function sourceNamesMatch(left: string, right: string): boolean {
+  return namesMatch(left, right) || sourceSurnameFirstVariant(left, right);
+}
+
+function sourceSurnameFirstVariant(left: string, right: string): boolean {
+  const leftParts = identityKey(left).split(" ").filter((part: string): boolean => part !== "");
+  const rightParts = identityKey(right).split(" ").filter((part: string): boolean => part !== "");
+  return leftParts.length === 2
+    && rightParts.length === 2
+    && leftParts[0] === rightParts[1]
+    && leftParts[1] === rightParts[0];
 }
 
 function mergeReferences(
