@@ -2,7 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/telegram-webhook.ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
     },
     "api/daily-modus-report.ts": {
       "maxDuration": 180

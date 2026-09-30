@@ -31,6 +31,12 @@ import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, t
 import { handleCompareCommand, type CompareMessageResponder } from "./compare-command.js";
 import { compareQueryUsage } from "./compare-query.js";
 import { normalizePlayerName } from "../player/resolver.js";
+import { handleOddsCommand } from "./odds-command.js";
+import type { OddsReader } from "../odds/contracts.js";
+import { createDefaultOddsReader } from "../odds/default.js";
+import { createDefaultValueReader } from "../value/reader.js";
+import type { ValueReader } from "../value/contracts.js";
+import { handleValueCommand } from "./value-command.js";
 import {
   createTelegramDeliveryPolicy,
   getTelegramRetryAfterFromResponse,
@@ -40,7 +46,7 @@ import {
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
-export const TELEGRAM_BOT_RELEASE = "pdc-matchup-cards-v9";
+export const TELEGRAM_BOT_RELEASE = "live-odds-read-only-v1";
 
 export interface BotEnvironment {
   readonly BOT_TOKEN?: string;
@@ -48,6 +54,8 @@ export interface BotEnvironment {
   readonly CRON_SECRET?: string;
   readonly MODUS_REPORT_URL?: string;
   readonly VERCEL_PROJECT_PRODUCTION_URL?: string;
+  readonly ODDS_FETCH_ENABLED?: string;
+  readonly ODDS_BROWSER_EXECUTABLE_PATH?: string;
 }
 
 export interface CreateBotOptions {
@@ -60,6 +68,8 @@ export interface CreateBotOptions {
   readonly botInfo?: UserFromGetMe;
   readonly modusReportTrigger?: ModusReportTrigger;
   readonly pdcTournamentService?: PdcTournamentReader;
+  readonly oddsReader?: OddsReader;
+  readonly valueReader?: ValueReader;
   readonly scheduleBackgroundTask?: BackgroundTaskScheduler;
 }
 
@@ -220,6 +230,58 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     );
   });
 
+  bot.command("odds", async (ctx: Context): Promise<void> => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    await handleOddsCommand(
+      ctx.message?.text ?? "",
+      options.oddsReader,
+      {
+        reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
+          const sent = await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
+          return { messageId: sent.message_id };
+        },
+        edit: async (messageId: number, text: string, editOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
+          await ctx.api.editMessageText(
+            chatId,
+            messageId,
+            text,
+            undefined,
+            editOptions?.signal as unknown as GrammyAbortSignal | undefined,
+          );
+        },
+      },
+      logger,
+      options.scheduleBackgroundTask,
+    );
+  });
+
+  bot.command("value", async (ctx: Context): Promise<void> => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    await handleValueCommand(
+      ctx.message?.text ?? "",
+      options.valueReader,
+      {
+        reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
+          const sent = await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
+          return { messageId: sent.message_id };
+        },
+        edit: async (messageId: number, text: string, editOptions?: { readonly signal?: AbortSignal }): Promise<void> => {
+          await ctx.api.editMessageText(
+            chatId,
+            messageId,
+            text,
+            undefined,
+            editOptions?.signal as unknown as GrammyAbortSignal | undefined,
+          );
+        },
+      },
+      logger,
+      options.scheduleBackgroundTask,
+    );
+  });
+
   bot.callbackQuery(MODUS_PLAYER_CALLBACK_PATTERN, async (ctx): Promise<void> => {
     const message = ctx.callbackQuery.message;
     const replyMarkup = message !== undefined && "reply_markup" in message
@@ -278,10 +340,16 @@ export function createConfiguredBot(
   const modusReportTrigger = createConfiguredModusReportTrigger(environment);
   const statsService = createDefaultPlayerStatsService(logger);
   const bulkPlayerStats = createDefaultBulkPlayerStatsService(logger);
+  const oddsReader = createConfiguredOddsReader(environment, logger);
+  const valueReader = oddsReader === undefined
+    ? undefined
+    : createDefaultValueReader({ oddsReader, playerStatsReader: bulkPlayerStats });
   return createBot({
     ...configuration,
     statsService,
     pdcTournamentService: createDefaultPdcTournamentService(logger, bulkPlayerStats),
+    ...(oddsReader === undefined ? {} : { oddsReader }),
+    ...(valueReader === undefined ? {} : { valueReader }),
     ...(modusReportTrigger === undefined
       ? {}
       : { modusReportTrigger }),
@@ -313,6 +381,31 @@ function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusR
   const endpointUrl = resolveModusReportEndpointUrl(environment);
   if (cronSecret === undefined || cronSecret === "" || endpointUrl === undefined || endpointUrl === "") return undefined;
   return createHttpModusReportTrigger({ endpointUrl, cronSecret });
+}
+
+function createConfiguredOddsReader(environment: BotEnvironment, logger: Logger): OddsReader | undefined {
+  const flag = environment.ODDS_FETCH_ENABLED?.trim().toLocaleLowerCase("en-US");
+  if (flag !== "true") {
+    if (flag !== undefined && flag !== "" && flag !== "false") {
+      logger.warn("Live odds disabled because ODDS_FETCH_ENABLED is invalid.", {
+        code: "ODDS_FETCH_FLAG_INVALID",
+      });
+    }
+    return undefined;
+  }
+
+  const executablePath = environment.ODDS_BROWSER_EXECUTABLE_PATH?.trim();
+  try {
+    return createDefaultOddsReader(
+      executablePath === undefined || executablePath === "" ? {} : { executablePath },
+    );
+  } catch (error: unknown) {
+    logger.warn("Live odds disabled because the browser reader could not be configured.", {
+      code: "ODDS_READER_CONFIGURATION_FAILED",
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    });
+    return undefined;
+  }
 }
 
 export function resolveModusReportEndpointUrl(environment: BotEnvironment): string | undefined {
@@ -516,7 +609,7 @@ async function handleStatsQuery(
 }
 
 function botHelpText(): string {
-  return `${statsQueryUsage()}\n\n${compareQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
+  return `${statsQueryUsage()}\n\n${compareQueryUsage()}\n\nManual MODUS reports:\n/modus today\n/modus tomorrow\n\nPDC tournament scans:\n/pdc today\n/pdc tomorrow\n/pdc latest\n\nLive read-only odds (owner only):\n/odds\n/odds today\n/odds tomorrow\n\nDescriptive odds + recent statistics (owner only):\n/value\n/value today\n/value tomorrow\n\nRelease: ${TELEGRAM_BOT_RELEASE}`;
 }
 
 function formatResolvedPlayerStats(
