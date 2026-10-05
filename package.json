@@ -7,6 +7,8 @@
     "node": "24.x"
   },
   "scripts": {
+    "research": "tsx scripts/research-workflow.ts",
+    "research:benchmark": "tsx scripts/research-benchmark.ts",
     "build": "tsc --noEmit",
     "vercel-build": "tsc --noEmit",
     "audit:prod": "npm audit --omit=dev",

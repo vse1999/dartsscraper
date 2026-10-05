@@ -261,7 +261,12 @@ describe("value research", () => {
       { ...(base[2] as Match), result: "live" },
     ];
     const stats: PlayerStatsReader = { getPlayerStats: vi.fn(async (name: string): Promise<PlayerStatsResult> => resultWithMatches(name === alice.name ? alice : bob, rows)) };
-    const report = await makeReader([oddsMatch()], stats).getReport("today");
+    const report = await new DefaultValueReader({
+      oddsReader: { getOdds: async (): Promise<OddsReport> => odds([oddsMatch()]) },
+      playerStatsReader: stats,
+      playerDirectory: { getPlayers: async (): Promise<readonly PlayerIdentity[]> => [alice, bob] },
+      now: (): Date => new Date("2026-09-30T12:00:00Z"),
+    }).getReport("today");
     expect(report.cards[0]?.player1.last20?.matchCount).toBe(1);
   });
 

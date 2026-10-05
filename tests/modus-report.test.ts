@@ -107,7 +107,7 @@ describe("automatic MODUS report", () => {
     expect(overview).toContain("1 scheduled matchup");
     expect(overview).toContain("1. 20:30 · Rob Cross vs Luke Littler");
     expect(overview).toContain("Signal: Insufficient form coverage for a reliable comparison");
-    expect(overview).toContain("Confidence: LOW · Avg coverage 2/20");
+    expect(overview).toContain("Data coverage: LOW · Avg coverage 2/20");
   });
 
   it("deduplicates fixture players and sends one compact overview per unique player set", async () => {

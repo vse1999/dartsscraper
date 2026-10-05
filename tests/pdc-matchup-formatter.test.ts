@@ -70,7 +70,7 @@ describe("PDC matchup card formatter", () => {
     expect(messages[0]).toContain("Rob Cross: 96.00 avg · 5W–5L · 1.00 180/m · 50.00% CO");
     expect(messages[0]).toContain("H2H in form window: Rob Cross 5–5 Ryan Searle");
     expect(messages[0]).toContain("Signal: Rob Cross recent-form advantage (+5.00 avg)");
-    expect(messages[0]).toContain("Confidence: HIGH · Avg coverage 20/20");
+    expect(messages[0]).toContain("Data coverage: HIGH · Avg coverage 20/20");
     expect(messages[0]).toContain("https://pdpa.co.uk/event/world-series/");
   });
 
@@ -83,6 +83,6 @@ describe("PDC matchup card formatter", () => {
 
     expect(messages[0]).toContain("Ryan Searle: form unavailable");
     expect(messages[0]).toContain("Signal: Insufficient form coverage for a reliable comparison");
-    expect(messages[0]).toContain("Confidence: LOW");
+    expect(messages[0]).toContain("Data coverage: LOW");
   });
 });

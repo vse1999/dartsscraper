@@ -1,5 +1,6 @@
 import type { MatchupAnalysis, MatchupPlayerAnalysis } from "../services/matchup-analysis.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
+import { buildSummaryBrief } from "../research/brief.js";
 
 const MAX_PLAYER_NAME_LENGTH = 64;
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
@@ -27,6 +28,7 @@ export function formatModusMatchupMessages(options: ModusMatchupFormatterOptions
   ));
   const footer = [
     ...(options.incomplete ? ["⚠️ MODUS research incomplete; unavailable players were not retried."] : []),
+    "Signals are unvalidated descriptive thresholds (+2 average / +3 momentum), not probabilities. Mean-of-match-averages; format and source-update freshness unknown.",
     "👇 Tap a player below for detailed match statistics.",
   ].join("\n");
   return splitAtCardBoundaries(header, cards, footer);
@@ -50,10 +52,13 @@ function formatMatchupCard(analysis: MatchupAnalysis, index: number, timeZone: s
   } else {
     lines.push("H2H in form window: none found");
   }
-  lines.push(`Signal: ${analysis.signal.description}`);
+  lines.push(`Signal: ${truncate(analysis.signal.description, 180)}`);
   lines.push(
-    `Confidence: ${analysis.confidence.toLocaleUpperCase("en-US")} · Avg coverage ${analysis.availableAverageCount}/${analysis.expectedAverageCount}`,
+    `Data coverage: ${analysis.confidence.toLocaleUpperCase("en-US")} · Avg coverage ${analysis.availableAverageCount}/${analysis.expectedAverageCount}`,
   );
+  if (analysis.playerOne.summary !== null && analysis.playerTwo.summary !== null) {
+    lines.push(...buildSummaryBrief(playerOne, analysis.playerOne.summary, playerTwo, analysis.playerTwo.summary).lines.slice(0, 3));
+  }
   return lines.join("\n");
 }
 
@@ -128,6 +133,6 @@ function formatTime(startTime: string | null, timeZone: string): string {
 }
 
 function truncate(value: string, maximumLength: number): string {
-  const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const normalized = value.normalize("NFKC").replace(/[\u0000-\u001F\u007F]/gu, " ").replace(/\s+/gu, " ").trim();
   return normalized.length <= maximumLength ? normalized : `${normalized.slice(0, maximumLength - 1)}…`;
 }

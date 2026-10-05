@@ -18,6 +18,8 @@ import {
   type ValueCommandResponder,
 } from "../src/telegram/value-command.js";
 import { formatValueMessages } from "../src/telegram/value-formatter.js";
+import { summarizeResearchHistory } from "../src/research/statistics.js";
+import type { Match } from "../src/schemas/match.js";
 
 const logger: Logger = {
   debug: (): void => undefined,
@@ -178,6 +180,42 @@ function valueUpdate(updateId: number, userId: number, chatType: "private" | "gr
 }
 
 describe("Telegram value command", () => {
+  it("leads a typical complete matchup with its brief and fits one Telegram page", () => {
+    const history: readonly Match[] = Array.from({ length: 20 }, (_: unknown, index: number): Match => ({
+      date: `2026-09-${String(30 - index).padStart(2, "0")}`, tournament: "Test", round: null, result: "Won", opponent: "Other", score: "6 V 3",
+      average: 90, oneEighties: 1, checkoutHits: 2, checkoutAttempts: 4, checkoutPercentage: 50,
+    }));
+    const base = card(0);
+    const first: ValuePlayerAssessment = { ...base.player1, research: summarizeResearchHistory(history) };
+    const second: ValuePlayerAssessment = { ...base.player2, research: summarizeResearchHistory(history) };
+    const messages = formatValueMessages(report([{ ...base, player1: first, player2: second, players: [first, second] }]));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.length).toBeLessThanOrEqual(4096);
+    expect(messages[0]?.indexOf("Brief (")).toBeLessThan(messages[0]?.indexOf("Player 1:") ?? 0);
+  });
+  it("paginates expanded research briefs with adversarial names and opposing partial evidence", () => {
+    const history = (average: number | null, hits: number): readonly Match[] => Array.from({ length: 20 }, (_: unknown, index: number): Match => ({
+      date: `2026-09-${String(30 - index).padStart(2, "0")}`, tournament: "Test", round: null, result: "Won", opponent: "Other", score: "6 V 3",
+      average, oneEighties: null, checkoutHits: hits, checkoutAttempts: 4, checkoutPercentage: hits / 4 * 100,
+    }));
+    const cards = Array.from({ length: 12 }, (_: unknown, index: number): ValueMatchCard => {
+      const base = card(index);
+      const name = `Player ${index} One\u0000\n${"X".repeat(10_000)}`;
+      const first: ValuePlayerAssessment = { ...base.player1, canonicalName: name, research: summarizeResearchHistory(history(100, 1)) };
+      const second: ValuePlayerAssessment = { ...base.player2, research: summarizeResearchHistory(history(index === 0 ? null : 90, 2)) };
+      return { ...base, player1: first, player2: second, players: [first, second], match: { ...base.match, player1: name } };
+    });
+    const messages = formatValueMessages(report(cards));
+    const output = messages.join("\n");
+    expect(messages.every((message: string): boolean => message.length <= 4_096)).toBe(true);
+    expect(output).not.toContain("\u0000");
+    expect(output).toContain("Contrary evidence");
+    expect(output).toContain("no advantage is inferred");
+    expect(output).toContain("Disjoint windows");
+    expect(output).toContain("not independent evidence");
+    expect(output).toContain("no explicit paired denominator");
+    for (let index = 0; index < 12; index += 1) expect(output).toContain(`Player ${index} Two`);
+  });
   it("accepts only today/tomorrow and defaults to today", () => {
     expect(parseValueCommand("/value")).toBe("today");
     expect(parseValueCommand("/value today")).toBe("today");

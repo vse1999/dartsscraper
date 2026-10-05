@@ -1,6 +1,5 @@
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
-import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
 import { DartsOrakelRequestError, DartsOrakelStructureChangedError, InsufficientMatchDataError, ModusHistoryUnavailableError, PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
 import { ConsoleLogger, noopLogger, type Logger } from "../logger.js";
 import bundledModusIndex from "../../data/modus-results-index.json" with { type: "json" };
@@ -11,7 +10,9 @@ import {
 } from "../modus/player-history-service.js";
 import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
-import { PlayerMatchesService } from "../services/player-matches.js";
+import { ResearchHistoryService, type ResearchEvidenceReference, type ResearchHistoryReader } from "../research/history-service.js";
+import { createResearchStorage, createResearchReaderFetch } from "../research/config.js";
+import type { ResearchHistorySummary } from "../research/statistics.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import type { PlayerStatsSource } from "./query.js";
@@ -19,6 +20,8 @@ import type { PlayerStatsSource } from "./query.js";
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
 
 export interface PlayerStatsResult {
+  readonly evidence?: ResearchEvidenceReference;
+  readonly research?: ResearchHistorySummary;
   readonly playerName: string;
   readonly requestedCount: number;
   readonly matches: readonly Match[];
@@ -39,9 +42,7 @@ export interface PlayerStatsReader {
   ): Promise<PlayerStatsResult>;
 }
 
-export interface PlayerMatchesReader {
-  getLastMatches(playerName: string, limit: number, signal?: AbortSignal): Promise<MatchResult>;
-}
+export type PlayerMatchesReader = ResearchHistoryReader;
 
 export class DartsPlayerStatsService implements PlayerStatsReader {
   private readonly matchesService: PlayerMatchesReader;
@@ -62,13 +63,17 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
   }
 
   private async readPlayerStats(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PlayerStatsResult> {
-    const result = signal === undefined
+    const snapshot = this.matchesService.getLastMatchesSnapshot === undefined ? undefined
+      : await this.matchesService.getLastMatchesSnapshot(playerName, matchCount, signal);
+    const result = snapshot?.value ?? (signal === undefined
       ? await this.matchesService.getLastMatches(playerName, matchCount)
-      : await this.matchesService.getLastMatches(playerName, matchCount, signal);
+      : await this.matchesService.getLastMatches(playerName, matchCount, signal));
     throwIfAborted(signal);
     const summary = calculateMatchSummary(result.matches);
 
     return {
+      ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
+      ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
       playerName: result.player.name,
       requestedCount: matchCount,
       matches: result.matches,
@@ -135,7 +140,7 @@ export function createDefaultPlayerStatsService(
   logger?: Logger,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  const dartsStats = createDartsPlayerStatsService(serviceLogger, true, 250, 0);
+  const dartsStats = sharedDartsStats(serviceLogger);
   const modusHistory = new ModusPlayerHistoryService({
     source: new OfficialModusHistorySource({ logger: serviceLogger }),
     index: bundledModusIndex,
@@ -155,7 +160,15 @@ export function createDefaultBulkPlayerStatsService(
   logger?: Logger,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  return createDartsPlayerStatsService(serviceLogger, true, 3_200, 2);
+  return sharedDartsStats(serviceLogger);
+}
+
+let sharedResearchStats: PlayerStatsReader | undefined;
+
+/** One paced canonical history reader for interactive, compare, PDC and value commands per process. */
+function sharedDartsStats(logger: Logger): PlayerStatsReader {
+  sharedResearchStats ??= createDartsPlayerStatsService(logger, true, 3_200, 2);
+  return sharedResearchStats;
 }
 
 function createDartsPlayerStatsService(
@@ -169,12 +182,14 @@ function createDartsPlayerStatsService(
     maxRetries,
     minRequestIntervalMs,
     logger,
-    fetchImpl: createJinaReaderFetch(),
+    fetchImpl: createResearchReaderFetch(),
   });
-  const matchesService = new PlayerMatchesService({
+  const storage = createResearchStorage();
+  const matchesService = new ResearchHistoryService({
     resolver: new PlayerResolver(client),
     scraper: new DartsOrakelScraper(client, { enrichStatistics }),
-    logger,
+    ...storage,
+    onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; valid source research remains non-durable."),
   });
   return new DartsPlayerStatsService(matchesService, logger);
 }

@@ -11,6 +11,23 @@ export const MatchSchema = z.object({
   opponent: z.string().trim().min(1),
   score: z.string().trim().min(1),
   average: z.number().finite().nonnegative().max(MAX_THREE_DART_AVERAGE).nullable(),
+  // Provider identities are evidence, not a claim of globally unique match IDs.
+  provenance: z.object({
+    provider: z.literal("dartsorakel"),
+    compositeId: z.string().min(1).max(512),
+    tournamentId: z.number().int().positive(),
+    eventId: z.number().int().positive(),
+    opponentId: z.number().int().positive(),
+    sourceUrl: z.string().url().refine((value): boolean => {
+      const url = new URL(value);
+      return url.origin === "https://dartsorakel.com" && url.username === "" && url.password === "" && url.search === "" && url.hash === "";
+    }),
+    datePrecision: z.literal("date-only"),
+    completedAt: z.null(),
+  }).strict().optional(),
+  // Only explicit provider denominators may populate these fields.
+  legsPlayed: z.number().int().positive().max(10_000).optional(),
+  dartsThrown: z.number().int().positive().max(100_000).optional(),
   // Optional keeps non-DartsOrakel Match producers source compatible.
   // Enriched DartsOrakel matches always set all four fields explicitly.
   oneEighties: z.number().int().nonnegative().nullable().optional(),

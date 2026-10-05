@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ModusPlayersService } from "../modus/service.js";
 import type { OfficialModusResultsService } from "../modus/results-service.js";
 import type { PdcTournamentService } from "../pdc/service.js";
-import type { PlayerMatchesService } from "../services/player-matches.js";
+import type { ResearchHistoryReader } from "../research/history-service.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import { resolveResearchDate } from "./date.js";
 
@@ -19,7 +19,7 @@ export interface DartsAgentToolDependencies {
   modusService: Pick<ModusPlayersService, "getModusPlayers">;
   modusResultsService?: Pick<OfficialModusResultsService, "getResults">;
   pdcTournamentService?: Pick<PdcTournamentService, "getResultsForDate">;
-  playerMatchesService: Pick<PlayerMatchesService, "getLastMatches">;
+  playerMatchesService: ResearchHistoryReader;
   now?: () => Date;
   timeZone?: string;
 }
@@ -61,17 +61,24 @@ export class DartsAgentToolExecutor {
         }
         case "getPlayerMatches": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
-          const result = await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit);
+          const snapshot = await this.dependencies.playerMatchesService.getLastMatchesSnapshot?.(args.player, args.limit, signal);
+          const result = snapshot?.value ?? await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit, signal);
           const summary = calculateMatchSummary(result.matches);
-          return { ok: true, data: { ...result, meanMatchAverage: summary.average, summary } };
+          return { ok: true, data: { ...result, meanMatchAverage: summary.average, summary,
+            ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
+            ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
+          } };
         }
         case "getPlayerMatchAverage": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
-          const result = await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit);
+          const snapshot = await this.dependencies.playerMatchesService.getLastMatchesSnapshot?.(args.player, args.limit, signal);
+          const result = snapshot?.value ?? await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit, signal);
           const summary = calculateMatchSummary(result.matches);
           return {
             ok: true,
             data: {
+              ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
+              ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
               player: result.player.name,
               requestedLimit: args.limit,
               matchCount: result.matches.length,

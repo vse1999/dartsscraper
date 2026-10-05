@@ -131,6 +131,52 @@ Cache failures are non-fatal. Delete `.cache` manually only when intentionally f
 
 ## Documentation
 
+### Research evidence and local workflow
+
+Research histories now reuse a canonical player snapshot across ten/twenty-match
+requests, with a 60-second observation TTL. Telegram interactive/compare/PDC/value
+factories share the same paced DartsOrakel reader within one process. Source update
+time and query completeness remain explicitly unknown: collection or normalization
+time is not proof of an upstream update. The official MODUS history route stays separate.
+
+`/compare` and `/value` include deterministic briefs, contrary scoring/finishing
+evidence, disjoint latest-10/previous-10 summaries, median/spread and sensitivity.
+180s per leg remain unavailable unless explicit paired legs are supplied. Public
+matchup confidence labels now say **data coverage**, not prediction confidence.
+
+Memory-only research is the default. To retain versioned evidence on this local
+machine, explicitly set `RESEARCH_LOCAL_LEDGER_ENABLED=true` in the shell. The
+application does not automatically load `.env.local`. This flag is rejected on
+Vercel/Lambda: local files are not durable shared cloud storage.
+
+```powershell
+$env:RESEARCH_LOCAL_LEDGER_ENABLED = 'true'
+npm run research -- collect --input docs/research-batch.example.json
+npm run research -- replay <evidence-id>
+npm run research -- feedback <evidence-id> useful time-saved
+npm run research:benchmark
+```
+
+`collect` performs read-only public-source research when explicitly invoked; it
+never schedules work or sends Telegram messages. `replay` and `feedback` are local
+only. Feedback labels are `useful`, `not-useful`, `incorrect`; reasons are
+`time-saved`, `source-error`, `identity-error`, `missing-data`, `unclear`, `other`.
+Use a new `runLabel` for a new collection; resuming an existing label preserves its
+completed evidence instead of claiming it is newly observed.
+
+Evidence is retained in ignored `.cache/research-evidence` (default 1,000 records,
+2 MB per record). Checkpoints/feedback use `.cache/research-workflow`; local Reader
+reservations use `.cache/research-control`. Reservations coordinate only processes
+using this same workspace directory, not all users sharing an IP/key. Do not use a
+network filesystem or run uncoordinated collectors against the same allowance.
+Abandoned collection/feedback/Reader locks and `.write-lock` require explicit
+inspection and recovery after confirming no owner is active; locks are never stolen.
+Full ledgers require intentional archival; records are not silently deleted.
+
+See the [first-delivery plan](./docs/FIRST_DELIVERY_IMPLEMENTATION_PLAN.md),
+[second-delivery plan](./docs/SECOND_DELIVERY_IMPLEMENTATION_PLAN.md), and
+[implementation walkthrough](./docs/FIRST_DELIVERY_WALKTHROUGH.md).
+
 - [Full local user manual](./MANUAL.md)
 - [Original chatbot extension guide](./docs/CHATBOT_MANUAL.md)
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md)

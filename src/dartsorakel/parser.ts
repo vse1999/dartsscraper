@@ -174,6 +174,16 @@ function parseMatchRow(
     opponent,
     score,
     average,
+    provenance: {
+      provider: "dartsorakel",
+      compositeId: correlationIdentity(row),
+      tournamentId: row.tournament_key,
+      eventId: row.event_key,
+      opponentId: row.winner_key === player.id ? row.loser_key : row.winner_key,
+      sourceUrl: `https://dartsorakel.com/player/details/${player.id}/${encodeURIComponent(player.slug)}`,
+      datePrecision: "date-only",
+      completedAt: null,
+    },
     ...(enrichment?.oneEighties === null || enrichment?.oneEighties === undefined
       ? {}
       : { oneEighties: enrichment.oneEighties }),

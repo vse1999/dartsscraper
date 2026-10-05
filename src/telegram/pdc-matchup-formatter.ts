@@ -8,6 +8,7 @@ import {
   type MatchupPlayerHistory,
 } from "../services/matchup-analysis.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
+import { buildSummaryBrief } from "../research/brief.js";
 
 const DEFAULT_MATCH_COUNT = 10;
 const MAX_PLAYER_NAME_LENGTH = 64;
@@ -50,7 +51,7 @@ export function formatPdcMatchupMessages(report: PdcUpcomingReport): readonly st
     ...(incomplete
       ? ["⚠️ PDC research incomplete; some player form lookups reached the deadline."]
       : []),
-    "Signals compare recent form only; they are not bookmaker-value estimates.",
+    "Signals are unvalidated descriptive thresholds (+2 average / +3 momentum), not probabilities. Mean-of-match-averages; format and source-update freshness unknown.",
     ...evidenceUrls.map((url) => `Schedule source: ${url}`),
   ].join("\n");
   return splitAtCardBoundaries(header, cards, footer);
@@ -64,14 +65,17 @@ function formatCard(fixture: PdcFixture, analysis: MatchupAnalysis, index: numbe
   ).join(" · ");
   const lines = [
     `${index + 1}. ${formatFixtureTime(fixture)} · ${playerOne} vs ${playerTwo}`,
-    context,
+    truncate(context, 180),
     formatParticipant(analysis.playerOne),
     formatTrend(analysis.playerOne),
     formatParticipant(analysis.playerTwo),
     formatTrend(analysis.playerTwo),
     formatHeadToHead(analysis, playerOne, playerTwo),
-    `Signal: ${analysis.signal.description}`,
-    `Confidence: ${analysis.confidence.toLocaleUpperCase("en-US")} · Avg coverage ${analysis.availableAverageCount}/${analysis.expectedAverageCount}`,
+    `Signal: ${truncate(analysis.signal.description, 180)}`,
+    `Data coverage: ${analysis.confidence.toLocaleUpperCase("en-US")} · Avg coverage ${analysis.availableAverageCount}/${analysis.expectedAverageCount}`,
+    ...(analysis.playerOne.summary === null || analysis.playerTwo.summary === null ? [] : buildSummaryBrief(
+      playerOne, analysis.playerOne.summary, playerTwo, analysis.playerTwo.summary,
+    ).lines.slice(0, 3)),
   ];
   return lines.filter((line) => line !== "").join("\n");
 }
@@ -143,6 +147,6 @@ function joinMessage(header: string, cards: readonly string[], footer: string): 
 }
 
 function truncate(value: string, maximumLength: number): string {
-  const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const normalized = value.normalize("NFKC").replace(/[\u0000-\u001F\u007F]/gu, " ").replace(/\s+/gu, " ").trim();
   return normalized.length <= maximumLength ? normalized : `${normalized.slice(0, maximumLength - 1)}…`;
 }

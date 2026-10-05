@@ -1,4 +1,6 @@
 import type { Match } from "../schemas/match.js";
+import { summarizeResearchHistory, type ResearchWindowSummary } from "../research/statistics.js";
+import { buildResearchBrief } from "../research/brief.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import type { PlayerHistoryComparison } from "../services/matchup-analysis.js";
 import type { ComparePlayerResearch, CompareReport } from "./compare-command.js";
@@ -23,6 +25,14 @@ function formatSummary(report: CompareReport): readonly string[] {
   ].join("\n");
   const blocks: string[] = [];
 
+  const first = report.players[0]?.result;
+  const second = report.players[1]?.result;
+  if (first !== null && first !== undefined && second !== null && second !== undefined) {
+    blocks.push(buildResearchBrief(
+      { name: first.playerName, summary: first.research ?? summarizeResearchHistory(first.matches) },
+      { name: second.playerName, summary: second.research ?? summarizeResearchHistory(second.matches) },
+    ).lines.join("\n"));
+  }
   for (const player of report.players) blocks.push(formatPlayerSummary(player, report.requestedCount));
   const analysis = formatAnalysis(report.analysis);
   if (analysis !== null) blocks.push(analysis);
@@ -44,6 +54,7 @@ function formatPlayerSummary(player: ComparePlayerResearch, requestedCount: numb
 
   const result = player.result;
   const summary = calculateMatchSummary(result.matches);
+  const research = result.research ?? summarizeResearchHistory(result.matches);
   const displayName = truncateLabel(result.playerName);
   const average = summary.average === null ? "—" : summary.average.toFixed(2);
   const best = summary.bestAverage === null ? "—" : summary.bestAverage.toFixed(2);
@@ -60,11 +71,21 @@ function formatPlayerSummary(player: ComparePlayerResearch, requestedCount: numb
   return [
     `${displayName} · ${result.matches.length}/${requestedCount} matches`,
     `Form ${summary.wins}W-${summary.losses}L-${summary.draws}D · Unknown/unclassified ${summary.unclassifiedResults}`,
-    `Avg ${average} · Best ${best}`,
+    `Avg ${average} · Best ${best} · arithmetic mean of match averages (not pooled)`,
     `180s ${oneEightiesTotal} total · ${perMatch180s} per available match`,
     `Checkout ${checkout} (${checkoutEvidence})`,
     `Coverage Avg ${summary.availableAverageCount}/${result.matches.length} · 180s ${summary.availableOneEightiesCount}/${result.matches.length} · Checkout ${summary.availableCheckoutCount}/${result.matches.length}`,
+    formatResearchWindow("Latest 10", research.latest10),
+    formatResearchWindow("Previous 10 (disjoint)", research.previous10),
+    `⚠️ ${research.warnings.slice(1).join(" ")}`,
+    ...(result.evidence === undefined ? [] : [`Evidence ${truncateLabel(result.evidence.id, 72)} · observed ${truncateLabel(result.evidence.observedAt, 40)} · ${result.evidence.persistence}${result.evidence.stale ? " · stale" : ""}`]),
   ].join("\n");
+}
+
+function formatResearchWindow(label: string, window: ResearchWindowSummary): string {
+  const number = (value: number | null): string => value === null ? "—" : value.toFixed(2);
+  const span = window.dateSpan === null ? "dates unavailable" : `${window.dateSpan.oldest}–${window.dateSpan.newest} (${window.dateSpan.days} elapsed days)`;
+  return `${label}: ${window.matchCount} matches · ${span}; mean ${number(window.summary.average)} (${window.summary.availableAverageCount} averages); median ${number(window.medianAverage)} · sample SD ${number(window.sampleStandardDeviation)}; mean removing highest/lowest ${number(window.meanWithoutHighest)}/${number(window.meanWithoutLowest)}; 180/leg ${number(window.oneEightiesPerLeg)} (${window.pairedOneEighties}/${window.pairedLegs}, ${window.pairedLegMatchCount} paired matches).`;
 }
 
 function formatAnalysis(analysis: PlayerHistoryComparison | null): string | null {
@@ -160,7 +181,7 @@ function formatScore(score: string): string {
 }
 
 function truncateLabel(value: string, maximumLength: number = MAX_LABEL_LENGTH): string {
-  const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  const normalized = value.normalize("NFKC").replace(/[\u0000-\u001F\u007F]/gu, " ").replace(/\s+/gu, " ").trim();
   if (normalized.length <= maximumLength) return normalized;
   return `${normalized.slice(0, maximumLength - 1)}…`;
 }

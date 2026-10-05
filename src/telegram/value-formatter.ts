@@ -7,6 +7,7 @@ import type {
   ValueWindowSummary,
 } from "../value/contracts.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
+import { buildResearchBrief } from "../research/brief.js";
 
 const MAX_FIELD_LENGTH = 180;
 const MAX_URL_LENGTH = 240;
@@ -96,6 +97,10 @@ function formatCard(card: ValueMatchCard): string {
     `Bookmaker: ${safeField(match.bookmaker, 48)} · odds source: ${safeUrl(match.sourceUrl)}`,
     `Status: ${status}`,
     `Context: ${context}`,
+    ...(card.player1.research === undefined || card.player2.research === undefined ? [] : buildResearchBrief(
+      { name: match.player1, summary: card.player1.research },
+      { name: match.player2, summary: card.player2.research },
+    ).lines),
     formatPlayer(card.player1, 1),
     formatPlayer(card.player2, 2),
   ].join("\n");
@@ -118,6 +123,20 @@ function formatPlayer(player: ValuePlayerAssessment, position: 1 | 2): string {
   else lines.push("Last 10: unavailable (no verified statistics).");
   if (player.last20 !== null) lines.push(formatWindow(player.last20));
   else lines.push("Last 20: unavailable (no verified statistics).");
+  if (player.last10 !== null && player.last20 !== null) lines.push("Last 10 is included in Last 20; these are not independent evidence.");
+  if (player.research !== undefined) {
+    const research = player.research;
+    const recent = research.latest10;
+    const previous = research.previous10;
+    lines.push(`Disjoint windows: latest 10 mean ${recent.summary.average === null ? "—" : formatNumber(recent.summary.average)} (${recent.matchCount}) vs previous 10 ${previous.summary.average === null ? "—" : formatNumber(previous.summary.average)} (${previous.matchCount}).`);
+    lines.push(`Latest 10: median ${recent.medianAverage === null ? "—" : formatNumber(recent.medianAverage)} · sample SD ${recent.sampleStandardDeviation === null ? "—" : formatNumber(recent.sampleStandardDeviation)} · mean without highest/lowest ${recent.meanWithoutHighest === null ? "—" : formatNumber(recent.meanWithoutHighest)}/${recent.meanWithoutLowest === null ? "—" : formatNumber(recent.meanWithoutLowest)}.`);
+    if (recent.dateSpan !== null) lines.push(`Observed matches: ${recent.dateSpan.oldest}–${recent.dateSpan.newest} (${recent.dateSpan.days} elapsed days).`);
+    lines.push(`180/leg: ${recent.oneEightiesPerLeg === null ? "unavailable (no explicit paired denominator)" : `${formatNumber(recent.oneEightiesPerLeg)} (${recent.pairedOneEighties}/${recent.pairedLegs}; ${recent.pairedLegMatchCount} paired matches)`}.`);
+    // Shared metric/context disclaimers appear in the window and matchup brief;
+    // repeat only actionable sample/order warnings at player level.
+    lines.push(...research.warnings.slice(2).map((warning: string): string => `Research note: ${safeField(warning, 240)}`));
+  }
+  if (player.source.evidence !== undefined) lines.push(`Evidence ${safeField(player.source.evidence.id, 72)} · observed ${safeField(player.source.evidence.observedAt, 40)} · ${player.source.evidence.persistence}${player.source.evidence.stale ? " · stale" : ""}`);
   if (player.source.sourceUrl !== null) lines.push(`Stats source: ${safeUrl(player.source.sourceUrl)}`);
   for (const evidenceUrl of player.source.evidenceUrls.slice(0, 2)) {
     lines.push(`Stats evidence: ${safeUrl(evidenceUrl)}`);
@@ -147,7 +166,7 @@ function formatWindow(window: ValueWindowSummary): string {
   const oneEighties = window.oneEighties.total === null
     ? `180s unavailable (${formatCoverage(window.oneEighties.coverage)})`
     : `180s ${window.oneEighties.total} total (${formatCoverage(window.oneEighties.coverage)})`;
-  return `Last ${window.window}: ${samples}; ${average}; ${checkout}; ${oneEighties}`;
+  return `Last ${window.window}: ${samples}; ${average} (arithmetic mean of match averages, not pooled); ${checkout}; ${oneEighties}`;
 }
 
 function formatMetric(value: number | null, label: string, coverage: ValueSourceCoverage): string {

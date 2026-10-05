@@ -2,7 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import bundledModusIndex from "../data/modus-results-index.json" with { type: "json" };
 
 import { DartsOrakelClient } from "../src/dartsorakel/client.js";
-import { createJinaReaderFetch } from "../src/dartsorakel/reader-fetch.js";
 import { DartsOrakelScraper } from "../src/dartsorakel/scraper.js";
 import { resolveResearchDate } from "../src/agent/date.js";
 import { DartsNerdModusSource } from "../src/modus/darts-nerd-source.js";
@@ -12,7 +11,8 @@ import { OfficialModusHistorySource } from "../src/modus/history-source.js";
 import { OfficialModusSource } from "../src/modus/official-source.js";
 import { ModusPlayersService } from "../src/modus/service.js";
 import { PlayerResolver } from "../src/player/resolver.js";
-import { PlayerMatchesService } from "../src/services/player-matches.js";
+import { ResearchHistoryService } from "../src/research/history-service.js";
+import { createResearchStorage, createResearchReaderFetch } from "../src/research/config.js";
 import { ConsoleLogger, type Logger } from "../src/logger.js";
 import { createTelegramSender } from "../src/telegram/sender.js";
 import { readBotConfiguration } from "../src/telegram/bot.js";
@@ -140,14 +140,15 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
     backoffMs: AUTOMATED_RETRY_BACKOFF_MS,
     minRequestIntervalMs: AUTOMATED_REQUEST_INTERVAL_MS,
     logger,
-    fetchImpl: createJinaReaderFetch(),
+    fetchImpl: createResearchReaderFetch(),
   });
   const playerResolver = new PlayerResolver(client);
   const scraper = new DartsOrakelScraper(client);
-  const playerMatchesService = new PlayerMatchesService({
+  const playerMatchesService = new ResearchHistoryService({
     resolver: playerResolver,
     scraper,
-    logger,
+    ...createResearchStorage(),
+    onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; report remains non-durable."),
   });
   const statsService = new DartsPlayerStatsService(playerMatchesService, logger);
   const fixtureNameResolver = new FixtureNameResolver(client);

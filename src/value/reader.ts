@@ -1,5 +1,5 @@
 import { DartsOrakelClient, type DartsOrakelClientOptions } from "../dartsorakel/client.js";
-import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
+import { createResearchReaderFetch } from "../research/config.js";
 import { InsufficientMatchDataError } from "../errors.js";
 import { createDefaultOddsReader, type DefaultOddsReaderOptions } from "../odds/default.js";
 import type { OddsDay, OddsIdentityReader, OddsMatch, OddsReader, OddsReport, OddsMatchIdentityEvidence, OddsParticipantIdentityEvidence } from "../odds/contracts.js";
@@ -30,6 +30,7 @@ import {
 import { abbreviatedNameParts, identityKey, isTimeout, normalizeForMatch, positiveInteger, samePlayerName, signalStatus, unresolvedResolution, validDate, waitForSignal } from "./helpers.js";
 import { DartsOrakelPlayerDirectory, resolveFromDirectory, type Resolution } from "./directory.js";
 import { matchesDisplayedName } from "../odds/identity.js";
+import { summarizeResearchHistory } from "../research/statistics.js";
 
 const MAX_HISTORY = 20;
 const DEFAULT_CONCURRENCY = 3;
@@ -515,7 +516,7 @@ function escapeRegExp(value: string): string {
 export function createDefaultValueReader(options: DefaultValueReaderOptions = {}): ValueReader {
   const directoryClient = new DartsOrakelClient({
     ...(options.dartsOrakel ?? {}),
-    fetchImpl: options.dartsOrakel?.fetchImpl ?? createJinaReaderFetch(),
+    fetchImpl: options.dartsOrakel?.fetchImpl ?? createResearchReaderFetch(),
   });
   const dependencies: ValueReaderDependencies = {
     oddsReader: options.oddsReader ?? createDefaultOddsReader(options.odds),
@@ -584,6 +585,7 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
     ? completedNewestFirst(parsedMatches, cutoffDate).slice(0, MAX_HISTORY)
     : [];
   const source = {
+    ...(stats.result.evidence === undefined ? {} : { evidence: stats.result.evidence }),
     label: stats.result.sourceLabel,
     provider: stats.result.provider,
     sourceUrl: stats.result.sourceUrl,
@@ -609,6 +611,7 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
   return {
     requestedName,
     status: historyComplete && metricsComplete ? "available" : "partial",
+    research: summarizeResearchHistory(history),
     identity: resolution.identity,
     canonicalName: resolution.identity.name,
     source,

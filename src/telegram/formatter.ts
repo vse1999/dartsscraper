@@ -60,6 +60,11 @@ export function formatPlayerStats(result: PlayerStatsResult): string {
     `Coverage: Avg ${result.availableAverageCount}/${result.matches.length} · 180s ${summary.availableOneEightiesCount}/${result.matches.length} · Checkout ${summary.availableCheckoutCount}/${result.matches.length}`,
     ...(unclassifiedNotice === "" ? [] : [unclassifiedNotice]),
     ...(missingDataNotice === "" ? [] : [missingDataNotice]),
+    ...(result.evidence === undefined ? [] : [
+      `Evidence: ${result.evidence.id}`,
+      `Research observed: ${result.evidence.observedAt} · ${result.evidence.persistence}${result.evidence.stale ? " · stale" : ""}`,
+      "Source-update time/query completeness unknown; observation is not proof of a provider update.",
+    ]),
     "",
     `🔗 Source: ${truncate(result.sourceUrl, MAX_SOURCE_URL_LENGTH)}`,
   ].join("\n");

@@ -20,7 +20,7 @@ describe("DartsOrakel match parser", () => {
     const matches = parseDartsOrakelMatches(damon, readMatchFixture("damon-heta-matches.json"));
 
     expect(matches.length).toBeGreaterThan(10);
-    expect(matches.slice(0, 3)).toEqual([
+    expect(matches.slice(0, 3).map(({ provenance: _provenance, ...match }) => match)).toEqual([
       {
         date: "2026-07-29",
         tournament: "Players Championship 26",
@@ -54,7 +54,7 @@ describe("DartsOrakel match parser", () => {
   it("includes Rob Cross matches from TV and European Tour events", () => {
     const matches = parseDartsOrakelMatches(robCross, readMatchFixture("rob-cross-matches.json"));
 
-    expect(matches.slice(0, 10)).toEqual([
+    expect(matches.slice(0, 10).map(({ provenance: _provenance, ...match }) => match)).toEqual([
       { date: "2026-07-22", tournament: "World Matchplay", round: "Last 16", result: "Lost", opponent: "Gerwyn Price", score: "5 V 11", average: 93.82 },
       { date: "2026-07-20", tournament: "World Matchplay", round: "Last 32", result: "Won", opponent: "Danny Noppert", score: "10 V 3", average: 97.41 },
       { date: "2026-07-10", tournament: "European Tour 10", round: "Last 48 (Premier)", result: "Lost", opponent: "Max Hopp", score: "3 V 6", average: 93.3 },

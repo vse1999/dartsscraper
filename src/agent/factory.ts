@@ -14,7 +14,8 @@ import { OfficialModusResultsService } from "../modus/results-service.js";
 import { ModusPlayersService } from "../modus/service.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { PlayerResolver } from "../player/resolver.js";
-import { PlayerMatchesService } from "../services/player-matches.js";
+import { ResearchHistoryService } from "../research/history-service.js";
+import { createResearchStorage } from "../research/config.js";
 import { FastResearchService } from "../services/fast-research.js";
 import { DartsResearchAgent } from "./harness.js";
 import { OllamaClient } from "./ollama-client.js";
@@ -40,10 +41,11 @@ export function createDartsResearchRuntime(options: CreateAgentOptions = {}): Da
   const rootCache = options.cacheDirectory ?? path.resolve(process.cwd(), ".cache");
   const dartsClient = new DartsOrakelClient({ cache: new FileCache({ directory: path.join(rootCache, "dartsorakel"), logger }), logger });
   const playerResolver = new PlayerResolver(dartsClient);
-  const playerMatchesService = new PlayerMatchesService({
+  const playerMatchesService = new ResearchHistoryService({
     resolver: playerResolver,
     scraper: new DartsOrakelScraper(dartsClient),
-    logger,
+    ...createResearchStorage(),
+    onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; valid source research remains non-durable."),
   });
   const fixtureNameResolver = new FixtureNameResolver(dartsClient);
   const fixtureIdentityFallback = new ModusFixtureIdentitySource({
