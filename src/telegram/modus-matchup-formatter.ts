@@ -1,6 +1,7 @@
 import type { MatchupAnalysis, MatchupPlayerAnalysis } from "../services/matchup-analysis.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
 import { buildSummaryBrief } from "../research/brief.js";
+import { formatResearchDiagnostics } from "../research/diagnostic-format.js";
 
 const MAX_PLAYER_NAME_LENGTH = 64;
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
@@ -41,8 +42,10 @@ function formatMatchupCard(analysis: MatchupAnalysis, index: number, timeZone: s
     `${index + 1}. ${formatTime(analysis.fixture.startTime, timeZone)} · ${playerOne} vs ${playerTwo}`,
     formatParticipant(analysis.playerOne),
     formatTrend(analysis.playerOne),
+    ...formatResearchDiagnostics(analysis.playerOne.assessment, analysis.playerOne.coverage),
     formatParticipant(analysis.playerTwo),
     formatTrend(analysis.playerTwo),
+    ...formatResearchDiagnostics(analysis.playerTwo.assessment, analysis.playerTwo.coverage),
   ].filter((line): line is string => line !== null);
   if (analysis.headToHead.meetings > 0) {
     lines.push(

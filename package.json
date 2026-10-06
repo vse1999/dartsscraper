@@ -9,6 +9,8 @@
   "scripts": {
     "research": "tsx scripts/research-workflow.ts",
     "research:benchmark": "tsx scripts/research-benchmark.ts",
+    "research:planning-benchmark": "tsx scripts/research-planning-benchmark.ts",
+    "verify:research": "tsx scripts/verify-research.ts",
     "build": "tsc --noEmit",
     "vercel-build": "tsc --noEmit",
     "audit:prod": "npm audit --omit=dev",

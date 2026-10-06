@@ -1,5 +1,6 @@
 import type { Match } from "../schemas/match.js";
 import { calculateMatchSummary, type MatchSummary } from "../services/statistics.js";
+import { inspectResearchOrdering } from "./quality.js";
 
 export interface ResearchWindowSummary {
   readonly matchCount: number;
@@ -50,7 +51,7 @@ export function summarizeResearchHistory(matches: readonly Match[]): ResearchHis
     version: 1,
     latest10,
     previous10,
-    averageDelta: latest10.matchCount === 10 && previous10.matchCount === 10
+    averageDelta: inspectResearchOrdering(selected, 10).chronological && latest10.matchCount === 10 && previous10.matchCount === 10
       && latest10.summary.availableAverageCount === 10 && previous10.summary.availableAverageCount === 10
       && latest10.summary.average !== null && previous10.summary.average !== null
       ? round(latest10.summary.average - previous10.summary.average) : null,

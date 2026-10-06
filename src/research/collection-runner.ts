@@ -3,10 +3,13 @@ import path from "node:path";
 import { z } from "zod";
 import { normalizePlayerName } from "../player/resolver.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
-import { EvidenceIdSchema } from "./evidence.js";
+import { EvidenceIdSchema, type EvidenceSnapshot } from "./evidence.js";
 import type { EvidenceLedger } from "./ledger.js";
 import type { ResearchHistoryRead } from "./history-service.js";
 import { readLocalJson, withLocalLock, writeLocalJson } from "./local-files.js";
+import { createCollectionBudget, bindCollectionCancellation, type CollectionBudget } from "./collection-budget.js";
+import type { PlayerIdentity } from "../schemas/player.js";
+import { assessResearchQuality } from "./quality.js";
 
 export const ResearchBatchInputSchema = z.object({
   version: z.literal(1),
@@ -55,6 +58,8 @@ export interface ResearchCollectionOptions {
   readonly reader: { getLastMatchesSnapshot(name: string, count: number, signal?: AbortSignal): Promise<ResearchHistoryRead> };
   readonly now?: () => Date;
   readonly budgetMs?: number;
+  readonly budget?: CollectionBudget;
+  readonly canonicalParticipants?: ReadonlyMap<string, PlayerIdentity>;
 }
 
 /** Explicit single-host read-only collection. Completed evidence is resumed, never restamped as current. */
@@ -62,13 +67,15 @@ export async function collectResearchBatch(input: unknown, options: ResearchColl
   const parsed = ResearchBatchInputSchema.parse(input);
   const players = [...new Map(parsed.players.map((name: string): readonly [string, string] => [normalizePlayerName(name), name])).values()];
   const now = options.now ?? ((): Date => new Date());
-  const budget = options.budgetMs ?? 220_000;
-  if (!Number.isSafeInteger(budget) || budget <= 0 || budget > 300_000) throw new Error("Research collection budget must be between 1 and 300000 milliseconds.");
   throwIfAborted(signal);
+  const deadline = options.budget === undefined
+    ? createCollectionBudget({ ...(options.budgetMs === undefined ? {} : { budgetMs: options.budgetMs }), ...(signal === undefined ? {} : { signal }) })
+    : bindCollectionCancellation(options.budget, signal);
   const id = createHash("sha256").update(JSON.stringify({ version: 1, runLabel: parsed.runLabel, players })).digest("hex");
-  return withLocalLock(options.directory, "collection", async (): Promise<ResearchCollectionResult> => {
+  const operation = withLocalLock(options.directory, "collection", async (): Promise<ResearchCollectionResult> => {
+    throwIfAborted(deadline.workSignal);
     const file = path.join(options.directory, `${id}.json`);
-    const saved = await readLocalJson(file);
+    const saved = await waitWithSignal(readLocalJson(file), deadline.workSignal);
     throwIfAborted(signal);
     const timestamp = now().toISOString();
     let checkpoint: ResearchCheckpoint = saved === null
@@ -84,38 +91,55 @@ export async function collectResearchBatch(input: unknown, options: ResearchColl
     for (const row of checkpoint.rows) {
       throwIfAborted(signal);
       if (row.status !== "complete" || row.evidenceId === null) continue;
-      const record = await options.ledger.read(row.evidenceId);
+      const record = await waitWithSignal(options.ledger.read(row.evidenceId), deadline.workSignal);
       if (record === null || record.player.id !== row.canonicalPlayerId) throw new Error("Checkpoint evidence is missing or has a different identity; restore the ledger before resuming.");
+      const expected = options.canonicalParticipants?.get(row.requestedName);
+      if (options.canonicalParticipants !== undefined && (expected === undefined || expected.id !== record.player.id
+        || expected.name !== record.player.name || expected.slug !== record.player.slug)) {
+        throw new Error("Checkpoint evidence differs from the verified fixture participant; restore verified associations before resuming.");
+      }
       resumed += 1;
     }
-    const controller = new AbortController();
-    const abort = (): void => controller.abort(signal?.reason);
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted === true) abort();
-    const timer = setTimeout((): void => controller.abort(new Error("Research collection deadline reached.")), budget);
-    try {
-      for (const name of players) {
-        if (controller.signal.aborted) break;
-        if (checkpoint.rows.some((row) => row.requestedName === name && row.status === "complete")) continue;
-        let row: z.infer<typeof RowSchema>;
-        try {
-          const result = await waitWithSignal(options.reader.getLastMatchesSnapshot(name, 20, controller.signal), controller.signal);
-          throwIfAborted(controller.signal);
-          if (result.evidence.persistence !== "local" || await options.ledger.read(result.evidence.id) === null) {
-            row = { requestedName: name, status: "failed", evidenceId: null, canonicalPlayerId: null, failure: "PERSISTENCE_UNAVAILABLE" };
-          } else row = { requestedName: name, status: "complete", evidenceId: result.evidence.id, canonicalPlayerId: result.value.player.id, failure: null };
-        } catch (error: unknown) {
-          void error;
-          row = { requestedName: name, status: "failed", evidenceId: null, canonicalPlayerId: null, failure: controller.signal.aborted ? "DEADLINE" : "SOURCE_UNAVAILABLE" };
+    for (const name of players) {
+      throwIfAborted(signal);
+      if (deadline.workSignal.aborted || deadline.workRemainingMs() <= 0) break;
+      if (checkpoint.rows.some((row) => row.requestedName === name && row.status === "complete")) continue;
+      let row: z.infer<typeof RowSchema>;
+      try {
+        const result = await waitWithSignal(options.reader.getLastMatchesSnapshot(name, 20, deadline.workSignal), deadline.workSignal);
+        throwIfAborted(deadline.workSignal);
+        const expected = options.canonicalParticipants?.get(name);
+        if (options.canonicalParticipants !== undefined && (expected === undefined || expected.id !== result.value.player.id
+          || expected.name !== result.value.player.name || expected.slug !== result.value.player.slug)) throw new Error("Collected identity differs from the verified fixture participant.");
+        let record: EvidenceSnapshot | null = null;
+        if (result.evidence.persistence === "local") {
+          try {
+            record = await waitWithSignal(options.ledger.read(result.evidence.id), deadline.workSignal);
+          } catch (error: unknown) {
+            throwIfAborted(signal);
+            if (deadline.workSignal.aborted) throw error;
+            // A failed receipt read is a storage failure, not a failure from the data source.
+          }
         }
-        checkpoint = withChecksum({ ...checkpoint, updatedAt: now().toISOString(), rows: [...checkpoint.rows.filter((existing) => existing.requestedName !== name), row] });
-        await writeLocalJson(file, checkpoint);
+        // Existence alone cannot bind a receipt to the identity and rows being checkpointed.
+        const verified = record !== null && record.id === result.evidence.id && record.requestedCount >= 20
+          && record.player.name === result.value.player.name && record.player.slug === result.value.player.slug
+          && assessResearchQuality(result.value.matches, { evidence: record, expectedPlayerId: result.value.player.id, now: now() }).validity.status === "valid";
+        if (!verified) {
+          row = { requestedName: name, status: "failed", evidenceId: null, canonicalPlayerId: null, failure: "PERSISTENCE_UNAVAILABLE" };
+        } else row = { requestedName: name, status: "complete", evidenceId: result.evidence.id, canonicalPlayerId: result.value.player.id, failure: null };
+      } catch (error: unknown) {
+        throwIfAborted(signal);
+        void error;
+        row = { requestedName: name, status: "failed", evidenceId: null, canonicalPlayerId: null, failure: deadline.workSignal.aborted ? "DEADLINE" : "SOURCE_UNAVAILABLE" };
       }
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
+      throwIfAborted(deadline.totalSignal);
+      checkpoint = withChecksum({ ...checkpoint, updatedAt: now().toISOString(), rows: [...checkpoint.rows.filter((existing) => existing.requestedName !== name), row] });
+      await writeLocalJson(file, checkpoint);
     }
     const pending = players.length - checkpoint.rows.filter((row) => row.status === "complete").length;
     return { checkpoint, status: pending === 0 ? "complete" : "partial", resumed, pending, deliveryAuthorized: false };
   });
+  try { return await waitWithSignal(operation, deadline.totalSignal); }
+  finally { if (options.budget === undefined) deadline.close(); }
 }

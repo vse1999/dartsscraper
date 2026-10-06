@@ -22,6 +22,31 @@ function setup(ledger: EvidenceLedger = new MemoryEvidenceLedger({ now }), clock
 }
 
 describe("canonical research history", () => {
+  it("rejects conflicting identities before joining an in-flight acquisition", async () => {
+    let release: (matches: Match[]) => void = (): void => undefined;
+    const pending = new Promise<Match[]>((resolve): void => { release = resolve; });
+    const { service, scrape } = setup();
+    scrape.mockImplementation(async (): Promise<Match[]> => pending);
+    const first = service.getResolvedMatchesSnapshot(player, 20);
+    await vi.waitFor(() => expect(scrape).toHaveBeenCalledOnce());
+    const conflicting = service.getResolvedMatchesSnapshot({ ...player, slug: "conflicting-profile" }, 20);
+    const rejection = expect(conflicting).rejects.toThrow("conflicting canonical identity");
+    release(history());
+    await rejection;
+    expect((await first).value.player).toEqual(player);
+    expect(scrape).toHaveBeenCalledOnce();
+  });
+  it("inspects canonical warm history without resolving, reading storage or fetching", async () => {
+    const { service, scrape } = setup();
+    expect(service.peekFreshSnapshot(player)).toBeNull();
+    await service.getResolvedMatchesSnapshot(player, 20);
+    const peek = service.peekFreshSnapshot(player, 10);
+    expect(peek?.value.matches).toHaveLength(10);
+    expect(service.peekFreshSnapshot({ ...player, name: "Different identity" })).toBeNull();
+    expect(scrape).toHaveBeenCalledOnce();
+    if (peek !== null) peek.value.matches[0]!.average = 1;
+    expect(service.peekFreshSnapshot(player)?.value.matches[0]?.average).toBe(90);
+  });
   it("uses one full scope for 10 then 20 and aliases, retaining original evidence time", async () => {
     const { service, scrape } = setup();
     const first = await service.getLastMatchesSnapshot("Example", 10, new AbortController().signal);

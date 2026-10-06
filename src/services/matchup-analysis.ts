@@ -1,6 +1,8 @@
 import { normalizePlayerName } from "../player/resolver.js";
 import type { Match } from "../schemas/match.js";
 import { calculateMatchSummary, type MatchSummary } from "./statistics.js";
+import { assessResearchQuality, inspectResearchOrdering, type QualityAssessment } from "../research/quality.js";
+import { diagnoseResearchCoverage, type CoverageDiagnostics } from "../research/coverage.js";
 
 const MAX_TREND_WINDOW = 5;
 const MIN_TREND_WINDOW = 3;
@@ -19,6 +21,8 @@ export interface MatchupPlayerHistory {
   readonly playerName: string;
   readonly requestedCount: number;
   readonly matches: readonly Match[];
+  readonly assessment?: QualityAssessment;
+  readonly coverage?: { readonly displayed: CoverageDiagnostics };
 }
 
 export interface AverageTrend {
@@ -34,6 +38,8 @@ export interface MatchupPlayerAnalysis {
   readonly summary: MatchSummary | null;
   readonly oneEightiesPerMatch: number | null;
   readonly trend: AverageTrend | null;
+  readonly assessment?: QualityAssessment;
+  readonly coverage?: CoverageDiagnostics;
 }
 
 export interface MatchupHeadToHead {
@@ -89,8 +95,8 @@ export function analyzePlayerHistories(
     headToHead: calculateHeadToHeadByNames(
       playerOneHistory.playerName,
       playerTwoHistory.playerName,
-      playerOneHistory,
-      playerTwoHistory,
+      playerOne.available ? playerOneHistory : undefined,
+      playerTwo.available ? playerTwoHistory : undefined,
     ),
     availableAverageCount: (playerOne.summary?.availableAverageCount ?? 0)
       + (playerTwo.summary?.availableAverageCount ?? 0),
@@ -115,7 +121,8 @@ export function analyzeMatchup(
     fixture,
     playerOne,
     playerTwo,
-    headToHead: calculateHeadToHead(fixture, playerOneHistory, playerTwoHistory),
+    headToHead: calculateHeadToHeadByNames(fixture.playerOne, fixture.playerTwo,
+      playerOne.available ? playerOneHistory : undefined, playerTwo.available ? playerTwoHistory : undefined),
     confidence,
     signal: calculateSignal(playerOne, playerTwo, confidence),
     availableAverageCount,
@@ -126,6 +133,10 @@ export function analyzeMatchup(
 function analyzePlayer(player: string, history: MatchupPlayerHistory | undefined): MatchupPlayerAnalysis {
   if (history === undefined) {
     return { player, available: false, summary: null, oneEightiesPerMatch: null, trend: null };
+  }
+  const assessment = history.assessment ?? assessResearchQuality(history.matches);
+  if (assessment.validity.status === "rejected") {
+    return { player, available: false, summary: null, oneEightiesPerMatch: null, trend: null, assessment };
   }
   const summary = calculateMatchSummary(history.matches);
   const availableOneEighties = history.matches
@@ -139,12 +150,15 @@ function analyzePlayer(player: string, history: MatchupPlayerHistory | undefined
       ? null
       : roundToTwo(availableOneEighties.reduce((total, value) => total + value, 0) / availableOneEighties.length),
     trend: calculateAverageTrend(history.matches),
+    assessment,
+    coverage: history.coverage?.displayed ?? diagnoseResearchCoverage(history.matches, { requestedRowCount: history.requestedCount }),
   };
 }
 
 function calculateAverageTrend(matches: readonly Match[]): AverageTrend | null {
   const windowSize = Math.min(MAX_TREND_WINDOW, Math.floor(matches.length / 2));
   if (windowSize < MIN_TREND_WINDOW) return null;
+  if (!inspectResearchOrdering(matches, windowSize).chronological) return null;
   const recentAverage = calculateWindowAverage(matches.slice(0, windowSize), windowSize);
   const previousAverage = calculateWindowAverage(matches.slice(windowSize, windowSize * 2), windowSize);
   if (recentAverage === null || previousAverage === null) return null;
@@ -162,14 +176,6 @@ function calculateWindowAverage(matches: readonly Match[], windowSize: number): 
     .filter((average): average is number => average !== null && Number.isFinite(average));
   if (values.length < Math.ceil(windowSize * 0.6)) return null;
   return roundToTwo(values.reduce((total, average) => total + average, 0) / values.length);
-}
-
-function calculateHeadToHead(
-  fixture: MatchupFixture,
-  playerOneHistory: MatchupPlayerHistory | undefined,
-  playerTwoHistory: MatchupPlayerHistory | undefined,
-): MatchupHeadToHead {
-  return calculateHeadToHeadByNames(fixture.playerOne, fixture.playerTwo, playerOneHistory, playerTwoHistory);
 }
 
 function calculateHeadToHeadByNames(

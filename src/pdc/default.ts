@@ -14,10 +14,12 @@ export function createDefaultPdcTournamentService(
   logger: Logger,
   playerStats?: PdcPlayerStatsReader,
   cacheDirectory?: string,
+  sharedFixtureNameClient?: DartsOrakelClient,
+  sharedFixtureNameResolver?: FixtureNameResolver,
 ): PdcTournamentService {
   const resolvedCacheDirectory = cacheDirectory ?? path.resolve(process.cwd(), ".cache", "pdc");
   const readerFetch = createJinaReaderFetch();
-  const fixtureNameClient = new DartsOrakelClient({
+  const fixtureNameClient = sharedFixtureNameClient ?? new DartsOrakelClient({
     fetchImpl: readerFetch,
     maxRetries: 1,
     minRequestIntervalMs: 500,
@@ -25,7 +27,7 @@ export function createDefaultPdcTournamentService(
   });
   const officialFixtures = new PdpaPdcFixtureSource({ logger });
   const liveFixtures = new DartsNerdPdcFixtureSource({
-    resolver: new FixtureNameResolver(fixtureNameClient),
+    resolver: sharedFixtureNameResolver ?? new FixtureNameResolver(fixtureNameClient),
     logger,
   });
   return new PdcTournamentService({

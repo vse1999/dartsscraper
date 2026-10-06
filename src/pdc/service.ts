@@ -124,6 +124,13 @@ export class PdcTournamentService {
     return this.getResults(events, signal);
   }
 
+  public async getFixturesForDate(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
+    throwIfAborted(signal);
+    const validatedDate = IsoDateSchema.parse(date);
+    if (this.fixtureSource === undefined) throw new Error("PDC fixture source is not configured.");
+    return withOptionalDeadline(this.getFixtures(validatedDate, signal), signal);
+  }
+
   public async getUpcomingReportForDate(
     date: string,
     signal?: AbortSignal,
@@ -134,7 +141,7 @@ export class PdcTournamentService {
     if (this.fixtureSource === undefined || this.playerStats === undefined) {
       throw new Error("Upcoming PDC research requires both a fixture source and a player statistics reader.");
     }
-    const fixtures = await withOptionalDeadline(this.getFixtures(validatedDate, signal), signal);
+    const fixtures = await this.getFixturesForDate(validatedDate, signal);
     const names = deduplicatePlayerNames(fixtures.flatMap((fixture) => [fixture.playerOne, fixture.playerTwo]));
     const partialPlayers: Array<PdcPlayerResearch> = names.map((requestedName) => ({
       requestedName,

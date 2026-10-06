@@ -1,4 +1,5 @@
 import type { Match } from "../schemas/match.js";
+import { formatResearchDiagnostics } from "../research/diagnostic-format.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import type { PlayerStatsResult } from "./stats-service.js";
 
@@ -58,6 +59,7 @@ export function formatPlayerStats(result: PlayerStatsResult): string {
     `180s: ${summary.totalOneEighties === null ? "—" : `${summary.totalOneEighties} total`}`,
     `Checkout: ${summary.checkoutPercentage === null ? "—" : `${summary.checkoutPercentage.toFixed(2)}% · ${summary.checkoutHits}/${summary.checkoutAttempts} converted`}`,
     `Coverage: Avg ${result.availableAverageCount}/${result.matches.length} · 180s ${summary.availableOneEightiesCount}/${result.matches.length} · Checkout ${summary.availableCheckoutCount}/${result.matches.length}`,
+    ...formatResearchDiagnostics(result.assessment, result.coverage?.displayed),
     ...(unclassifiedNotice === "" ? [] : [unclassifiedNotice]),
     ...(missingDataNotice === "" ? [] : [missingDataNotice]),
     ...(result.evidence === undefined ? [] : [

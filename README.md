@@ -177,6 +177,52 @@ See the [first-delivery plan](./docs/FIRST_DELIVERY_IMPLEMENTATION_PLAN.md),
 [second-delivery plan](./docs/SECOND_DELIVERY_IMPLEMENTATION_PLAN.md), and
 [implementation walkthrough](./docs/FIRST_DELIVERY_WALKTHROUGH.md).
 
+### Research automation package (2026-10-06)
+
+Quality assessment and observed-row coverage diagnostics now accompany research
+reads/reports. Missing checkout/legs do not erase valid averages. Invalid evidence
+is rejected; date-only ties across a trend boundary suppress chronological claims.
+Provider update time and format remain unknown where unsupported.
+
+Explicit local fixture collection derives participants from existing source adapters:
+
+```powershell
+$env:RESEARCH_LOCAL_LEDGER_ENABLED = 'true'
+npm run research -- collect-fixtures --source pdc --date 2026-10-06 --run-label pdc-20261006-a
+# Substitute --source modus for MODUS fixtures.
+```
+
+This command makes read-only source requests only when invoked; it creates no
+schedule and sends no Telegram messages. Repeating the same source/date/label
+resumes its evidence, not a fresh collection. Use a new label to collect again.
+Changed fixture/identity inventory under the same label fails safely. Source
+failures, unresolved participants, overflow and deadline deferrals remain explicit.
+An empty supported inventory performs no history acquisition.
+
+The v2 association manifests live under `.cache/research-workflow/fixture-v2` and
+wrap unchanged v1 job checkpoints in a separate namespace. Legacy input-file
+collection/replay/feedback remains supported. The total budget starts before
+preflight/discovery; final storage/output has a bounded reserve. Already-started
+non-cooperative I/O can outlive the caller; never recover its lock until it stops.
+Hosted shared storage and scheduling remain out of scope.
+
+```powershell
+npm run verify:research
+npm run audit:prod
+npm run research:planning-benchmark
+```
+
+Verification runs typecheck, full tests, replay tests, and synthetic reuse/planning
+benchmarks. Tests block unmocked external `fetch`; literal loopback HTTP is allowed
+for local server tests, without redirects. This is a fetch guard, not an operating
+system network sandbox. The production dependency audit is separate and accesses
+the package registry. PDC's existing four-way collection remains unchanged because
+serial collection failed the synthetic participant-yield gate.
+
+See [package plan](./docs/RESEARCH_AUTOMATION_PACKAGE_IMPLEMENTATION_PLAN.md) and
+[Feynman walkthrough](./docs/RESEARCH_AUTOMATION_PACKAGE_WALKTHROUGH.md).
+See also the [review and hardening evidence](./docs/RESEARCH_AUTOMATION_PACKAGE_REVIEW.md).
+
 - [Full local user manual](./MANUAL.md)
 - [Original chatbot extension guide](./docs/CHATBOT_MANUAL.md)
 - [Agent architecture](./docs/AGENT_ARCHITECTURE.md)

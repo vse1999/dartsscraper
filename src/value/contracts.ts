@@ -3,6 +3,8 @@ import type { PlayerStatsReader, PlayerStatsResult } from "../telegram/stats-ser
 import type { PlayerIdentity } from "../schemas/player.js";
 import type { ResearchHistorySummary } from "../research/statistics.js";
 import type { ResearchEvidenceReference } from "../research/history-service.js";
+import type { QualityAssessment } from "../research/quality.js";
+import type { ResearchCoverageScopes } from "../research/history-service.js";
 
 export type ValueReaderDay = OddsDay;
 export type ValueDataStatus = "available" | "partial" | "unavailable" | "unresolved" | "timed_out" | "cancelled" | "failed";
@@ -52,6 +54,8 @@ export interface ValuePlayerContext {
 }
 
 export interface ValuePlayerAssessment {
+  readonly assessment?: QualityAssessment;
+  readonly coverage?: ResearchCoverageScopes;
   readonly research?: ResearchHistorySummary;
   readonly requestedName: string;
   readonly status: ValueDataStatus;

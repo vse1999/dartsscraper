@@ -13,6 +13,9 @@ import type { Match, MatchResult } from "../schemas/match.js";
 import { ResearchHistoryService, type ResearchEvidenceReference, type ResearchHistoryReader } from "../research/history-service.js";
 import { createResearchStorage, createResearchReaderFetch } from "../research/config.js";
 import type { ResearchHistorySummary } from "../research/statistics.js";
+import { assessResearchQuality, type QualityAssessment } from "../research/quality.js";
+import { diagnoseResearchCoverageScopes } from "../research/coverage.js";
+import type { ResearchCoverageScopes } from "../research/history-service.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import type { PlayerStatsSource } from "./query.js";
@@ -20,6 +23,8 @@ import type { PlayerStatsSource } from "./query.js";
 const DARTSORAKEL_TIMEOUT_MS = 15_000;
 
 export interface PlayerStatsResult {
+  readonly assessment?: QualityAssessment;
+  readonly coverage?: ResearchCoverageScopes;
   readonly evidence?: ResearchEvidenceReference;
   readonly research?: ResearchHistorySummary;
   readonly playerName: string;
@@ -69,9 +74,16 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
       ? await this.matchesService.getLastMatches(playerName, matchCount)
       : await this.matchesService.getLastMatches(playerName, matchCount, signal));
     throwIfAborted(signal);
+    const assessment = snapshot?.assessment ?? assessResearchQuality(result.matches, {
+      expectedPlayerId: result.player.id,
+      ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
+    });
+    if (assessment.validity.status === "rejected") throw new Error("Research evidence rejected; statistics are unavailable.");
     const summary = calculateMatchSummary(result.matches);
 
     return {
+      assessment,
+      coverage: snapshot?.coverage ?? diagnoseResearchCoverageScopes(result.matches, matchCount),
       ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
       ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
       playerName: result.player.name,
@@ -121,8 +133,12 @@ export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
     ), signal);
     throwIfAborted(signal);
     if (modus === null) throw new InsufficientMatchDataError(matchCount, 0);
+    const assessment = assessResearchQuality(modus.matches);
+    if (assessment.validity.status === "rejected") throw new Error("Research evidence rejected; statistics are unavailable.");
     const summary = calculateMatchSummary(modus.matches);
     return {
+      assessment,
+      coverage: diagnoseResearchCoverageScopes(modus.matches, matchCount),
       playerName: modus.playerName,
       requestedCount: matchCount,
       matches: modus.matches,

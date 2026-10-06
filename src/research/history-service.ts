@@ -9,9 +9,13 @@ import { validateLimit } from "../services/player-matches.js";
 import type { SnapshotRead } from "../services/snapshot-store.js";
 import { createEvidenceSnapshot, validateEvidenceSnapshot, type EvidenceSnapshot } from "./evidence.js";
 import type { EvidenceLedger } from "./ledger.js";
+import { assessResearchQuality, type QualityAssessment } from "./quality.js";
+import { diagnoseResearchCoverageScopes, type ResearchCoverageScopes } from "./coverage.js";
+export type { ResearchCoverageScopes } from "./coverage.js";
 import { summarizeResearchHistory, type ResearchHistorySummary } from "./statistics.js";
 
 export interface ResearchEvidenceReference {
+  readonly playerId?: number;
   readonly id: string;
   readonly observedAt: string;
   readonly sourceUpdatedAt: null;
@@ -30,6 +34,8 @@ export interface ResearchEvidenceReference {
 export interface ResearchHistoryRead extends SnapshotRead<MatchResult> {
   readonly evidence: ResearchEvidenceReference;
   readonly research: ResearchHistorySummary;
+  readonly assessment?: QualityAssessment;
+  readonly coverage?: ResearchCoverageScopes;
 }
 
 export interface ResearchHistoryReader {
@@ -37,6 +43,8 @@ export interface ResearchHistoryReader {
   getLastMatchesSnapshot?(playerName: string, limit: number, signal?: AbortSignal): Promise<SnapshotRead<MatchResult> & {
     readonly evidence?: ResearchEvidenceReference;
     readonly research?: ResearchHistorySummary;
+    readonly assessment?: QualityAssessment;
+    readonly coverage?: ResearchCoverageScopes;
   }>;
 }
 
@@ -57,6 +65,7 @@ interface Entry {
 }
 
 interface Flight {
+  readonly player: PlayerIdentity;
   readonly controller: AbortController;
   readonly promise: Promise<Entry>;
   subscribers: number;
@@ -97,20 +106,30 @@ export class ResearchHistoryService {
     validateLimit(limit);
     throwIfAborted(signal);
     const player = PlayerIdentitySchema.parse(await waitWithSignal(this.options.resolver.resolvePlayer(name, signal), signal));
+    return this.getResolvedMatchesSnapshot(player, limit, signal);
+  }
+
+  /** For already-verified fixture identities; canonical resolution is not repeated. */
+  public async getResolvedMatchesSnapshot(identity: PlayerIdentity, limit: number, signal?: AbortSignal): Promise<ResearchHistoryRead> {
+    validateLimit(limit);
+    const player = PlayerIdentitySchema.parse(identity);
     throwIfAborted(signal);
     const dateTo = nextBudapestDate(this.clock());
     const acquiredLimit = Math.max(20, limit);
     const key = `${player.id}:${dateTo}:${acquiredLimit}`;
     const current = this.entries.get(key);
-    if (current !== undefined && this.isFresh(current.snapshot)) {
+    if (current !== undefined && current.snapshot.player.name === player.name && current.snapshot.player.slug === player.slug && this.isFresh(current.snapshot)) {
       this.cacheHits += 1;
       return this.toRead(current, limit);
     }
     let flight = this.flights.get(key);
+    if (flight !== undefined && (flight.player.name !== player.name || flight.player.slug !== player.slug)) {
+      throw new Error("Research acquisition has a conflicting canonical identity; verify the player directory before retrying.");
+    }
     if (flight === undefined) {
       if (this.flights.size >= this.maxEntries) throw new Error("Research capacity reached; retry after existing history jobs finish.");
       const controller = new AbortController();
-      flight = { controller, subscribers: 0, settled: false, promise: this.acquire(player, acquiredLimit, dateTo, controller.signal) };
+      flight = { player, controller, subscribers: 0, settled: false, promise: this.acquire(player, acquiredLimit, dateTo, controller.signal) };
       const active = flight;
       this.flights.set(key, active);
       void active.promise.then((entry: Entry): void => {
@@ -140,6 +159,15 @@ export class ResearchHistoryService {
     }
   }
 
+  /** Inspect process-local reuse only; no resolver, ledger read or source request. */
+  public peekFreshSnapshot(identity: PlayerIdentity, limit: number = 20): ResearchHistoryRead | null {
+    const player = PlayerIdentitySchema.parse(identity);
+    validateLimit(limit);
+    const entry = this.entries.get(`${player.id}:${nextBudapestDate(this.clock())}:${Math.max(20, limit)}`);
+    if (entry === undefined || entry.snapshot.player.name !== player.name || entry.snapshot.player.slug !== player.slug || !this.isFresh(entry.snapshot)) return null;
+    return this.toRead(entry, limit);
+  }
+
   public diagnostics(): ResearchHistoryDiagnostics {
     return { acquisitions: this.acquisitions, cacheHits: this.cacheHits, failures: this.failures, activeAcquisitions: this.flights.size };
   }
@@ -150,7 +178,7 @@ export class ResearchHistoryService {
       const previous = await waitWithSignal(this.options.ledger.latest(player.id, dateTo, limit), signal);
       throwIfAborted(signal);
       if (previous !== null) validateEvidenceSnapshot(previous, this.clock());
-      if (previous !== null && previous.player.id === player.id && previous.player.name === player.name
+      if (previous !== null && previous.player.id === player.id && previous.player.name === player.name && previous.player.slug === player.slug
         && previous.dateTo === dateTo && previous.requestedCount >= limit && previous.matches.length > 0 && this.isFresh(previous)) {
         this.cacheHits += 1;
         return { snapshot: previous, persistence: this.options.persistence ?? "memory" };
@@ -187,13 +215,20 @@ export class ResearchHistoryService {
   private toRead(entry: Entry, limit: number): ResearchHistoryRead {
     const age = this.clock().getTime() - Date.parse(entry.snapshot.observedAt);
     if (age < 0 || !Number.isFinite(age)) throw new Error("Research observation has an invalid/future timestamp.");
+    const assessment = assessResearchQuality(entry.snapshot.matches, {
+      evidence: entry.snapshot, expectedPlayerId: entry.snapshot.player.id, now: this.clock(), freshTtlMs: this.freshTtlMs, persistence: entry.persistence,
+    });
+    if (assessment.validity.status === "rejected") throw new Error("Research evidence failed quality validation; no metrics were produced.");
     return {
       value: MatchResultSchema.parse({ player: entry.snapshot.player, matches: entry.snapshot.matches.slice(0, limit) }),
       fetchedAt: entry.snapshot.observedAt,
       dataAgeMs: age,
       stale: age > this.freshTtlMs,
       research: summarizeResearchHistory(entry.snapshot.matches),
+      assessment,
+      coverage: diagnoseResearchCoverageScopes(entry.snapshot.matches, limit, entry.snapshot.matches.slice(0, limit)),
       evidence: {
+        playerId: entry.snapshot.player.id,
         id: entry.snapshot.id, observedAt: entry.snapshot.observedAt, sourceUpdatedAt: null,
         sourceObservation: "normalized-response", persistence: entry.persistence, stale: age > this.freshTtlMs,
         quality: {

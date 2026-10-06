@@ -141,11 +141,15 @@ export function buildCompareAnalysis(
     playerName: playerOne.result.playerName,
     requestedCount,
     matches: playerOne.result.matches,
+    ...(playerOne.result.assessment === undefined ? {} : { assessment: playerOne.result.assessment }),
+    ...(playerOne.result.coverage === undefined ? {} : { coverage: playerOne.result.coverage }),
   };
   const playerTwoHistory: MatchupPlayerHistory = {
     playerName: playerTwo.result.playerName,
     requestedCount,
     matches: playerTwo.result.matches,
+    ...(playerTwo.result.assessment === undefined ? {} : { assessment: playerTwo.result.assessment }),
+    ...(playerTwo.result.coverage === undefined ? {} : { coverage: playerTwo.result.coverage }),
   };
   return analyzePlayerHistories(playerOneHistory, playerTwoHistory, requestedCount);
 }

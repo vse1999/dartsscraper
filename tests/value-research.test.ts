@@ -5,6 +5,8 @@ import type { Match } from "../src/schemas/match.js";
 import type { PlayerIdentity } from "../src/schemas/player.js";
 import type { PlayerStatsReader, PlayerStatsResult } from "../src/telegram/stats-service.js";
 import type { ValuePlayerDirectory } from "../src/value/contracts.js";
+import { formatValueMessages } from "../src/telegram/value-formatter.js";
+import { assessResearchQuality } from "../src/research/quality.js";
 
 const alice: PlayerIdentity = { id: 1, name: "Alice Smith", slug: "alice-smith" };
 const bob: PlayerIdentity = { id: 2, name: "Bob Jones", slug: "bob-jones" };
@@ -240,6 +242,12 @@ describe("value research", () => {
     expect(report.cards[0]?.status).toBe("unresolved");
     expect(report.cards[0]?.player1.last20).toBeNull();
     expect(report.cards[0]?.player2.last10).toBeNull();
+    expect(report.cards[0]?.player1.research).toBeUndefined();
+    expect(report.cards[0]?.player2.assessment).toBeUndefined();
+    expect(report.cards[0]?.player1.coverage).toBeUndefined();
+    const rendered = formatValueMessages(report).join("\n");
+    expect(rendered).not.toContain("Disjoint windows:");
+    expect(rendered).not.toContain("Brief (");
     expect(stats.getPlayerStats).toHaveBeenCalledOnce();
   });
 
@@ -275,6 +283,38 @@ describe("value research", () => {
     const report = await makeReader([oddsMatch("Alice Smith", "Bob Jones")], stats).getReport("today");
     expect(report.cards[0]?.player1.status).toBe("failed");
     expect(report.cards[0]?.player1.last20).toBeNull();
+  });
+
+  it("keeps an upstream rejected assessment from being rehabilitated by value research", async () => {
+    const aliceHistory = history(alice);
+    const rejectedAssessment = assessResearchQuality(aliceHistory.matches, {
+      now: new Date("2026-09-30T12:00:00.000Z"),
+      expectedPlayerId: 999,
+      evidence: {
+        playerId: alice.id,
+        observedAt: "2026-09-30T11:59:00.000Z",
+        persistence: "memory",
+        stale: false,
+        quality: { identity: "canonical" },
+      },
+    });
+    expect(rejectedAssessment.validity.status).toBe("rejected");
+    const stats: PlayerStatsReader = {
+      getPlayerStats: vi.fn(async (name: string): Promise<PlayerStatsResult> => {
+        const result = resultWithMatches(name === alice.name ? alice : bob, aliceHistory.matches);
+        return name === alice.name ? { ...result, assessment: rejectedAssessment } : result;
+      }),
+    };
+
+    const report = await makeReader([oddsMatch()], stats).getReport("today");
+    const player = report.cards[0]?.player1;
+    expect(player?.status).toBe("failed");
+    expect(player?.last10).toBeNull();
+    expect(player?.last20).toBeNull();
+    expect(player?.research).toBeUndefined();
+    expect(player?.coverage).toBeUndefined();
+    expect(player?.source.evidence).toBeUndefined();
+    expect(player?.assessment).toEqual(rejectedAssessment);
   });
 
   it("preserves identity-provider failure state and skips stats for the affected abbreviated slot", async () => {

@@ -8,6 +8,7 @@ import type {
 } from "../value/contracts.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
 import { buildResearchBrief } from "../research/brief.js";
+import { formatResearchDiagnostics } from "../research/diagnostic-format.js";
 
 const MAX_FIELD_LENGTH = 180;
 const MAX_URL_LENGTH = 240;
@@ -112,6 +113,7 @@ function formatPlayer(player: ValuePlayerAssessment, position: 1 | 2): string {
     : safeField(player.canonicalName, MAX_FIELD_LENGTH);
   const state = player.status === "available" ? "resolved" : player.status;
   const lines = [`Player ${position}: ${name} · ${state}`];
+  lines.push(...formatResearchDiagnostics(player.assessment, player.coverage?.displayed));
   if (player.status !== "available" && player.status !== "partial") {
     lines.push(`Cannot compare: ${safePlayerFailure(player)}.`);
   } else if (player.status === "partial") {

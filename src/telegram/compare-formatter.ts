@@ -1,6 +1,7 @@
 import type { Match } from "../schemas/match.js";
 import { summarizeResearchHistory, type ResearchWindowSummary } from "../research/statistics.js";
 import { buildResearchBrief } from "../research/brief.js";
+import { formatResearchDiagnostics } from "../research/diagnostic-format.js";
 import { calculateMatchSummary } from "../services/statistics.js";
 import type { PlayerHistoryComparison } from "../services/matchup-analysis.js";
 import type { ComparePlayerResearch, CompareReport } from "./compare-command.js";
@@ -75,6 +76,7 @@ function formatPlayerSummary(player: ComparePlayerResearch, requestedCount: numb
     `180s ${oneEightiesTotal} total · ${perMatch180s} per available match`,
     `Checkout ${checkout} (${checkoutEvidence})`,
     `Coverage Avg ${summary.availableAverageCount}/${result.matches.length} · 180s ${summary.availableOneEightiesCount}/${result.matches.length} · Checkout ${summary.availableCheckoutCount}/${result.matches.length}`,
+    ...formatResearchDiagnostics(result.assessment, result.coverage?.displayed),
     formatResearchWindow("Latest 10", research.latest10),
     formatResearchWindow("Previous 10 (disjoint)", research.previous10),
     `⚠️ ${research.warnings.slice(1).join(" ")}`,

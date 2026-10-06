@@ -4,6 +4,7 @@ import type { MatchResult } from "../src/schemas/match.js";
 import type { ModusResultsSnapshot } from "../src/modus/results-schemas.js";
 import type { PdcTournamentResult } from "../src/pdc/schemas.js";
 import type { PdcTournamentService } from "../src/pdc/service.js";
+import type { QualityAssessment } from "../src/research/quality.js";
 
 function matchResult(limit: number): MatchResult {
   return {
@@ -22,6 +23,42 @@ function executor(failure?: Error, pdcTournamentService?: Pick<PdcTournamentServ
     ...(pdcTournamentService === undefined ? {} : { pdcTournamentService }),
     playerMatchesService: { getLastMatches: async (_player, limit) => { if (failure !== undefined) throw failure; return matchResult(limit); } },
     now: () => new Date("2026-08-08T12:00:00Z"),
+  });
+}
+function rejectedAssessment(): QualityAssessment {
+  return {
+    version: 1,
+    validity: { status: "rejected", reasons: ["identity-conflict"] },
+    dimensions: {
+      identity: "conflict",
+      observationAge: "unknown",
+      providerFreshness: "unknown",
+      historyScope: "sufficient",
+      ordering: "ordered",
+      format: "unknown",
+      persistence: "unknown",
+    },
+    eligibility: {
+      scoringComparison: { status: "unavailable", reasons: ["identity-conflict"] },
+      weightedCheckoutComparison: { status: "unavailable", reasons: ["identity-conflict"] },
+      chronologicalTrendComparison: { status: "unavailable", reasons: ["identity-conflict"] },
+    },
+  };
+}
+function executorWithRejectedPlayerSnapshot(): DartsAgentToolExecutor {
+  const value = matchResult(3);
+  return new DartsAgentToolExecutor({
+    modusService: { getModusPlayers: async (date) => ({ event: "MODUS Super Series", date, players: [] }) },
+    playerMatchesService: {
+      getLastMatches: async (): Promise<MatchResult> => value,
+      getLastMatchesSnapshot: async () => ({
+        value,
+        fetchedAt: "2026-08-08T12:00:00.000Z",
+        dataAgeMs: 0,
+        stale: false,
+        assessment: rejectedAssessment(),
+      }),
+    },
   });
 }
 function modusSnapshot(date: string): ModusResultsSnapshot {
@@ -118,6 +155,17 @@ describe("agent tools", () => {
           checkoutAttempts: 4,
         },
       },
+    });
+  });
+  it.each(["getPlayerMatches", "getPlayerMatchAverage"] as const)("withholds rejected history from %s", async (name) => {
+    const result = await executorWithRejectedPlayerSnapshot().execute({
+      name,
+      arguments: { player: "Test Player", limit: 3 },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "TOOL_FAILED", message: "Research evidence rejected; statistics are unavailable." },
     });
   });
   it("returns a structured error for an unresolved player", async () => {

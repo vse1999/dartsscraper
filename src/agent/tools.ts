@@ -62,16 +62,20 @@ export class DartsAgentToolExecutor {
         case "getPlayerMatches": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
           const snapshot = await this.dependencies.playerMatchesService.getLastMatchesSnapshot?.(args.player, args.limit, signal);
+          if (snapshot?.assessment?.validity.status === "rejected") throw new Error("Research evidence rejected; statistics are unavailable.");
           const result = snapshot?.value ?? await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit, signal);
           const summary = calculateMatchSummary(result.matches);
           return { ok: true, data: { ...result, meanMatchAverage: summary.average, summary,
             ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
             ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
+            ...(snapshot?.assessment === undefined ? {} : { assessment: snapshot.assessment }),
+            ...(snapshot?.coverage === undefined ? {} : { coverage: snapshot.coverage }),
           } };
         }
         case "getPlayerMatchAverage": {
           const args = PlayerArgumentsSchema.parse(normalizeArguments(call.arguments));
           const snapshot = await this.dependencies.playerMatchesService.getLastMatchesSnapshot?.(args.player, args.limit, signal);
+          if (snapshot?.assessment?.validity.status === "rejected") throw new Error("Research evidence rejected; statistics are unavailable.");
           const result = snapshot?.value ?? await this.dependencies.playerMatchesService.getLastMatches(args.player, args.limit, signal);
           const summary = calculateMatchSummary(result.matches);
           return {
@@ -79,6 +83,8 @@ export class DartsAgentToolExecutor {
             data: {
               ...(snapshot?.evidence === undefined ? {} : { evidence: snapshot.evidence }),
               ...(snapshot?.research === undefined ? {} : { research: snapshot.research }),
+              ...(snapshot?.assessment === undefined ? {} : { assessment: snapshot.assessment }),
+              ...(snapshot?.coverage === undefined ? {} : { coverage: snapshot.coverage }),
               player: result.player.name,
               requestedLimit: args.limit,
               matchCount: result.matches.length,

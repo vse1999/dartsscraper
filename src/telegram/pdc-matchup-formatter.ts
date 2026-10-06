@@ -9,6 +9,7 @@ import {
 } from "../services/matchup-analysis.js";
 import { TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
 import { buildSummaryBrief } from "../research/brief.js";
+import { formatResearchDiagnostics } from "../research/diagnostic-format.js";
 
 const DEFAULT_MATCH_COUNT = 10;
 const MAX_PLAYER_NAME_LENGTH = 64;
@@ -68,8 +69,10 @@ function formatCard(fixture: PdcFixture, analysis: MatchupAnalysis, index: numbe
     truncate(context, 180),
     formatParticipant(analysis.playerOne),
     formatTrend(analysis.playerOne),
+    ...formatResearchDiagnostics(analysis.playerOne.assessment, analysis.playerOne.coverage),
     formatParticipant(analysis.playerTwo),
     formatTrend(analysis.playerTwo),
+    ...formatResearchDiagnostics(analysis.playerTwo.assessment, analysis.playerTwo.coverage),
     formatHeadToHead(analysis, playerOne, playerTwo),
     `Signal: ${truncate(analysis.signal.description, 180)}`,
     `Data coverage: ${analysis.confidence.toLocaleUpperCase("en-US")} · Avg coverage ${analysis.availableAverageCount}/${analysis.expectedAverageCount}`,

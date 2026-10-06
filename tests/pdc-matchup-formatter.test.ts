@@ -72,6 +72,10 @@ describe("PDC matchup card formatter", () => {
     expect(messages[0]).toContain("Signal: Rob Cross recent-form advantage (+5.00 avg)");
     expect(messages[0]).toContain("Data coverage: HIGH · Avg coverage 20/20");
     expect(messages[0]).toContain("https://pdpa.co.uk/event/world-series/");
+    const rendered = messages[0] ?? "";
+    expect(rendered).toContain("Disjoint 10-vs-10 trend unavailable:");
+    expect(rendered.indexOf("Observed scope")).toBeGreaterThan(rendered.indexOf("Rob Cross: 96.00"));
+    expect(rendered.indexOf("Observed scope")).toBeLessThan(rendered.indexOf("Ryan Searle: 91.00"));
   });
 
   it("keeps the fixture card when one player's research is unavailable", () => {

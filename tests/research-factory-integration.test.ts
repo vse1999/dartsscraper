@@ -37,6 +37,11 @@ describe("real research factory integration", () => {
     expect(first.evidence?.id).toBe(second.evidence?.id);
     expect(first.evidence?.observedAt).toBe(second.evidence?.observedAt);
     expect(first.evidence?.persistence).toBe("memory");
+    expect(first.assessment?.validity.status).toBe("valid");
+    expect(first.assessment?.dimensions.persistence).toBe("memory");
+    expect(first.assessment?.eligibility.chronologicalTrendComparison.status).toBe("unavailable");
+    expect(first.coverage?.displayed.observedRowCount).toBe(10);
+    expect(first.coverage?.previous10.observedRowCount).toBe(10);
     expect(second.matches[0]?.provenance?.provider).toBe("dartsorakel");
     expect(fetchMock).toHaveBeenCalledTimes(4); // directory + average/180/checkout views once
     expect(fetchMock.mock.calls.every(([input]) => String(input).startsWith("https://r.jina.ai/https://dartsorakel.com/"))).toBe(true);

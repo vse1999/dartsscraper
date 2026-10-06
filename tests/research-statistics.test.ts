@@ -12,9 +12,15 @@ describe("comparable research statistics", () => {
     const result = summarizeResearchHistory(rows);
     expect(result.latest10.summary.average).toBe(100);
     expect(result.previous10.summary.average).toBe(80);
-    expect(result.averageDelta).toBe(20);
+    expect(result.averageDelta).toBeNull(); // A date-only tie across the boundary cannot establish a chronological change.
     expect(result.warnings.join(" ")).toContain("same-day ordering");
     expect(rows[0]?.average).toBe(100);
+  });
+
+  it("retains a complete chronological delta when dates establish the window boundary", () => {
+    const rows = Array.from({ length: 20 }, (_: unknown, index: number): Match => match(index < 10 ? 100 : 80,
+      { date: `2026-09-${String(30 - index).padStart(2, "0")}` }));
+    expect(summarizeResearchHistory(rows).averageDelta).toBe(20);
   });
 
   it("keeps missing data missing and does not call a short preceding sample a complete comparison", () => {

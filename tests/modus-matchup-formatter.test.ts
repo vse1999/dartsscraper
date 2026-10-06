@@ -59,6 +59,10 @@ describe("MODUS matchup card formatter", () => {
     expect(messages[0]).toContain("Alpha 1: 96.00 avg · 5W–5L · 1.00 180/m · 50.00% CO");
     expect(messages[0]).toContain("Signal: Alpha 1 recent-form advantage (+5.00 avg)");
     expect(messages[0]).toContain("Data coverage: HIGH · Avg coverage 20/20");
+    const rendered = messages[0] ?? "";
+    expect(rendered).toContain("Disjoint 10-vs-10 trend unavailable:");
+    expect(rendered.indexOf("Observed scope")).toBeGreaterThan(rendered.indexOf("Alpha 1: 96.00"));
+    expect(rendered.indexOf("Observed scope")).toBeLessThan(rendered.indexOf("Beta 1: 91.00"));
   });
 
   it("splits large reports only between matchup cards", () => {

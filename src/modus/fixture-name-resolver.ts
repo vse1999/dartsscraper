@@ -1,4 +1,6 @@
 import type { DartsOrakelClient } from "../dartsorakel/client.js";
+import { playerIdentityFromStatsRow } from "../player/resolver.js";
+import type { PlayerIdentity } from "../schemas/player.js";
 import { PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
 import { DirectoryLoader } from "../player/directory-loader.js";
 import type { PlayerStatsResponse } from "../schemas/player.js";
@@ -35,6 +37,20 @@ export class FixtureNameResolver {
       const refreshed = await this.directory.refreshAfterMiss(signal);
       return resolveFromDirectory(name, refreshed);
     }
+  }
+
+  /** Use the same strict directory resolution for fixture names and history identity. */
+  public async resolvePlayerIdentity(name: string, signal?: AbortSignal): Promise<PlayerIdentity> {
+    const verified = await this.resolveWithIdentity(name, signal);
+    const response = await this.directory.get(signal);
+    const row = response.data.find((candidate: PlayerStatsResponse["data"][number]): boolean =>
+      String(candidate.player_key) === verified.sourceId && candidate.player_name === verified.canonicalName);
+    if (row === undefined) throw new Error("Verified fixture identity disappeared from the directory; retry bounded resolution.");
+    const url = new URL(row.player_profile_url);
+    if (url.origin !== "https://dartsorakel.com" || url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
+      throw new Error("Verified fixture identity contains an untrusted profile URL.");
+    }
+    return playerIdentityFromStatsRow(row);
   }
 }
 

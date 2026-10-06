@@ -31,4 +31,19 @@ describe("local research CLI safety", () => {
     expect(result.status).toBe(2);
     expect(String(result.stderr)).toContain("disabled on serverless");
   });
+
+  it("rejects fixture discovery source/date/run-label before any collection starts", () => {
+    for (const args of [
+      ["collect-fixtures", "--source", "untrusted-private-source", "--date", "2026-10-06", "--run-label", "pilot"],
+      ["collect-fixtures", "--source", "pdc", "--date", "2026-02-30", "--run-label", "pilot"],
+      ["collect-fixtures", "--source", "pdc", "--date", "2026-10-06", "--run-label", "../private-secret"],
+    ]) {
+      const result = command(args, "true");
+      expect(result.status).toBe(2);
+      expect(String(result.stdout)).toBe("");
+      expect(String(result.stderr)).toContain("validation failed");
+      expect(String(result.stderr)).not.toContain("private-secret");
+      expect(String(result.stderr)).not.toContain("untrusted-private-source");
+    }
+  });
 });

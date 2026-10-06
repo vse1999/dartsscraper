@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { ModusFixture } from "../src/modus/schemas.js";
 import type { Match } from "../src/schemas/match.js";
-import { analyzeMatchup, type MatchupPlayerHistory } from "../src/services/matchup-analysis.js";
+import { analyzeMatchup, analyzePlayerHistories, type MatchupPlayerHistory } from "../src/services/matchup-analysis.js";
+import { assessResearchQuality } from "../src/research/quality.js";
 
 const fixture: ModusFixture = {
   id: "match-1",
@@ -39,6 +40,26 @@ function history(playerName: string, averages: readonly number[], opponent = "Ot
 }
 
 describe("matchup analysis", () => {
+  it("excludes rejected histories from head-to-head arithmetic in both report paths", () => {
+    const rows = history("Alpha Player", [98, 97, 96], "Beta Player");
+    const rejected = { ...rows, assessment: assessResearchQuality(rows.matches, { now: new Date(Number.NaN) }) };
+    const beta = history("Beta Player", [91, 92, 93]);
+    for (const report of [analyzeMatchup(fixture, rejected, beta, 10), analyzePlayerHistories(rejected, beta, 10)]) {
+      expect(report.playerOne.available).toBe(false);
+      expect(report.headToHead.meetings).toBe(0);
+    }
+    const verifiedBeta = history("Beta Player", [91], "Alpha Player");
+    expect(analyzeMatchup(fixture, rejected, verifiedBeta, 10).headToHead)
+      .toEqual({ meetings: 1, playerOneWins: 0, playerTwoWins: 1, draws: 0 });
+  });
+  it("withholds chronological momentum across a date-only tie without erasing descriptive scoring", () => {
+    const alpha = history("Alpha Player", [98, 97, 96, 95, 94, 90, 89, 88, 87, 86]);
+    const dates = alpha.matches.map((row: Match, index: number): Match => index === 5 ? { ...row, date: alpha.matches[4]!.date } : row);
+    const analysis = analyzeMatchup(fixture, { ...alpha, matches: dates }, undefined, 10);
+    expect(analysis.playerOne.summary?.average).toBe(92);
+    expect(analysis.playerOne.trend).toBeNull();
+    expect(analysis.playerOne.coverage?.observedRowCount).toBe(10);
+  });
   it("calculates form, trend, H2H and a transparent form signal", () => {
     const alpha = history("Alpha Player", [98, 97, 96, 95, 94, 90, 89, 88, 87, 86], "Beta Player");
     const beta = history("Beta Player", [91, 92, 91, 92, 91, 92, 91, 92, 91, 92]);

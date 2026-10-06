@@ -31,6 +31,8 @@ import { abbreviatedNameParts, identityKey, isTimeout, normalizeForMatch, positi
 import { DartsOrakelPlayerDirectory, resolveFromDirectory, type Resolution } from "./directory.js";
 import { matchesDisplayedName } from "../odds/identity.js";
 import { summarizeResearchHistory } from "../research/statistics.js";
+import { assessResearchQuality } from "../research/quality.js";
+import { diagnoseResearchCoverageScopes } from "../research/coverage.js";
 
 const MAX_HISTORY = 20;
 const DEFAULT_CONCURRENCY = 3;
@@ -115,8 +117,8 @@ export class DefaultValueReader implements ValueReader {
         const matchResolutions = slotResolutions.get(match.eventId);
         const firstResolution = matchResolutions?.first ?? resolutions.get(match.player1) ?? unresolvedResolution(match.player1);
         const secondResolution = matchResolutions?.second ?? resolutions.get(match.player2) ?? unresolvedResolution(match.player2);
-        let first = assessmentFor(match.player1, firstResolution, stats.get(identityKey(firstResolution.identity)), collectionDate);
-        let second = assessmentFor(match.player2, secondResolution, stats.get(identityKey(secondResolution.identity)), collectionDate);
+        let first = assessmentFor(match.player1, firstResolution, stats.get(identityKey(firstResolution.identity)), collectionDate, this.now());
+        let second = assessmentFor(match.player2, secondResolution, stats.get(identityKey(secondResolution.identity)), collectionDate, this.now());
         if (first.identity !== null && second.identity !== null && first.identity.id === second.identity.id) {
           first = sameMatchupIdentity(first);
           second = sameMatchupIdentity(second);
@@ -530,7 +532,7 @@ export function createDefaultValueReader(options: DefaultValueReaderOptions = {}
 }
 
 
-function assessmentFor(requestedName: string, resolution: Resolution, stats: StatsRead | undefined, cutoffDate: string): ValuePlayerAssessment {
+function assessmentFor(requestedName: string, resolution: Resolution, stats: StatsRead | undefined, cutoffDate: string, now: Date): ValuePlayerAssessment {
   const baseSource = { label: null, provider: null, sourceUrl: null, evidenceUrls: [] as readonly string[] };
   if (resolution.status !== "available" || resolution.identity === null) {
     return {
@@ -572,6 +574,27 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
       context: UNKNOWN_CONTEXT,
     };
   }
+  const source = {
+    ...(stats.result.evidence === undefined ? {} : { evidence: stats.result.evidence }),
+    label: stats.result.sourceLabel,
+    provider: stats.result.provider,
+    sourceUrl: stats.result.sourceUrl,
+    evidenceUrls: stats.result.evidenceUrls,
+  };
+  if (stats.result.assessment?.validity.status === "rejected") {
+    return {
+      requestedName,
+      status: "failed",
+      identity: resolution.identity,
+      canonicalName: resolution.identity.name,
+      source,
+      last10: null,
+      last20: null,
+      error: "Research evidence failed quality validation; statistics were withheld.",
+      context: UNKNOWN_CONTEXT,
+      assessment: stats.result.assessment,
+    };
+  }
   const rawMatches: readonly unknown[] = stats.result.matches as readonly unknown[];
   const parsedMatches: Match[] = [];
   let invalidMatchCount = 0;
@@ -584,13 +607,6 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
   const history = invalidMatchCount === 0
     ? completedNewestFirst(parsedMatches, cutoffDate).slice(0, MAX_HISTORY)
     : [];
-  const source = {
-    ...(stats.result.evidence === undefined ? {} : { evidence: stats.result.evidence }),
-    label: stats.result.sourceLabel,
-    provider: stats.result.provider,
-    sourceUrl: stats.result.sourceUrl,
-    evidenceUrls: stats.result.evidenceUrls,
-  };
   if (invalidMatchCount > 0) {
     return {
       requestedName,
@@ -604,14 +620,34 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
       context: UNKNOWN_CONTEXT,
     };
   }
+  // Inspect original provider order before the existing descriptive newest-first normalization.
+  const eligibleSourceRows = parsedMatches.filter((row: Match): boolean => row.date <= cutoffDate
+    && ["won", "win", "w", "lost", "loss", "l", "draw", "drawn", "d"].includes(row.result.trim().toLowerCase()));
+  const assessment = assessResearchQuality(eligibleSourceRows, {
+    now,
+    expectedPlayerId: resolution.identity.id,
+    ...(stats.result.evidence === undefined ? {} : { evidence: stats.result.evidence }),
+  });
+  if (assessment.validity.status === "rejected") return {
+    requestedName, status: "failed", identity: resolution.identity, canonicalName: resolution.identity.name, source,
+    last10: null, last20: null, error: "Research evidence failed quality validation; statistics withheld.", context: UNKNOWN_CONTEXT, assessment,
+  };
   const last10 = summarizeWindow(history, 10);
   const last20 = summarizeWindow(history, 20);
   const historyComplete = invalidMatchCount === 0 && history.length >= MAX_HISTORY;
   const metricsComplete = windowMetricsAvailable(last10) && windowMetricsAvailable(last20);
+  const research = summarizeResearchHistory(history);
   return {
     requestedName,
     status: historyComplete && metricsComplete ? "available" : "partial",
-    research: summarizeResearchHistory(history),
+    assessment,
+    coverage: diagnoseResearchCoverageScopes(history, 20),
+    research: {
+      ...research,
+      ...(assessment.eligibility.chronologicalTrendComparison.status === "unavailable" ? { averageDelta: null } : {}),
+      warnings: [...research.warnings,
+        ...(assessment.dimensions.ordering === "inconsistent" ? ["Provider order was inconsistent; descriptive view is normalized newest-first and chronological trend withheld."] : [])],
+    },
     identity: resolution.identity,
     canonicalName: resolution.identity.name,
     source,
@@ -626,7 +662,7 @@ function assessmentFor(requestedName: string, resolution: Resolution, stats: Sta
 
 function sameMatchupIdentity(player: ValuePlayerAssessment): ValuePlayerAssessment {
   return {
-    ...player,
+    requestedName: player.requestedName,
     status: "unresolved",
     identity: null,
     canonicalName: null,
@@ -634,6 +670,7 @@ function sameMatchupIdentity(player: ValuePlayerAssessment): ValuePlayerAssessme
     last10: null,
     last20: null,
     error: "The odds matchup resolved both displayed slots to the same player identity.",
+    context: UNKNOWN_CONTEXT,
   };
 }
 

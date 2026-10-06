@@ -25,11 +25,8 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Type-check
-        run: npm run build
-
-      - name: Test
-        run: npm test
+      - name: Offline research verification
+        run: npm run verify:research
 
       - name: Audit production dependencies
         run: npm run audit:prod
