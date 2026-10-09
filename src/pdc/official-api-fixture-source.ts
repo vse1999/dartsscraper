@@ -11,9 +11,10 @@ const FIXTURES_URL = "https://fixtures.darts.web.gc.pdcservices.co.uk/v2";
 const PAGE_SIZE = 100;
 const MAX_PAGES = 20;
 const ParticipantSchema = z.object({
-  participantID: z.string().regex(/^\d+$/u),
-  firstName: z.string().trim(),
-  lastName: z.string().trim(),
+  // The official draw includes object-shaped, unassigned bracket slots.
+  participantID: z.string().regex(/^\d+$/u).nullable(),
+  firstName: z.string().trim().nullable(),
+  lastName: z.string().trim().nullable(),
 });
 const TournamentSchema = z.object({
   id: z.string().regex(/^\d+$/u),
@@ -192,7 +193,7 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
 }
 
 function participantName(participant: z.infer<typeof ParticipantSchema> | null): string | null {
-  if (participant === null) return null;
+  if (participant === null || participant.participantID === null || participant.firstName === null || participant.lastName === null) return null;
   const name = `${participant.firstName} ${participant.lastName}`.normalize("NFKC").trim();
   return name !== "" && !/^(?:winner|loser|tba|tbc|bye|unknown|to be confirmed)\b/iu.test(name) && !name.includes("/") ? name : null;
 }

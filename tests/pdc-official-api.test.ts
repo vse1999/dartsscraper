@@ -89,6 +89,34 @@ describe("official PDC public API discovery", () => {
     await expect(new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09")).rejects.toMatchObject({ tournamentNames: ["Swiss Darts Trophy"] });
   });
 
+  it("preserves official event evidence when object-shaped draw slots are unassigned", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
+      .mockResolvedValueOnce(response({ data: [oneFixture({ participant1: { participantID: null, firstName: null, lastName: null }, participant2: { participantID: null, firstName: null, lastName: null } })], meta: { count: 1, totalCount: 1 } }));
+    await expect(new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09")).rejects.toMatchObject({
+      date: "2026-10-09", tournamentNames: ["Swiss Darts Trophy"], availableFixtures: [],
+    });
+  });
+
+  it("keeps concrete pairings when other rows have null player fields", async () => {
+    for (const participant of [
+      { participantID: null, firstName: null, lastName: null },
+      { participantID: "2", firstName: null, lastName: "Searle" },
+      { participantID: null, firstName: "Ryan", lastName: "Searle" },
+    ]) {
+      const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
+        .mockResolvedValueOnce(response({ data: [oneFixture(), { ...(oneFixture({ participant2: participant }) as object), id: "124" }], meta: { count: 2, totalCount: 2 } }));
+      const fixtures = await new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09");
+      expect(fixtures).toHaveLength(1);
+      expect(fixtures[0]).toMatchObject({ playerOne: "Rob Cross", playerTwo: "Ryan Searle" });
+    }
+  });
+
+  it("still rejects malformed non-null participant fields", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
+      .mockResolvedValueOnce(response({ data: [oneFixture({ participant2: { participantID: "invalid", firstName: 12, lastName: "Searle" } })], meta: { count: 1, totalCount: 1 } }));
+    await expect(new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09")).rejects.toBeInstanceOf(OfficialPdcScheduleUnavailableError);
+  });
+
   it("retains known partial pairings in structured unavailable evidence", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response({ data: [
       { id: "10823", attributes: { name: "Swiss", startDate: "2026-10-09", endDate: "2026-10-09" } },

@@ -38,7 +38,11 @@ Read-only real-source pipeline test, **9 October 2026**:
 
 Tests cover signatures/tampering/expiry, unauthorized requests, invalid cursor/date/duplicate fixtures, bounded admission and payloads, rejected scheduling, warm replay/conflict, serial four-batch delivery, deadline/source failure without partial cards, ambiguous continuation without retries, global image cap, owner command routing, required statistic transport and Linux font/native bundling. Hosted continuation smoke is required after deployment.
 
-Local verification: **841 tests passed across 89 files**, TypeScript build passed, production dependency audit found zero vulnerabilities. Generated player column headings now wrap between words instead of orphaning a final surname letter.
+Local verification: **844 tests passed across 89 files**, TypeScript build passed, production dependency audit found zero vulnerabilities. Generated player column headings now wrap between words instead of orphaning a final surname letter.
+
+### Cold calendar regression
+
+The hosted lookup stopped during fixture discovery. A fresh-cache local reproduction identified official draw objects whose participant ID/first/last name fields were null. Previously the page parser rejected these unassigned slots, losing the verified event context needed by the provider fallback. Nullable source fields now parse explicitly, while unresolved participants remain excluded from named matchups. Invalid non-null fields still fail validation. A fresh-cache real-source lookup returned 16 dated fixtures after the correction; regression tests cover null slots, mixed named/unassigned rows and malformed non-null fields. The earlier full-statistics test used a cached verified schedule, so it did not cover this cold discovery failure. Hosted re-verification remains required.
 
 ## Free-tier estimate, not an account guarantee
 
