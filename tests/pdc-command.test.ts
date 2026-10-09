@@ -55,7 +55,8 @@ describe("PDC Telegram command", () => {
     }, () => "2026-10-09", { reply: async (text: string): Promise<void> => { replies.push(text); } }, logger);
     expect(outcome).toBe("failed");
     expect(replies.at(-1)).toContain("Official event found: Swiss Darts Trophy");
-    expect(replies.at(-1)).toContain("not yet published or could not be verified");
+    expect(replies.at(-1)).toContain("Eredmenyek fallback");
+    expect(replies.at(-1)).not.toContain("not yet published");
     expect(replies.at(-1)).not.toContain("No scheduled PDC match");
     expect(replies.at(-1)).not.toContain("not exposed");
   });

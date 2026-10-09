@@ -8,6 +8,7 @@ import { FixtureNameResolver } from "../modus/fixture-name-resolver.js";
 import { CorroboratedPdcFixtureSource, DartsNerdPdcFixtureSource } from "./darts-nerd-fixture-source.js";
 import { PdpaPdcFixtureSource } from "./pdpa-fixture-source.js";
 import { OfficialPdcApiFixtureSource } from "./official-api-fixture-source.js";
+import { EredmenyekPdcFixtureSource } from "./eredmenyek-fixture-source.js";
 import { DartsOrakelPdcSource } from "./source.js";
 import { PdcTournamentService, type PdcPlayerStatsReader } from "./service.js";
 
@@ -26,9 +27,14 @@ export function createDefaultPdcTournamentService(
     minRequestIntervalMs: 500,
     logger,
   });
-  const officialFixtures = new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }) });
+  const resolver = sharedFixtureNameResolver ?? new FixtureNameResolver(fixtureNameClient);
+  const officialFixtures = new EredmenyekPdcFixtureSource({
+    officialSource: new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }) }),
+    resolver,
+    logger,
+  });
   const liveFixtures = new DartsNerdPdcFixtureSource({
-    resolver: sharedFixtureNameResolver ?? new FixtureNameResolver(fixtureNameClient),
+    resolver,
     logger,
   });
   return new PdcTournamentService({

@@ -29,9 +29,10 @@ const uncorroboratedFixtures = report.fixtures.filter((fixture) => (fixture.evid
 const fixturesWithoutOfficialSource = report.fixtures.filter((fixture) => {
   const source = new URL(fixture.sourceUrl);
   return source.protocol !== "https:" || !(source.hostname === "pdpa.co.uk"
-    || source.hostname === "fixtures.darts.web.gc.pdcservices.co.uk");
+    || source.hostname === "fixtures.darts.web.gc.pdcservices.co.uk"
+    || (source.hostname === "m.eredmenyek.com" && fixture.evidenceUrls?.includes("https://www.pdc.tv/matches") === true));
 });
-if (fixturesWithoutOfficialSource.length > 0) throw new Error("A PDC fixture was not backed by an official PDC or PDPA source URL.");
+if (fixturesWithoutOfficialSource.length > 0) throw new Error("A PDC fixture lacks official schedule or official-event-backed Eredmenyek provenance.");
 const scheduledPlayers = new Set(report.fixtures.flatMap((fixture) => (
   [normalizePlayerName(fixture.playerOne), normalizePlayerName(fixture.playerTwo)]
 )));

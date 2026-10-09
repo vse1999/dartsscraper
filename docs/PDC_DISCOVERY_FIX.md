@@ -1,5 +1,23 @@
 # Official PDC fixture discovery correction
 
+## Follow-up correction: Eredmenyek supplies the missing October 9 draw
+
+The initial investigation below was too narrow: an empty official API did **not** mean named pairings were unavailable elsewhere. The user's Eredmenyek screenshot was correct. A subsequent read-only live test recovered **all 16 European Tour 14 pairings on 9 October**, individually verified against the explicit full date and participants on each match detail. First pairing: Niels Zonneveld–Bradley Brooks; last: Kevin Doets–Nick Kenny.
+
+- [Eredmenyek darts](https://www.eredmenyek.com/darts/), its linked [lightweight version](https://m.eredmenyek.com/darts/?d=0&s=1), and [first match detail](https://m.eredmenyek.com/merkozes/0E6NVbSi/) provide the published draw independently of the empty PDC API.
+- `EredmenyekPdcFixtureSource` wraps official discovery. It reads this fallback only when the official calendar has verified dated events without usable pairings. A unique European Tour number or exact normalized event label establishes event membership; a qualifier does not match a main event. It does not call a bookmaker endpoint or infer pairings from a roster.
+- The linked lightweight HTML needs only ordinary fetch and the existing Cheerio parser: no browser, AI, paid API, new package or `ODDS_FETCH_ENABLED` flag. Schedule plus match-detail reads run in batches of four, with a 20-second total fallback deadline and bounded body/fixture sizes. Source redirects and untrusted match URLs are rejected.
+- Every detail must agree with the listed participants and contain a valid full calendar date. Adjacent-day rows are excluded. A failed/malformed detail or uncovered missing event keeps the result unavailable rather than silently reporting an empty/complete slate. Other already verified official pairings are preserved.
+- Full-name profile slugs must agree with the displayed surname and given-name prefix before they are used. The shared strict player directory resolver provides canonical spellings where available; unresolved source-backed labels remain visible, never guessed from initials alone. Some scheduled players may still lack historical statistics.
+- Bare displayed times remain explicitly labelled **Eredmenyek display time**, with no invented UTC offset. Evidence identifies PDC as the event-calendar source and Eredmenyek as the pairing source; it does not claim the official API supplied those pairings.
+- Fixture cache is now **v7**. Error copy no longer claims the draw is unpublished; it says verification failed across the configured sources.
+
+Regression verification: **812 tests passed / 86 files**, TypeScript build passed, production dependency audit zero vulnerabilities. Captured lightweight HTML reproduces the 16 pairings, alongside cancellation, timeout, wrong-date/player/event, qualifiers, duplicate rows, placeholders, untrusted URLs, full-name handling and partial-event coverage cases. `npx tsx scripts/pdc-upcoming-smoke.ts 2026-10-09 --fixtures-only` returned `verified`, 16.
+
+Subsequent owner-chat live `/pdc today` test through `createConfiguredBot`: **16 images delivered / 16 expected**, zero error logs. All 32 scheduled players were retained; 19 histories completed and 13 were unavailable or reached the existing research deadline. These partial history results remain explicitly marked in the cards. This proves local configured-bot delivery, not hosted deployment readiness.
+
+The original investigation and API-only limitation below are retained as historical evidence, superseded by this section. Hosted execution still needs deployment verification.
+
 Verified locally on **9 October 2026**, Europe/Budapest. No deployment, Telegram sends, player-history fan-out, or credential changes were performed for this investigation.
 
 ## Root cause

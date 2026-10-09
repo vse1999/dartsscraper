@@ -190,7 +190,7 @@ function officialScheduleUnavailableMessage(error: OfficialPdcScheduleUnavailabl
   return [
     `🎯 PDC · ${error.date ?? "requested date"}`,
     `Official event found: ${names}`,
-    "Named matchups are not yet published or could not be verified from the official draw. This is not a no-matches result.",
+    "Matchups could not be verified from the PDC/PDPA schedule or Eredmenyek fallback. This does not mean no matches are scheduled.",
     ...(error.availableFixtures.length > 0 ? [`${error.availableFixtures.length} other official pairings were found, but the full slate is incomplete.`] : []),
     "No guessed pairings were used. Please retry later.",
     "Official schedule: https://www.pdc.tv/matches",
