@@ -39,6 +39,17 @@ export class FixtureNameResolver {
     }
   }
 
+  /** Provider-only short given names: exact surname, >=3-character prefix,
+   * unique non-conflicting directory ID. General searches stay strict. */
+  public async resolveProviderName(name: string, signal?: AbortSignal): Promise<string> {
+    const response = await this.directory.get(signal);
+    try { return resolveFromDirectory(name, response, true).canonicalName; }
+    catch (error: unknown) {
+      if (!(error instanceof PlayerNotFoundError)) throw error;
+      return resolveFromDirectory(name, await this.directory.refreshAfterMiss(signal), true).canonicalName;
+    }
+  }
+
   /** Use the same strict directory resolution for fixture names and history identity. */
   public async resolvePlayerIdentity(name: string, signal?: AbortSignal): Promise<PlayerIdentity> {
     const verified = await this.resolveWithIdentity(name, signal);
@@ -54,7 +65,7 @@ export class FixtureNameResolver {
   }
 }
 
-function resolveFromDirectory(name: string, response: PlayerStatsResponse): FixtureNameResolution {
+function resolveFromDirectory(name: string, response: PlayerStatsResponse, allowGivenNamePrefix: boolean = false): FixtureNameResolution {
     const canonicalName = canonicalizeFixtureName(name);
     if (modusNameKey(canonicalName) === "") throw new PlayerNotFoundError(name);
     const conflictingSourceIds = conflictingSourceIdsInDirectory(response);
@@ -67,7 +78,15 @@ function resolveFromDirectory(name: string, response: PlayerStatsResponse): Fixt
         return modusNameBaseKey(row.player_name) === modusNameBaseKey(canonicalName);
       })
       : response.data.filter((row) => !conflictingSourceIds.has(row.player_key) && modusAbbreviationMatches(canonicalName, row.player_name));
-    const uniqueCandidates = uniqueRowsBySourceId(candidates);
+    const parts = modusNameBaseKey(canonicalName).split(" ");
+    const given = parts[0] ?? "";
+    const prefixCandidates = candidates.length === 0 && allowGivenNamePrefix && abbreviated === undefined && requestQualifiers.length === 0 && parts.length >= 2 && /^[\p{L}]{3,}$/u.test(given)
+      ? response.data.filter((row): boolean => {
+        if (conflictingSourceIds.has(row.player_key)) return false;
+        const candidate = modusNameBaseKey(row.player_name).split(" ");
+        return candidate.length === parts.length && (candidate[0]?.startsWith(given) ?? false) && candidate.slice(1).join(" ") === parts.slice(1).join(" ");
+      }) : candidates;
+    const uniqueCandidates = uniqueRowsBySourceId(prefixCandidates);
     if (uniqueCandidates.length === 0) throw new PlayerNotFoundError(name);
     if (uniqueCandidates.length > 1) throw new PlayerAmbiguousError(name, uniqueCandidates.map((candidate) => candidate.player_name));
     const resolved = uniqueCandidates[0];

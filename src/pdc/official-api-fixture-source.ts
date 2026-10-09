@@ -4,6 +4,7 @@ import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import type { PdcFixtureNameResolver } from "./darts-nerd-fixture-source.js";
 
 // Public, unauthenticated endpoints used by www.pdc.tv's DartsWeb client.
 const TOURNAMENTS_URL = "https://tournaments.darts.web.gc.pdcservices.co.uk/v2";
@@ -55,6 +56,7 @@ export interface OfficialPdcApiFixtureSourceOptions {
   readonly fallbackSource?: PdcFixtureSource;
   readonly logger?: Logger;
   readonly timeoutMs?: number;
+  readonly resolver?: PdcFixtureNameResolver;
 }
 
 /** Official API first; PDPA's dated concrete draw remains a safe fallback. */
@@ -64,12 +66,14 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
   private readonly fallbackSource: PdcFixtureSource | undefined;
   private readonly logger: Logger;
   private readonly timeoutMs: number;
+  private readonly resolver: PdcFixtureNameResolver | undefined;
 
   public constructor(options: OfficialPdcApiFixtureSourceOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.fallbackSource = options.fallbackSource;
     this.logger = options.logger ?? noopLogger;
     this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.resolver = options.resolver;
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0) throw new Error("timeoutMs must be positive and finite.");
   }
 
@@ -129,7 +133,7 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
           id: `pdc-official:${row.id}`, tournamentName: tournament.attributes.name,
           date, startTime: timestamp.success ? timestamp.data : null,
           session: null, round: attributes.stage?.name ?? null,
-          playerOne, playerTwo, sourceUrl: `${FIXTURES_URL}/${row.id}`,
+          playerOne: await this.resolveName(playerOne, signal), playerTwo: await this.resolveName(playerTwo, signal), sourceUrl: `${FIXTURES_URL}/${row.id}`,
           evidenceUrls: [`${TOURNAMENTS_URL}/${tournament.id}`, `${FIXTURES_URL}/${row.id}`],
         });
         fixtures.set(fixture.id, fixture);
@@ -144,6 +148,16 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
       );
     }
     return [...fixtures.values()];
+  }
+
+  private async resolveName(name: string, signal?: AbortSignal): Promise<string> {
+    if (this.resolver === undefined) return name;
+    try { return await this.resolver.resolve(name, signal); }
+    catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("Official PDC player directory resolution unavailable; retaining source-backed name.", { errorType: error instanceof Error ? error.name : "UnknownError" });
+      return name;
+    }
   }
 
   private async pages<T extends { readonly id: string }>(baseUrl: string, filter: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<readonly T[]> {

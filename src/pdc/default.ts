@@ -29,7 +29,9 @@ export function createDefaultPdcTournamentService(
   });
   const resolver = sharedFixtureNameResolver ?? new FixtureNameResolver(fixtureNameClient);
   const officialFixtures = new EredmenyekPdcFixtureSource({
-    officialSource: new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }) }),
+    officialSource: new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }),
+      resolver: { resolve: (name: string, signal?: AbortSignal): Promise<string> => resolver.resolveProviderName(name, signal) },
+    }),
     resolver,
     logger,
   });

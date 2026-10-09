@@ -89,6 +89,15 @@ describe("official PDC public API discovery", () => {
     await expect(new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09")).rejects.toMatchObject({ tournamentNames: ["Swiss Darts Trophy"] });
   });
 
+  it("canonicalizes concrete provider names through the directory adapter", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
+      .mockResolvedValueOnce(response({ data: [oneFixture({ participant2: { participantID: "11795", firstName: "Rob", lastName: "Owen" } })], meta: { count: 1, totalCount: 1 } }));
+    const resolve = vi.fn(async (name: string): Promise<string> => name === "Rob Owen" ? "Robert Owen" : name);
+    const fixtures = await new OfficialPdcApiFixtureSource({ fetchImpl, resolver: { resolve } }).getFixtures("2026-10-09");
+    expect(fixtures[0]).toMatchObject({ playerOne: "Rob Cross", playerTwo: "Robert Owen" });
+    expect(resolve).toHaveBeenCalledWith("Rob Owen", undefined);
+  });
+
   it("preserves official event evidence when object-shaped draw slots are unassigned", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
       .mockResolvedValueOnce(response({ data: [oneFixture({ participant1: { participantID: null, firstName: null, lastName: null }, participant2: { participantID: null, firstName: null, lastName: null } })], meta: { count: 1, totalCount: 1 } }));

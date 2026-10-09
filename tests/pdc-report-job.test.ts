@@ -126,7 +126,7 @@ describe("complete statistic chunks", () => {
     expect(editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("may still be running"), expect.any(AbortSignal));
   });
   it("reports a safe continuation stage and HTTP code without exposing error details", async () => {
-    const editStatus = vi.fn(async (): Promise<void> => {});
+    const editStatus = vi.fn(async (_messageId: number, _text: string, _signal: AbortSignal): Promise<void> => {});
     await runPdcReportJob(job(), { reader: { getFixturesForDate: async () => fixtures(8), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) },
       sender: { sendReport: vi.fn(async (): Promise<void> => {}), sendMessage: vi.fn() }, editStatus, chatId: 1, logger: noopLogger,
       dispatcher: { dispatch: async (): Promise<void> => { throw new PdcJobDispatchError("private credential detail", false, undefined, 400); } },
