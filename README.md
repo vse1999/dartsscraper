@@ -4,6 +4,18 @@ Production-oriented TypeScript tooling for DartsOrakel player matches plus a bro
 
 ## Private Telegram bot
 
+### Image reports
+
+Configured bots now default to deterministic PNG reports for personal player requests (including batches and player-detail buttons) and scheduled MODUS/PDC matchup reports. `REPORT_IMAGES_ENABLED=false` restores the original text paths. `/compare`, `/value`, `/odds`, completed PDC results, and roster-only MODUS fallback remain text.
+
+Images are generated directly from the existing research result using `@resvg/resvg-js` and the bundled SIL-OFL Noto Sans font: no browser, AI service, second scrape, paid image API, Blob store or image cache. A personal ten-match report is one image with aligned date, opponent, result, average, 180 and checkout columns; twenty-match requests use two ten-row images. Event labels are shared instead of repeating long tournament names on every row. PDC player details are on demand through the inline keyboard instead of automatically repeating every player's raw history. Source schedule evidence remains available in text.
+
+Each full report renders at most 25 images; remaining fixtures are included in batched text, not dropped. Missing metrics remain unavailable and incomplete/stale/identity/order warnings stay visible. Photos share the existing per-chat send pacing and bounded retry policy; total report deadlines still apply. Rendering failures and definitive Telegram HTTP 400 photo rejections use complete text fallbacks. Ambiguous network delivery is never retried or replaced with a potentially duplicate message. Paid broadcasts are explicitly disabled.
+
+For local verification, use `npm run telegram:smoke -- "Rob Cross last 10 matches"` (sends to the owner) and `npx vitest run tests/report-image.test.ts tests/image-report-integration.test.ts`. `npx tsx scripts/benchmark-production-images.ts` benchmarks the saved live layout sample without source requests or Telegram sends. The local renderer benchmark does not guarantee hosted CPU consumption or an account-wide free-tier limit; hosted Linux bundle/usage verification is still required before release.
+
+PDC date discovery now queries the public first-party PDC tournament/fixture API, with a dated PDPA draw fallback. It paginates by official tournament ID and verifies each fixture's local calendar date rather than relying on the API's unreliable start-date filter. Completed pairings remain visible for the requested day. An official event without a published/verified draw is reported as unavailable, not a no-match day. `npx tsx scripts/pdc-upcoming-smoke.ts 2026-10-09 --fixtures-only` checks discovery without player fan-out or Telegram sends. See `docs/PDC_DISCOVERY_FIX.md`.
+
 The bot is an owner-only, free-tier webhook around deterministic official MODUS history, separate PDC tournament scans, and DartsOrakel readers. It needs no database, paid API, queue, Redis, or language model.
 
 Vercel datacenter addresses receive a Cloudflare managed challenge from DartsOrakel. The bot therefore retrieves only the public DartsOrakel JSON through Jina Reader's free public-URL service; no Telegram identity, token, or message metadata is sent to Jina.

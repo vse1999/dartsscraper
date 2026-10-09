@@ -11,12 +11,27 @@ const dateExpression = process.argv[2] ?? "tomorrow";
 const date = resolveResearchDate(dateExpression, { timeZone: "Europe/Budapest" }).date;
 const playerStats = createDefaultBulkPlayerStatsService(logger);
 const service = createDefaultPdcTournamentService(logger, playerStats);
+// Discovery-only mode does not fetch player histories or send Telegram messages.
+if (process.argv.includes("--fixtures-only")) {
+  try {
+    const fixtures = await service.getFixturesForDate(date);
+    process.stdout.write(`${JSON.stringify({ status: "verified", date, fixtureCount: fixtures.length, fixtures })}\n`);
+  } catch (error: unknown) {
+    process.stdout.write(`${JSON.stringify({ status: "unavailable", date, message: error instanceof Error ? error.message : "Official schedule unavailable" })}\n`);
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
 const report = await service.getUpcomingReportForDate(date);
 
 if (report.fixtures.length === 0) throw new Error(`No PDC fixtures were discovered for ${date}.`);
 const uncorroboratedFixtures = report.fixtures.filter((fixture) => (fixture.evidenceUrls?.length ?? 0) < 2);
-const fixturesWithoutOfficialSource = report.fixtures.filter((fixture) => !fixture.sourceUrl.startsWith("https://pdpa.co.uk/"));
-if (fixturesWithoutOfficialSource.length > 0) throw new Error("A PDC fixture was not backed by an official PDPA source URL.");
+const fixturesWithoutOfficialSource = report.fixtures.filter((fixture) => {
+  const source = new URL(fixture.sourceUrl);
+  return source.protocol !== "https:" || !(source.hostname === "pdpa.co.uk"
+    || source.hostname === "fixtures.darts.web.gc.pdcservices.co.uk");
+});
+if (fixturesWithoutOfficialSource.length > 0) throw new Error("A PDC fixture was not backed by an official PDC or PDPA source URL.");
 const scheduledPlayers = new Set(report.fixtures.flatMap((fixture) => (
   [normalizePlayerName(fixture.playerOne), normalizePlayerName(fixture.playerTwo)]
 )));

@@ -1,0 +1,1870 @@
+{
+  "data": [
+    {
+      "id": "515960",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42314",
+          "firstName": "Rene",
+          "lastName": "Kern",
+          "nickname": null,
+          "countryCode": "AT"
+        },
+        "participant2": {
+          "participantID": "33640",
+          "firstName": "Alex",
+          "lastName": "Fehlmann",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "44",
+          "name": "Last 8"
+        }
+      }
+    },
+    {
+      "id": "515959",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43225",
+          "firstName": "Bruno",
+          "lastName": "Stoeckli",
+          "nickname": "The Beast",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48957",
+          "firstName": "Elia",
+          "lastName": "Buehlmann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "44",
+          "name": "Last 8"
+        }
+      }
+    },
+    {
+      "id": "515958",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43461",
+          "firstName": "Roman",
+          "lastName": "Wellinger",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46132",
+          "firstName": "Janis",
+          "lastName": "Thomann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "44",
+          "name": "Last 8"
+        }
+      }
+    },
+    {
+      "id": "515957",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "39853",
+          "firstName": "Marcel",
+          "lastName": "Walpen",
+          "nickname": "Cello",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "33796",
+          "firstName": "Stefan",
+          "lastName": "Bellmont",
+          "nickname": "Belli",
+          "countryCode": "CH",
+          "media": {
+            "image": "643d2ea0-f2e1-11f0-a549-e33be667e764.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "stage": {
+          "tournamentStageID": "44",
+          "name": "Last 8"
+        }
+      }
+    },
+    {
+      "id": "515956",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "37227",
+          "firstName": "Roger",
+          "lastName": "Hertig",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "33640",
+          "firstName": "Alex",
+          "lastName": "Fehlmann",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515955",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42314",
+          "firstName": "Rene",
+          "lastName": "Kern",
+          "nickname": null,
+          "countryCode": "AT"
+        },
+        "participant2": {
+          "participantID": "46485",
+          "firstName": "Damian",
+          "lastName": "Huegli",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515954",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "48957",
+          "firstName": "Elia",
+          "lastName": "Buehlmann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42863",
+          "firstName": "Lars",
+          "lastName": "Graber",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515953",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "37352",
+          "firstName": "Joel",
+          "lastName": "Breitenmoser",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43225",
+          "firstName": "Bruno",
+          "lastName": "Stoeckli",
+          "nickname": "The Beast",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515952",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46132",
+          "firstName": "Janis",
+          "lastName": "Thomann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42809",
+          "firstName": "Ansh",
+          "lastName": "Sood",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515951",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46271",
+          "firstName": "Frank",
+          "lastName": "Priess",
+          "nickname": "Paco",
+          "countryCode": "DE"
+        },
+        "participant2": {
+          "participantID": "43461",
+          "firstName": "Roman",
+          "lastName": "Wellinger",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515950",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46468",
+          "firstName": "Enes",
+          "lastName": "Yavuzcan",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "33796",
+          "firstName": "Stefan",
+          "lastName": "Bellmont",
+          "nickname": "Belli",
+          "countryCode": "CH",
+          "media": {
+            "image": "643d2ea0-f2e1-11f0-a549-e33be667e764.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515949",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "39853",
+          "firstName": "Marcel",
+          "lastName": "Walpen",
+          "nickname": "Cello",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42886",
+          "firstName": "Sasa",
+          "lastName": "Varga",
+          "nickname": "Butcher",
+          "countryCode": "HR"
+        },
+        "stage": {
+          "tournamentStageID": "5",
+          "name": "Last 16"
+        }
+      }
+    },
+    {
+      "id": "515948",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "33640",
+          "firstName": "Alex",
+          "lastName": "Fehlmann",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43409",
+          "firstName": "Silvio",
+          "lastName": "Thoma",
+          "nickname": "The Bull",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515947",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "37227",
+          "firstName": "Roger",
+          "lastName": "Hertig",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43427",
+          "firstName": "Roger",
+          "lastName": "Tuescher",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515946",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49373",
+          "firstName": "Jean-Pierre",
+          "lastName": "Alder",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46485",
+          "firstName": "Damian",
+          "lastName": "Huegli",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515945",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42314",
+          "firstName": "Rene",
+          "lastName": "Kern",
+          "nickname": null,
+          "countryCode": "AT"
+        },
+        "participant2": {
+          "participantID": "48032",
+          "firstName": "Yannic",
+          "lastName": "Perren",
+          "nickname": "Der Graph",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515944",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "41596",
+          "firstName": "Yannick",
+          "lastName": "Cainzos",
+          "nickname": "The big cat",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42863",
+          "firstName": "Lars",
+          "lastName": "Graber",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515943",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43471",
+          "firstName": "Daniel",
+          "lastName": "von Allmen",
+          "nickname": "Vönsi",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48957",
+          "firstName": "Elia",
+          "lastName": "Buehlmann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515942",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43225",
+          "firstName": "Bruno",
+          "lastName": "Stoeckli",
+          "nickname": "The Beast",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43434",
+          "firstName": "Hansi",
+          "lastName": "Waldmeier",
+          "nickname": "Vollgas",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515941",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "40303",
+          "firstName": "Sandro",
+          "lastName": "Egli",
+          "nickname": "Egli",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "37352",
+          "firstName": "Joel",
+          "lastName": "Breitenmoser",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515940",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43385",
+          "firstName": "Angela",
+          "lastName": "Heinrich",
+          "nickname": "The Tiger",
+          "countryCode": "CH",
+          "media": {
+            "image": "3c3d2970-7e9a-11f0-ba41-6bcd3855d5db.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "participant2": {
+          "participantID": "42809",
+          "firstName": "Ansh",
+          "lastName": "Sood",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515939",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46132",
+          "firstName": "Janis",
+          "lastName": "Thomann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43179",
+          "firstName": "Fabrizio",
+          "lastName": "Barone",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515938",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43461",
+          "firstName": "Roman",
+          "lastName": "Wellinger",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "49420",
+          "firstName": "Pascal",
+          "lastName": "Goessi",
+          "nickname": "Gössinator",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515937",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46271",
+          "firstName": "Frank",
+          "lastName": "Priess",
+          "nickname": "Paco",
+          "countryCode": "DE"
+        },
+        "participant2": {
+          "participantID": "45618",
+          "firstName": "Florian",
+          "lastName": "Roethlisberger",
+          "nickname": "Bobberli",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515936",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "33796",
+          "firstName": "Stefan",
+          "lastName": "Bellmont",
+          "nickname": "Belli",
+          "countryCode": "CH",
+          "media": {
+            "image": "643d2ea0-f2e1-11f0-a549-e33be667e764.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "participant2": {
+          "participantID": "48835",
+          "firstName": "Marcel",
+          "lastName": "Hirzel",
+          "nickname": "Fridge",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515935",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46552",
+          "firstName": "Reto",
+          "lastName": "Lehmann",
+          "nickname": "The Reeesss",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46468",
+          "firstName": "Enes",
+          "lastName": "Yavuzcan",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515934",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49284",
+          "firstName": "Donovan",
+          "lastName": "Wagner",
+          "nickname": "Donoblitz",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42886",
+          "firstName": "Sasa",
+          "lastName": "Varga",
+          "nickname": "Butcher",
+          "countryCode": "HR"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515933",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49369",
+          "firstName": "Remo",
+          "lastName": "Ursprung",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "39853",
+          "firstName": "Marcel",
+          "lastName": "Walpen",
+          "nickname": "Cello",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "4",
+          "name": "Last 32"
+        }
+      }
+    },
+    {
+      "id": "515932",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43409",
+          "firstName": "Silvio",
+          "lastName": "Thoma",
+          "nickname": "The Bull",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46465",
+          "firstName": "Luigino",
+          "lastName": "Gasperina",
+          "nickname": "The Gasoline",
+          "countryCode": "IT"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515931",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "33640",
+          "firstName": "Alex",
+          "lastName": "Fehlmann",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "40029",
+          "firstName": "Maurizio",
+          "lastName": "Castrovinci",
+          "nickname": "The Sicilian",
+          "countryCode": "IT"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515930",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43088",
+          "firstName": "Markus",
+          "lastName": "Geiser",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43427",
+          "firstName": "Roger",
+          "lastName": "Tuescher",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515929",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "37227",
+          "firstName": "Roger",
+          "lastName": "Hertig",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "44937",
+          "firstName": "Neil",
+          "lastName": "Poulton",
+          "nickname": "Spoony",
+          "countryCode": "GB-WLS"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515928",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46565",
+          "firstName": "Antonio",
+          "lastName": "Polisena",
+          "nickname": "",
+          "countryCode": "IT"
+        },
+        "participant2": {
+          "participantID": "46485",
+          "firstName": "Damian",
+          "lastName": "Huegli",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515927",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "48851",
+          "firstName": "Can",
+          "lastName": "Ilgili",
+          "nickname": "",
+          "countryCode": "SZ"
+        },
+        "participant2": {
+          "participantID": "49373",
+          "firstName": "Jean-Pierre",
+          "lastName": "Alder",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515926",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49327",
+          "firstName": "Benjamin",
+          "lastName": "Kretschmer",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48032",
+          "firstName": "Yannic",
+          "lastName": "Perren",
+          "nickname": "Der Graph",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515925",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43432",
+          "firstName": "Mark",
+          "lastName": "Sanchez",
+          "nickname": "Kuya",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42314",
+          "firstName": "Rene",
+          "lastName": "Kern",
+          "nickname": null,
+          "countryCode": "AT"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515924",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42863",
+          "firstName": "Lars",
+          "lastName": "Graber",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46544",
+          "firstName": "Patrik",
+          "lastName": "Barbieri",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515923",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46081",
+          "firstName": "Beat",
+          "lastName": "Bremgartner",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "41596",
+          "firstName": "Yannick",
+          "lastName": "Cainzos",
+          "nickname": "The big cat",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515922",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49334",
+          "firstName": "Jonas",
+          "lastName": "Martin",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48957",
+          "firstName": "Elia",
+          "lastName": "Buehlmann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515921",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49397",
+          "firstName": "Andreas",
+          "lastName": "Holdener",
+          "nickname": "Elivagar",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43471",
+          "firstName": "Daniel",
+          "lastName": "von Allmen",
+          "nickname": "Vönsi",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515920",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46478",
+          "firstName": "Remy",
+          "lastName": "Perfler",
+          "nickname": "Jack",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43434",
+          "firstName": "Hansi",
+          "lastName": "Waldmeier",
+          "nickname": "Vollgas",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515919",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46627",
+          "firstName": "Brian",
+          "lastName": "Jutzi",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43225",
+          "firstName": "Bruno",
+          "lastName": "Stoeckli",
+          "nickname": "The Beast",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515918",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "40127",
+          "firstName": "Rocco",
+          "lastName": "Fulciniti",
+          "nickname": "La Bestia",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "37352",
+          "firstName": "Joel",
+          "lastName": "Breitenmoser",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515917",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "40303",
+          "firstName": "Sandro",
+          "lastName": "Egli",
+          "nickname": "Egli",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43231",
+          "firstName": "Matthias",
+          "lastName": "Apitz",
+          "nickname": "Deadpool",
+          "countryCode": "DE"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515916",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43475",
+          "firstName": "Denis",
+          "lastName": "Schnetzer",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42809",
+          "firstName": "Ansh",
+          "lastName": "Sood",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515915",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46001",
+          "firstName": "Noah",
+          "lastName": "Kuster",
+          "nickname": "Die Katze",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43385",
+          "firstName": "Angela",
+          "lastName": "Heinrich",
+          "nickname": "The Tiger",
+          "countryCode": "CH",
+          "media": {
+            "image": "3c3d2970-7e9a-11f0-ba41-6bcd3855d5db.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515914",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43179",
+          "firstName": "Fabrizio",
+          "lastName": "Barone",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "45886",
+          "firstName": "Fabio",
+          "lastName": "Cescon",
+          "nickname": "CesconFire",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515913",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46132",
+          "firstName": "Janis",
+          "lastName": "Thomann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "49003",
+          "firstName": "Mael James",
+          "lastName": "Bachmann",
+          "nickname": "Jamesy",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515912",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42802",
+          "firstName": "Claudio",
+          "lastName": "Keller",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "49420",
+          "firstName": "Pascal",
+          "lastName": "Goessi",
+          "nickname": "Gössinator",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515911",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43461",
+          "firstName": "Roman",
+          "lastName": "Wellinger",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46425",
+          "firstName": "Timur",
+          "lastName": "Turmus",
+          "nickname": "TNT",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515910",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46453",
+          "firstName": "Philipp",
+          "lastName": "Duerig",
+          "nickname": "Snooky",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "45618",
+          "firstName": "Florian",
+          "lastName": "Roethlisberger",
+          "nickname": "Bobberli",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515909",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46271",
+          "firstName": "Frank",
+          "lastName": "Priess",
+          "nickname": "Paco",
+          "countryCode": "DE"
+        },
+        "participant2": {
+          "participantID": "49238",
+          "firstName": "Julian",
+          "lastName": "Mueller",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515908",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "41879",
+          "firstName": "Frank",
+          "lastName": "Schroeder",
+          "nickname": "Cap",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48835",
+          "firstName": "Marcel",
+          "lastName": "Hirzel",
+          "nickname": "Fridge",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515907",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "47234",
+          "firstName": "Karin",
+          "lastName": "Schroeder",
+          "nickname": "WoWo",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "33796",
+          "firstName": "Stefan",
+          "lastName": "Bellmont",
+          "nickname": "Belli",
+          "countryCode": "CH",
+          "media": {
+            "image": "643d2ea0-f2e1-11f0-a549-e33be667e764.png",
+            "type": "profile",
+            "meta": {
+              "side": ""
+            }
+          }
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515906",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49004",
+          "firstName": "Tizian",
+          "lastName": "Kellenberger",
+          "nickname": "The Elegant",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46468",
+          "firstName": "Enes",
+          "lastName": "Yavuzcan",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515905",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46000",
+          "firstName": "Jan",
+          "lastName": "Kuster",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46552",
+          "firstName": "Reto",
+          "lastName": "Lehmann",
+          "nickname": "The Reeesss",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515904",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "45884",
+          "firstName": "Antonio",
+          "lastName": "Carechino",
+          "nickname": "Diabolik",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42886",
+          "firstName": "Sasa",
+          "lastName": "Varga",
+          "nickname": "Butcher",
+          "countryCode": "HR"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515903",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "48976",
+          "firstName": "Raphael",
+          "lastName": "Keller",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "49284",
+          "firstName": "Donovan",
+          "lastName": "Wagner",
+          "nickname": "Donoblitz",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515902",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "39853",
+          "firstName": "Marcel",
+          "lastName": "Walpen",
+          "nickname": "Cello",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48780",
+          "firstName": "Fabian",
+          "lastName": "Buergin",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515901",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49271",
+          "firstName": "Srikanth",
+          "lastName": "Shetty Tallur",
+          "nickname": "Agent18",
+          "countryCode": "PT"
+        },
+        "participant2": {
+          "participantID": "49369",
+          "firstName": "Remo",
+          "lastName": "Ursprung",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "3",
+          "name": "Last 64"
+        }
+      }
+    },
+    {
+      "id": "515900",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "33058",
+          "firstName": "Roman",
+          "lastName": "Loeffel",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46465",
+          "firstName": "Luigino",
+          "lastName": "Gasperina",
+          "nickname": "The Gasoline",
+          "countryCode": "IT"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515899",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43409",
+          "firstName": "Silvio",
+          "lastName": "Thoma",
+          "nickname": "The Bull",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48516",
+          "firstName": "Benji",
+          "lastName": "Ruegg",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515898",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46485",
+          "firstName": "Damian",
+          "lastName": "Huegli",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "46413",
+          "firstName": "Bixente",
+          "lastName": "Jorns",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515897",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46544",
+          "firstName": "Patrik",
+          "lastName": "Barbieri",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "42558",
+          "firstName": "Stefan",
+          "lastName": "Dudolenski",
+          "nickname": "The freestyler",
+          "countryCode": "BG"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515896",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43434",
+          "firstName": "Hansi",
+          "lastName": "Waldmeier",
+          "nickname": "Vollgas",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48933",
+          "firstName": "Yannick",
+          "lastName": "Hari",
+          "nickname": "Harrison",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515895",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42809",
+          "firstName": "Ansh",
+          "lastName": "Sood",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "49328",
+          "firstName": "Marvin",
+          "lastName": "Beuchat",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515894",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "46393",
+          "firstName": "Dave",
+          "lastName": "Gerber",
+          "nickname": "The Wolf",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43475",
+          "firstName": "Denis",
+          "lastName": "Schnetzer",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515893",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "49420",
+          "firstName": "Pascal",
+          "lastName": "Goessi",
+          "nickname": "Gössinator",
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "43638",
+          "firstName": "Thomas",
+          "lastName": "Aeschimann",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515892",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "43463",
+          "firstName": "Antonio",
+          "lastName": "Maisano",
+          "nickname": null,
+          "countryCode": "CH"
+        },
+        "participant2": {
+          "participantID": "48835",
+          "firstName": "Marcel",
+          "lastName": "Hirzel",
+          "nickname": "Fridge",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    },
+    {
+      "id": "515891",
+      "attributes": {
+        "tournamentID": "10853",
+        "startDate": "2026-10-08",
+        "startTime": null,
+        "participant1": {
+          "participantID": "42886",
+          "firstName": "Sasa",
+          "lastName": "Varga",
+          "nickname": "Butcher",
+          "countryCode": "HR"
+        },
+        "participant2": {
+          "participantID": "49400",
+          "firstName": "Sascha",
+          "lastName": "Huber",
+          "nickname": "",
+          "countryCode": "CH"
+        },
+        "stage": {
+          "tournamentStageID": "2",
+          "name": "Last 128"
+        }
+      }
+    }
+  ],
+  "meta": {
+    "count": 70,
+    "totalCount": 70
+  }
+}

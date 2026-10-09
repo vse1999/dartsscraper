@@ -1,4 +1,6 @@
 import type { InlineKeyboardMarkup } from "grammy/types";
+import { noopLogger, type Logger } from "../logger.js";
+import { renderReportImage, type ImageReport, type ReportImageCard } from "./report-image.js";
 
 import {
   createTelegramDeliveryPolicy,
@@ -11,6 +13,8 @@ import {
 } from "./delivery-policy.js";
 
 export interface TelegramMessageSender {
+  readonly imagesEnabled?: boolean;
+  sendReport?(chatId: number | string, report: ImageReport, options?: TelegramSendMessageOptions): Promise<void>;
   sendMessage(
     chatId: number | string,
     text: string,
@@ -24,6 +28,9 @@ export interface TelegramSendMessageOptions {
 }
 
 export interface TelegramSenderOptions {
+  readonly imagesEnabled?: boolean;
+  readonly logger?: Logger;
+  readonly renderImage?: (card: ReportImageCard, signal?: AbortSignal) => Promise<Buffer>;
   readonly token: string;
   readonly apiFetch?: typeof fetch;
   readonly timeoutMs?: number;
@@ -53,7 +60,36 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
   const apiBaseUrl = (options.apiBaseUrl ?? "https://api.telegram.org").replace(/\/$/u, "");
   const deliveryPolicy = options.deliveryPolicy ?? createTelegramDeliveryPolicy();
 
-  return {
+  const sender: TelegramMessageSender = {
+    imagesEnabled: options.imagesEnabled === true,
+    async sendReport(chatId: number | string, report: ImageReport, sendOptions?: TelegramSendMessageOptions): Promise<void> {
+      if (!options.imagesEnabled || report.card === undefined) {
+        await sendReportText(sender, chatId, report.text, sendOptions); return;
+      }
+      const combined = combineAbortSignals(options.signal, sendOptions?.signal);
+      try {
+        let png: Buffer;
+        const started = performance.now();
+        try { png = await (options.renderImage ?? renderReportImage)(report.card, combined.signal); }
+        catch (error: unknown) {
+          if (combined.signal?.aborted) throw createAbortError();
+          (options.logger ?? noopLogger).warn("Report image rendering failed; using text.", { code: "REPORT_IMAGE_RENDER_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" });
+          await sendReportText(sender, chatId, report.text, sendOptions); return;
+        }
+        (options.logger ?? noopLogger).info("Report image rendered.", { renderMs: Math.round(performance.now() - started), bytes: png.byteLength });
+        try {
+          await deliveryPolicy.execute(makeChatKey(chatId), async (signal?: TelegramAbortSignal): Promise<void> => {
+            await sendMessageRequest(fetchImpl, apiBaseUrl, token, timeoutMs, chatId, report.caption, sendOptions, signal, png);
+          }, { ...(combined.signal === undefined ? {} : { signal: combined.signal }), retryAfterFromError: getTelegramRetryAfterSeconds });
+          (options.logger ?? noopLogger).info("Report image delivered.", { bytes: png.byteLength });
+        } catch (error: unknown) {
+          // Only a definitive Telegram rejection is safe to replace. Never duplicate an ambiguously delivered photo.
+          if (!(error instanceof TelegramApiError) || error.status !== 400 || combined.signal?.aborted) throw error;
+          (options.logger ?? noopLogger).warn("Telegram rejected report photo; using text.", { code: "REPORT_IMAGE_REJECTED" });
+          await sendReportText(sender, chatId, report.text, sendOptions);
+        }
+      } finally { combined.cleanup(); }
+    },
     async sendMessage(
       chatId: number | string,
       text: string,
@@ -86,6 +122,19 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
       }
     },
   };
+  return sender;
+}
+
+async function sendReportText(sender: TelegramMessageSender, chatId: number | string, text: string, options?: TelegramSendMessageOptions): Promise<void> {
+  if (text.trim() === "") throw new Error("Report text fallback must not be empty.");
+  let remaining = text;
+  while (remaining.length > 4000) {
+    const boundary = remaining.lastIndexOf("\n", 4000);
+    const end = boundary > 0 ? boundary : 4000;
+    await sender.sendMessage(chatId, remaining.slice(0, end), options?.signal === undefined ? undefined : { signal: options.signal });
+    remaining = remaining.slice(end).replace(/^\n/u, "");
+  }
+  await sender.sendMessage(chatId, remaining, options);
 }
 
 async function sendMessageRequest(
@@ -97,6 +146,7 @@ async function sendMessageRequest(
   text: string,
   sendOptions: TelegramSendMessageOptions | undefined,
   policySignal?: TelegramAbortSignal,
+  photo?: Buffer,
 ): Promise<void> {
   if (policySignal?.aborted === true) throw createAbortError();
   const controller = new AbortController();
@@ -104,14 +154,20 @@ async function sendMessageRequest(
   policySignal?.addEventListener("abort", onAbort, { once: true });
   const timeout = setTimeout((): void => controller.abort(), timeoutMs);
   try {
-    const response = await fetchWithCancellation(fetchImpl, `${apiBaseUrl}/bot${token}/sendMessage`, {
+    const form = new FormData();
+    if (photo !== undefined) {
+      form.set("chat_id", String(chatId)); form.set("caption", text); form.set("allow_paid_broadcast", "false");
+      form.set("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "darts-report.png");
+      if (sendOptions?.replyMarkup !== undefined) form.set("reply_markup", JSON.stringify(sendOptions.replyMarkup));
+    }
+    const response = await fetchWithCancellation(fetchImpl, `${apiBaseUrl}/bot${token}/${photo === undefined ? "sendMessage" : "sendPhoto"}`, {
       method: "POST",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
+      headers: photo === undefined ? { "content-type": "application/json", accept: "application/json" } : { accept: "application/json" },
+      body: photo === undefined ? JSON.stringify({
         chat_id: chatId,
         text,
         ...(sendOptions?.replyMarkup === undefined ? {} : { reply_markup: sendOptions.replyMarkup }),
-      }),
+      }) : form,
       signal: controller.signal,
     }, controller.signal);
     const payload = response.status === 429 || response.ok

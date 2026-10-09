@@ -15,6 +15,7 @@ import { ResearchHistoryService } from "../src/research/history-service.js";
 import { createResearchStorage, createResearchReaderFetch } from "../src/research/config.js";
 import { ConsoleLogger, type Logger } from "../src/logger.js";
 import { createTelegramSender } from "../src/telegram/sender.js";
+import { reportImagesEnabled } from "../src/telegram/report-image.js";
 import { readBotConfiguration } from "../src/telegram/bot.js";
 import { DartsPlayerStatsService } from "../src/telegram/stats-service.js";
 import { runModusReport, type ModusReportResult } from "../src/daily/modus-report.js";
@@ -163,7 +164,7 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
     ],
     logger,
   });
-  const telegram = createTelegramSender({ token: botConfiguration.token });
+  const telegram = createTelegramSender({ token: botConfiguration.token, imagesEnabled: reportImagesEnabled(process.env), logger });
 
   return runModusReport({
     date: resolveResearchDate(dateExpression ?? "tomorrow", { timeZone: "Europe/Budapest" }).date,

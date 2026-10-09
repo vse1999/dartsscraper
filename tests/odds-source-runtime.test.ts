@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { matchesGlob } from "node:path";
 import { describe, expect, it } from "vitest";
 import { enqueueBrowserRun, filterElapsedMatches, hasTippmixProMapping, requestedDateFor } from "../src/odds/runtime.js";
 import type { OddsReport } from "../src/odds/contracts.js";
@@ -103,6 +104,13 @@ describe("odds runtime date and source guards", () => {
     if (typeof functions !== "object" || functions === null || Array.isArray(functions)) throw new Error("vercel.json functions must contain an object");
     const webhook = (functions as { [key: string]: unknown })["api/telegram-webhook.ts"];
     if (typeof webhook !== "object" || webhook === null || Array.isArray(webhook)) throw new Error("Telegram webhook function config missing");
-    expect((webhook as { includeFiles?: unknown }).includeFiles).toBe("node_modules/@sparticuz/chromium/bin/**");
+    const includes = (webhook as { includeFiles?: unknown }).includeFiles;
+    expect(includes).toBe("{node_modules/@sparticuz/chromium/bin/**,public/fonts/**,node_modules/@resvg/resvg-js-linux-*/**}");
+    // Keep the original Chromium assets and add deterministic renderer assets without changing the schema type.
+    expect(typeof includes).toBe("string");
+    if (typeof includes !== "string") throw new Error("Bundle include glob must be a string.");
+    expect(matchesGlob("node_modules/@sparticuz/chromium/bin/chromium.br", includes)).toBe(true);
+    expect(matchesGlob("public/fonts/noto-sans.ttf", includes)).toBe(true);
+    expect(matchesGlob("node_modules/@resvg/resvg-js-linux-x64-gnu/resvgjs.linux-x64-gnu.node", includes)).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { OfficialPdcScheduleUnavailableError } from "../src/pdc/official-api-fixture-source.js";
 
 import type { Logger } from "../src/logger.js";
 import { handlePdcReportCommand, parsePdcReportCommand } from "../src/telegram/pdc-command.js";
@@ -46,6 +47,18 @@ function result(): PdcTournamentResult {
 }
 
 describe("PDC Telegram command", () => {
+  it("distinguishes an official event with unpublished draw from a verified empty day", async () => {
+    const replies: string[] = [];
+    const outcome = await handlePdcReportCommand("/pdc today", {
+      getUpcomingReportForDate: async (): Promise<PdcUpcomingReport> => { throw new OfficialPdcScheduleUnavailableError("not exposed", undefined, { date: "2026-10-09", tournamentNames: ["Swiss Darts Trophy"], availableFixtures: [] }); },
+      getLatestResults: async (): Promise<readonly PdcTournamentResult[]> => [],
+    }, () => "2026-10-09", { reply: async (text: string): Promise<void> => { replies.push(text); } }, logger);
+    expect(outcome).toBe("failed");
+    expect(replies.at(-1)).toContain("Official event found: Swiss Darts Trophy");
+    expect(replies.at(-1)).toContain("not yet published or could not be verified");
+    expect(replies.at(-1)).not.toContain("No scheduled PDC match");
+    expect(replies.at(-1)).not.toContain("not exposed");
+  });
   it("parses the supported date expressions without changing MODUS command semantics", () => {
     expect(parsePdcReportCommand("/pdc today")).toBe("today");
     expect(parsePdcReportCommand("/pdc tomorrow")).toBe("tomorrow");

@@ -14,6 +14,9 @@ import {
 import { ConsoleLogger, type Logger } from "../logger.js";
 import { isOwnerPrivateChat, parseAllowedUserId } from "./authorization.js";
 import { formatPlayerStats, TELEGRAM_MAX_TEXT_LENGTH } from "./formatter.js";
+import { createTelegramSender, type TelegramSendMessageOptions } from "./sender.js";
+import { reportImagesEnabled, type ImageReport } from "./report-image.js";
+import { playerImageReports } from "./image-report-model.js";
 import {
   handleModusReportCommand,
   type BackgroundTaskScheduler,
@@ -27,7 +30,7 @@ import {
 import { parseStatsBatchQuery, statsQueryUsage, type StatsBatchQuery, type StatsQuery } from "./query.js";
 import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
-import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, type PlayerStatsReader } from "./stats-service.js";
+import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, type PlayerStatsReader, type PlayerStatsResult } from "./stats-service.js";
 import { handleCompareCommand, type CompareMessageResponder } from "./compare-command.js";
 import { compareQueryUsage } from "./compare-query.js";
 import { normalizePlayerName } from "../player/resolver.js";
@@ -46,9 +49,10 @@ import {
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
-export const TELEGRAM_BOT_RELEASE = "live-odds-read-only-v1";
+export const TELEGRAM_BOT_RELEASE = "image-reports-v1";
 
 export interface BotEnvironment {
+  readonly REPORT_IMAGES_ENABLED?: string;
   readonly BOT_TOKEN?: string;
   readonly ALLOWED_USER_ID?: string;
   readonly CRON_SECRET?: string;
@@ -59,6 +63,7 @@ export interface BotEnvironment {
 }
 
 export interface CreateBotOptions {
+  readonly imagesEnabled?: boolean;
   readonly token: string;
   readonly allowedUserId: number;
   readonly statsService: PlayerStatsReader;
@@ -74,6 +79,7 @@ export interface CreateBotOptions {
 }
 
 export interface StatsMessageResponder {
+  report?(stats: PlayerStatsResult): Promise<void>;
   reply(text: string): Promise<{ readonly messageId: number }>;
   edit(messageId: number, text: string): Promise<void>;
 }
@@ -112,6 +118,13 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
   };
   const bot = new Bot<Context>(options.token, botConfig);
   const deliveryPolicy = options.deliveryPolicy ?? createTelegramDeliveryPolicy();
+  const imageSender = createTelegramSender({ token: options.token, deliveryPolicy, logger, imagesEnabled: options.imagesEnabled === true,
+    ...(options.apiFetch === undefined ? {} : { apiFetch: options.apiFetch }) });
+  const reportStats = async (chatId: number, stats: PlayerStatsResult): Promise<void> => {
+    if (imageSender.sendReport === undefined) throw new Error("Image report transport is unavailable.");
+    const signal = AbortSignal.timeout(30_000);
+    for (const report of playerImageReports(stats)) await imageSender.sendReport(chatId, report, { signal });
+  };
   const deliveryTransformer: Transformer = async (previous, method, payload, signal) => {
     if (method !== "sendMessage" && method !== "editMessageText") {
       return previous(method, payload, signal);
@@ -211,6 +224,10 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
       options.pdcTournamentService,
       (expression): string => resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date,
       {
+        ...(options.imagesEnabled ? { replyReport: async (report: ImageReport, replyOptions?: TelegramSendMessageOptions): Promise<void> => {
+          if (imageSender.sendReport === undefined) throw new Error("Image report transport is unavailable.");
+          await imageSender.sendReport(chatId, report, replyOptions);
+        } } : {}),
         reply: async (text: string, replyOptions?: { readonly signal?: AbortSignal }): Promise<{ readonly messageId: number }> => {
           const sent = await ctx.reply(text, undefined, replyOptions?.signal as unknown as GrammyAbortSignal | undefined);
           return { messageId: sent.message_id };
@@ -300,6 +317,7 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     const chatId = ctx.chat?.id;
     if (chatId === undefined) return;
     const responder: StatsMessageResponder = {
+      ...(options.imagesEnabled ? { report: async (stats: PlayerStatsResult): Promise<void> => reportStats(chatId, stats) } : {}),
       reply: async (text: string): Promise<{ readonly messageId: number }> => {
         const sent = await ctx.reply(text);
         return { messageId: sent.message_id };
@@ -317,6 +335,7 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
     if (text === undefined || text.startsWith("/") || chatId === undefined) return;
 
     const responder: StatsMessageResponder = {
+      ...(options.imagesEnabled ? { report: async (stats: PlayerStatsResult): Promise<void> => reportStats(chatId, stats) } : {}),
       reply: async (message: string): Promise<{ readonly messageId: number }> => {
         const sent = await ctx.reply(message);
         return { messageId: sent.message_id };
@@ -345,6 +364,7 @@ export function createConfiguredBot(
     ? undefined
     : createDefaultValueReader({ oddsReader, playerStatsReader: bulkPlayerStats });
   return createBot({
+    imagesEnabled: reportImagesEnabled(environment),
     ...configuration,
     statsService,
     pdcTournamentService: createDefaultPdcTournamentService(logger, bulkPlayerStats),
@@ -469,6 +489,7 @@ async function handleStatsBatchQuery(
 
     let message: string;
     let outcome: Exclude<StatsHandlerOutcome, "invalid-query">;
+    let imageStats: PlayerStatsResult | undefined;
     if (Date.now() - startedAt >= BATCH_TIMEOUT_MS) {
       message = `⏱️ Skipped “${requestedName}”: the batch time limit was reached.`;
       outcome = "upstream-timeout";
@@ -476,6 +497,7 @@ async function handleStatsBatchQuery(
       const playerStartedAt = Date.now();
       try {
         const result = await statsService.getPlayerStats(requestedName, query.matchCount, query.source);
+        imageStats = result;
         message = formatResolvedPlayerStats(requestedName, result);
         outcome = "success";
         logger.info("Player statistics lookup completed.", {
@@ -505,7 +527,8 @@ async function handleStatsBatchQuery(
       }
     }
 
-    await responder.reply(message);
+    if (imageStats !== undefined && responder.report !== undefined) await responder.report(imageStats);
+    else await responder.reply(message);
     if (outcome === "success") succeeded += 1;
     else {
       failed += 1;
@@ -557,8 +580,10 @@ async function handleStatsQuery(
   let finalMessage: string;
   let returnedCount: number | undefined;
   let provider: string | undefined;
+  let imageStats: PlayerStatsResult | undefined;
   try {
     const result = await statsService.getPlayerStats(query.playerName, query.matchCount, query.source);
+    imageStats = result;
     finalMessage = formatPlayerStats(result);
     returnedCount = result.matches.length;
     provider = result.provider;
@@ -577,6 +602,10 @@ async function handleStatsQuery(
     });
   }
 
+  if (imageStats !== undefined && responder.report !== undefined) {
+    await responder.report(imageStats);
+    finalMessage = `Completed: ${imageStats.playerName} · last ${imageStats.requestedCount} matches. Report pages above.`;
+  }
   try {
     await responder.edit(status.messageId, finalMessage);
   } catch {

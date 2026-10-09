@@ -16,6 +16,8 @@ import {
   type ModusOverviewPlayer,
 } from "../telegram/modus-overview-formatter.js";
 import { formatModusMatchupMessages } from "../telegram/modus-matchup-formatter.js";
+import { limitImageReports, matchupImageReport } from "../telegram/image-report-model.js";
+import type { ImageReport } from "../telegram/report-image.js";
 import { createModusPlayerKeyboard } from "../telegram/modus-player-callback.js";
 import type { PlayerStatsReader, PlayerStatsResult } from "../telegram/stats-service.js";
 import type { TelegramMessageSender, TelegramSendMessageOptions } from "../telegram/sender.js";
@@ -325,17 +327,17 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
     }
     const incomplete = discoveryStatus !== "succeeded"
       || lookupResults.some((result) => result.status === "failed");
-    const overviewMessages = fixtures.length > 0
+    const analyses = fixtures.map(fixture => analyzeMatchup(fixture,
+      statsByPlayer.get(normalizePlayerName(fixture.playerOne)), statsByPlayer.get(normalizePlayerName(fixture.playerTwo)), options.matchCount));
+    const imageReports = options.dependencies.telegram.imagesEnabled && fixtures.length > 0
+      ? limitImageReports(analyses.map(analysis => matchupImageReport(analysis,
+        `MODUS · ${date} · ${analysis.fixture.startTime === null ? "Time TBA" : new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Budapest", hour: "2-digit", minute: "2-digit" }).format(new Date(analysis.fixture.startTime))}`, incomplete))) : undefined;
+    const overviewMessages = imageReports !== undefined ? imageReports.map(report => report.text) : fixtures.length > 0
       ? formatModusMatchupMessages({
         date,
         dateLabel: options.dateLabel ?? "tomorrow",
         matchCount: options.matchCount,
-        analyses: fixtures.map((fixture) => analyzeMatchup(
-          fixture,
-          statsByPlayer.get(normalizePlayerName(fixture.playerOne)),
-          statsByPlayer.get(normalizePlayerName(fixture.playerTwo)),
-          options.matchCount,
-        )),
+        analyses,
         ...(incomplete ? { incomplete: true } : {}),
       })
       : formatModusOverviewMessages({
@@ -355,6 +357,7 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
       logger,
       date,
       budget.totalSignal,
+      imageReports,
     );
     const results = lookupResults.map(toReportResult);
     const data = summarizeData(results);
@@ -529,6 +532,7 @@ async function sendOverviewMessages(
   logger: Logger,
   date: string,
   signal: AbortSignal,
+  imageReports?: readonly ImageReport[],
 ): Promise<readonly ModusReportDeliveryAttempt[]> {
   const attempts: ModusReportDeliveryAttempt[] = [];
   for (const [index, message] of messages.entries()) {
@@ -538,8 +542,11 @@ async function sendOverviewMessages(
     }
     try {
       const options = index === messages.length - 1 ? { replyMarkup } : undefined;
+      const report = imageReports?.[index];
       await raceWithReportDeadline(
-        sendMessageWithSignal(telegram, chatId, message, options, signal),
+        report !== undefined && telegram.sendReport !== undefined
+          ? telegram.sendReport(chatId, report, { ...options, signal })
+          : sendMessageWithSignal(telegram, chatId, message, options, signal),
         signal,
         "delivery",
       );

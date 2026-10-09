@@ -1,0 +1,30 @@
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { performance } from "node:perf_hooks";
+import { z } from "zod";
+import { MatchSchema } from "../src/schemas/match.js";
+import { calculateMatchSummary } from "../src/services/statistics.js";
+import { parseLabAnalyses } from "./report-layouts.js";
+import { matchupImageReport, playerImageReports } from "../src/telegram/image-report-model.js";
+import { renderReportImage } from "../src/telegram/report-image.js";
+
+const directory = ".tmp/report-layout-lab/production";
+await mkdir(directory, { recursive: true });
+const raw: unknown = JSON.parse(await readFile(".tmp/report-layout-lab/live-data.json", "utf8"));
+const a = parseLabAnalyses(raw)[0]; if (a === undefined) throw new Error("Collect sample first.");
+const report = matchupImageReport(a, "MODUS · 8 Oct · Sample verification");
+if (report.card === undefined) throw new Error("Missing image card");
+const coldStart = performance.now(); const cold = await renderReportImage(report.card);
+const coldMs = performance.now() - coldStart;
+await writeFile(`${directory}/matchup.png`, cold);
+const sample = z.object({ histories: z.array(z.object({ playerName: z.string(), requestedCount: z.literal(10), matches: z.array(MatchSchema), sourceUrl: z.string().url(), sourceLabel: z.string(), evidenceUrls: z.array(z.string()) })).min(1) }).parse(raw);
+const h = sample.histories[0]; if (h === undefined) throw new Error("Missing player");
+const summary = calculateMatchSummary(h.matches);
+const pages = playerImageReports({ ...h, meanAverage: summary.average, availableAverageCount: summary.availableAverageCount, provider: "dartsorakel" });
+for (const [index, page] of pages.entries()) if (page.card !== undefined) await writeFile(`${directory}/personal-${index + 1}.png`, await renderReportImage(page.card));
+const times: number[] = [];
+const cpuBefore = process.cpuUsage();
+for (let i = 0; i < 100; i += 1) { const start = performance.now(); await renderReportImage(report.card); times.push(performance.now() - start); }
+const cpu = process.cpuUsage(cpuBefore);
+times.sort((x: number, y: number): number => x - y);
+const result = { scope: "Local native renderer; Node process CPU includes its native worker threads. Not a Vercel billing measurement.", samples: 100, coldMs, medianMs: times[50], p95Ms: times[94], cpuMsPerImage: (cpu.user + cpu.system) / 1000 / 100, imageBytes: cold.byteLength };
+await writeFile(`${directory}/benchmark.json`, JSON.stringify(result, null, 2)); console.log(JSON.stringify(result));

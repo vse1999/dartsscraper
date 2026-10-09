@@ -3,10 +3,11 @@
   "functions": {
     "api/telegram-webhook.ts": {
       "maxDuration": 300,
-      "includeFiles": "node_modules/@sparticuz/chromium/bin/**"
+      "includeFiles": "{node_modules/@sparticuz/chromium/bin/**,public/fonts/**,node_modules/@resvg/resvg-js-linux-*/**}"
     },
     "api/daily-modus-report.ts": {
-      "maxDuration": 180
+      "maxDuration": 180,
+      "includeFiles": "{public/fonts/**,node_modules/@resvg/resvg-js-linux-*/**}"
     }
   },
   "crons": [

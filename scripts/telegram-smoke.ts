@@ -3,16 +3,22 @@ import type { Update } from "grammy/types";
 import { handleTelegramWebhook, readWebhookSecret } from "../api/telegram-webhook.js";
 import type { LogContext, Logger } from "../src/logger.js";
 import { createConfiguredBot, readBotConfiguration } from "../src/telegram/bot.js";
+import { reportImagesEnabled } from "../src/telegram/report-image.js";
 
 class SmokeLogger implements Logger {
   public completedLookup = false;
   public completedProvider: string | undefined;
   public errorCount = 0;
+  public deliveredImages = 0;
+  public expectedImages = 0;
 
   public debug(_message: string, _context?: LogContext): void {}
   public info(message: string, context?: LogContext): void {
+    if (message === "Report image delivered.") this.deliveredImages += 1;
     if (message === "Player statistics lookup completed.") {
       this.completedLookup = true;
+      const count = context?.returnedCount;
+      if (typeof count === "number") this.expectedImages += Math.max(1, Math.ceil(count / 10));
       const provider = context?.provider;
       if (typeof provider === "string") this.completedProvider = provider;
     }
@@ -72,6 +78,7 @@ if (
   response.status !== 200
   || !logger.completedLookup
   || logger.errorCount !== 0
+  || (reportImagesEnabled(process.env) && logger.deliveredImages !== logger.expectedImages)
 ) {
   if (processingFailure instanceof Error) {
     const safeMessage = processingFailure.message
@@ -87,5 +94,7 @@ console.log(JSON.stringify({
   updateCompletedBeforeAcknowledgement: true,
   botUsername: bot.botInfo.username,
   liveMessageDeliveredAndEdited: true,
+  imageMessagesDelivered: logger.deliveredImages,
+  imageMessagesExpected: logger.expectedImages,
   provider: logger.completedProvider,
 }));

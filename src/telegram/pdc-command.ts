@@ -7,6 +7,10 @@ import type { Logger } from "../logger.js";
 import type { PdcTournamentResult } from "../pdc/schemas.js";
 import type { PdcTournamentService, PdcUpcomingReport } from "../pdc/service.js";
 import { formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
+import type { ImageReport } from "./report-image.js";
+import type { InlineKeyboardMarkup } from "grammy/types";
+import { pdcImageReports, pdcPlayerKeyboard } from "./pdc-image-reports.js";
+import { OfficialPdcScheduleUnavailableError } from "../pdc/official-api-fixture-source.js";
 import type { BackgroundTaskScheduler } from "./modus-command.js";
 
 export type PdcReportDateExpression = "today" | "tomorrow" | "latest";
@@ -32,6 +36,7 @@ export interface PdcDeliveryOptions {
 }
 
 export interface PdcCommandResponder {
+  replyReport?(report: ImageReport, options?: { readonly signal?: AbortSignal; readonly replyMarkup?: InlineKeyboardMarkup }): Promise<void>;
   /** Reply-only adapters remain valid; production adapters return the message id. */
   reply(text: string, options?: PdcDeliveryOptions): Promise<void | PdcAcknowledgement>;
   edit?(messageId: number, text: string, options?: PdcDeliveryOptions): Promise<void>;
@@ -146,10 +151,10 @@ async function runPdcReport(
         if (!isReportDeadlineExceeded(error) || error.phase !== "research" || latestPartial === undefined) {
           throw error;
         }
-        await sendPdcMessages(responder, formatPdcUpcomingMessages(latestPartial), session);
+        await sendPdcUpcoming(responder, latestPartial, session);
         return "failed";
       }
-      await sendPdcMessages(responder, formatPdcUpcomingMessages(report), session);
+      await sendPdcUpcoming(responder, report, session);
     }
     return "success";
   } catch (error: unknown) {
@@ -162,6 +167,8 @@ async function runPdcReport(
       if (session.canDeliver()) {
         const message = isReportDeadlineExceeded(error)
           ? "⚠️ The PDC research deadline was reached before a complete report was available."
+          : error instanceof OfficialPdcScheduleUnavailableError
+            ? officialScheduleUnavailableMessage(error)
           : "The PDC tournament scan could not be completed. Please try again later.";
         await session.deliver(
           (signal: AbortSignal): Promise<void | PdcAcknowledgement> => responder.reply(message, { signal }),
@@ -175,6 +182,41 @@ async function runPdcReport(
     }
     return "failed";
   }
+}
+
+function officialScheduleUnavailableMessage(error: OfficialPdcScheduleUnavailableError): string {
+  if (error.tournamentNames.length === 0) return "⚠️ The official PDC schedule could not be verified. This does not mean there are no matches. Please retry later.";
+  const names = error.tournamentNames.slice(0, 10).map(name => name.replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 160)).join(" · ");
+  return [
+    `🎯 PDC · ${error.date ?? "requested date"}`,
+    `Official event found: ${names}`,
+    "Named matchups are not yet published or could not be verified from the official draw. This is not a no-matches result.",
+    ...(error.availableFixtures.length > 0 ? [`${error.availableFixtures.length} other official pairings were found, but the full slate is incomplete.`] : []),
+    "No guessed pairings were used. Please retry later.",
+    "Official schedule: https://www.pdc.tv/matches",
+  ].join("\n");
+}
+
+async function sendPdcUpcoming(responder: PdcCommandResponder, report: PdcUpcomingReport, session: ReportSession): Promise<void> {
+  if (responder.replyReport === undefined || report.fixtures.length === 0) {
+    await sendPdcMessages(responder, formatPdcUpcomingMessages(report), session); return;
+  }
+  const reports = pdcImageReports(report);
+  for (const [index, image] of reports.entries()) {
+    if (!session.canDeliver()) throw new ReportDeadlineExceededError("delivery");
+    await session.deliver(async (signal: AbortSignal): Promise<void> => {
+      await responder.replyReport?.(image, { signal, ...(index === reports.length - 1 ? { replyMarkup: pdcPlayerKeyboard(report) } : {}) });
+    });
+  }
+  // Schedule evidence remains text and detailed player rows are available through the keyboard instead of noisy automatic duplicates.
+  const sources = [...new Set(report.fixtures.flatMap(f => f.evidenceUrls ?? [f.sourceUrl]))];
+  const evidence = sources.map(url => `Schedule source: ${url}`);
+  let text = "Tap a player for the supporting match rows.";
+  for (const line of evidence) {
+    if (text.length + line.length + 1 > 3800) { await sendPdcMessages(responder, [text], session); text = "Schedule evidence · continued"; }
+    text += `\n${line}`;
+  }
+  await sendPdcMessages(responder, [text], session);
 }
 
 async function sendPdcMessages(
