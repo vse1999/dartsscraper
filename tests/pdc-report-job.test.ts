@@ -125,6 +125,15 @@ describe("complete statistic chunks", () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("may still be running"), expect.any(AbortSignal));
   });
+  it("reports a safe continuation stage and HTTP code without exposing error details", async () => {
+    const editStatus = vi.fn(async (): Promise<void> => {});
+    await runPdcReportJob(job(), { reader: { getFixturesForDate: async () => fixtures(8), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) },
+      sender: { sendReport: vi.fn(async (): Promise<void> => {}), sendMessage: vi.fn() }, editStatus, chatId: 1, logger: noopLogger,
+      dispatcher: { dispatch: async (): Promise<void> => { throw new PdcJobDispatchError("private credential detail", false, undefined, 400); } },
+    });
+    expect(editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("Stopped at: continuation (HTTP 400)"), expect.any(AbortSignal));
+    expect(editStatus.mock.calls.at(-1)?.[1]).not.toContain("private credential detail");
+  });
 });
 
 describe("PDC job dispatch safety", () => {

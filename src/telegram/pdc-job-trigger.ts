@@ -4,7 +4,7 @@ import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 export interface PdcReportJobDispatcher { dispatch(job: PdcReportJob, signal?: AbortSignal): Promise<void>; }
 export class PdcJobDispatchError extends Error {
-  public constructor(message: string, public readonly uncertain: boolean, cause?: unknown) { super(message, cause === undefined ? undefined : { cause }); this.name = new.target.name; }
+  public constructor(message: string, public readonly uncertain: boolean, cause?: unknown, public readonly statusCode?: number) { super(message, cause === undefined ? undefined : { cause }); this.name = new.target.name; }
 }
 export function createPdcJobDispatcher(options: {
   readonly endpointUrl: string; readonly cronSecret: string; readonly signingSecret: string; readonly fetchImpl?: typeof fetch;
@@ -26,7 +26,7 @@ export function createPdcJobDispatcher(options: {
     const timeout = setTimeout((): void => controller.abort(), 10_000);
     try {
       const response = await waitWithSignal(fetchImpl(endpoint, { method: "POST", redirect: "error", headers: { authorization: `Bearer ${options.cronSecret}`, "content-type": "application/json" }, body, signal: controller.signal }), controller.signal);
-      if (response.status !== 202) throw new PdcJobDispatchError(`PDC job endpoint rejected dispatch (HTTP ${response.status}).`, response.status >= 500);
+      if (response.status !== 202) throw new PdcJobDispatchError(`PDC job endpoint rejected dispatch (HTTP ${response.status}).`, response.status >= 500, undefined, response.status);
       await response.body?.cancel();
     } catch (error: unknown) {
       // Do not automatically repeat a dispatch: an accepted background job may
