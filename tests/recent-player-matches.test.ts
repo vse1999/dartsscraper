@@ -4,12 +4,32 @@ import type { DartsOrakelMatchRequestOptions } from "../src/dartsorakel/client.j
 import type { DartsOrakelMatchesResponse } from "../src/dartsorakel/parser.js";
 import { parseDartsOrakelMatches } from "../src/dartsorakel/parser.js";
 import { DartsOrakelScraper } from "../src/dartsorakel/scraper.js";
+import { DartsOrakelRequestError, DartsOrakelStructureChangedError } from "../src/errors.js";
 import type { PlayerIdentity } from "../src/schemas/player.js";
 import { readMatchFixture } from "./helpers.js";
 
 const player: PlayerIdentity = { id: 29, name: "Rob Cross", slug: "rob-cross" };
 
 describe("bounded DartsOrakel player history", () => {
+  it("keeps average and successful 180 data when the optional checkout transport fails", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const getPlayerMatches = vi.fn(async (_id: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> => {
+      if (options.statistic === "checkoutPercentage") throw new DartsOrakelRequestError("HTTP 503", { url: "https://dartsorakel.com/api/player/matches/29", status: 503, retryable: true });
+      return responseForStatistic(fixture, options.statistic);
+    });
+    const matches = await new DartsOrakelScraper({ getPlayerMatches }).getPlayerMatches(player);
+    expect(matches.map(coreMatch)).toEqual(parseDartsOrakelMatches(player, fixture).map(coreMatch));
+    expect(matches.some((match) => match.oneEighties !== undefined)).toBe(true);
+    expect(matches.every((match) => match.checkoutPercentage === undefined)).toBe(true);
+  });
+  it("still rejects invalid optional source structure rather than hiding a data validation failure", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const getPlayerMatches = vi.fn(async (_id: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> => {
+      if (options.statistic === "checkoutPercentage") throw new DartsOrakelStructureChangedError("invalid schema");
+      return responseForStatistic(fixture, options.statistic);
+    });
+    await expect(new DartsOrakelScraper({ getPlayerMatches }).getPlayerMatches(player)).rejects.toThrow("invalid schema");
+  });
   it("stops a lookback expansion when its caller is cancelled", async () => {
     const fixture = readMatchFixture("rob-cross-matches.json");
     const controller = new AbortController();

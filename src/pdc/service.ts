@@ -36,6 +36,7 @@ export interface PdcPlayerStats {
 }
 
 export interface PdcPlayerStatsReader {
+  getPlayerStatsBase?(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PdcPlayerStats>;
   getPlayerStats(playerName: string, matchCount: number, source?: "auto" | "dartsorakel" | "modus", signal?: AbortSignal): Promise<PdcPlayerStats>;
 }
 
@@ -152,7 +153,28 @@ export class PdcTournamentService {
       onPartial?.({ date: validatedDate, fixtures, players: partialPlayers.map((player) => ({ ...player })) });
     };
     publishPartial();
+    const bases = new Map<string, PdcPlayerResearch>();
+    if (this.playerStats.getPlayerStatsBase !== undefined) {
+      const readBase = this.playerStats.getPlayerStatsBase.bind(this.playerStats);
+      await mapWithConcurrency(names, this.playerConcurrency, async (requestedName: string): Promise<PdcPlayerResearch> => {
+        try {
+          const stats = await withOptionalDeadline(readBase(requestedName, this.playerMatchCount, signal), signal);
+          return { requestedName, stats, failureCode: null };
+        } catch (error: unknown) {
+          this.logger.warn("Upcoming PDC base history failed.", { date: validatedDate, player: requestedName, errorType: error instanceof Error ? error.name : "UnknownError" });
+          return { requestedName, stats: null, failureCode: isReportDeadlineExceeded(error) ? "timeout" : "unavailable" };
+        }
+      }, signal, (requestedName: string): PdcPlayerResearch => ({ requestedName, stats: null, failureCode: "unstarted" }), (index: number, player: PdcPlayerResearch): void => {
+        bases.set(player.requestedName, player);
+        partialPlayers[index] = player;
+        publishPartial();
+      });
+    }
     const players = await mapWithConcurrency(names, this.playerConcurrency, async (requestedName): Promise<PdcPlayerResearch> => {
+      const base = bases.get(requestedName);
+      // A failed base read is not retried in the same bulk job. This preserves
+      // the request budget for players whose histories are actually available.
+      if (base !== undefined && base.stats === null) return base;
       try {
         const operation = this.playerStats?.getPlayerStats(requestedName, this.playerMatchCount, "dartsorakel", signal);
         const stats = await withOptionalDeadline(operation ?? Promise.reject(new Error("Player statistics reader was unavailable.")), signal);
@@ -167,19 +189,19 @@ export class PdcTournamentService {
         });
         return {
           requestedName,
-          stats: null,
+          stats: base?.stats ?? null,
           failureCode: isReportDeadlineExceeded(error) ? "timeout" : "unavailable",
         };
       }
-    }, signal, (requestedName: string): PdcPlayerResearch => ({
-      requestedName,
-      stats: null,
-      failureCode: "unstarted",
-    }), (index: number, player: PdcPlayerResearch): void => {
+    }, signal, (requestedName: string): PdcPlayerResearch => {
+      const base = bases.get(requestedName);
+      if (base !== undefined) return { ...base, failureCode: base.stats === null ? base.failureCode : "timeout" };
+      return { requestedName, stats: null, failureCode: "unstarted" };
+    }, (index: number, player: PdcPlayerResearch): void => {
       partialPlayers[index] = player;
       publishPartial();
     }, (index: number, requestedName: string): void => {
-      partialPlayers[index] = { requestedName, stats: null, failureCode: "timeout" };
+      partialPlayers[index] = { requestedName, stats: bases.get(requestedName)?.stats ?? null, failureCode: "timeout" };
       publishPartial();
     });
     this.logger.info("Upcoming PDC research completed.", {
@@ -228,7 +250,7 @@ export class PdcTournamentService {
   }
 
   private async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
-    const cacheKey = `pdc-fixtures-v7-${date}`;
+    const cacheKey = `pdc-fixtures-v8-${date}`;
     const cached = PdcFixtureSchema.array().safeParse(await withOptionalDeadline(this.cache?.get(cacheKey) ?? Promise.resolve(undefined), signal));
     if (cached.success) return cached.data;
     const existing = signal === undefined ? this.fixturePromises.get(date) : undefined;

@@ -49,6 +49,8 @@ export interface ResearchHistoryReader {
 }
 
 export interface ResearchHistoryOptions {
+  /** Full research defaults to 20; lightweight slate coverage may acquire 10. */
+  readonly minimumAcquisitionCount?: number;
   readonly resolver: Pick<PlayerResolver, "resolvePlayer">;
   readonly scraper: Pick<DartsOrakelScraper, "getPlayerMatches">;
   readonly ledger: EvidenceLedger;
@@ -85,6 +87,7 @@ export class ResearchHistoryService {
   private readonly now: () => Date;
   private readonly freshTtlMs: number;
   private readonly maxEntries: number;
+  private readonly minimumAcquisitionCount: number;
   private readonly entries = new Map<string, Entry>();
   private readonly flights = new Map<string, Flight>();
   private acquisitions = 0;
@@ -96,6 +99,8 @@ export class ResearchHistoryService {
     this.now = options.now ?? ((): Date => new Date());
     this.freshTtlMs = positiveInteger(options.freshTtlMs ?? 60_000, "Research freshness TTL");
     this.maxEntries = positiveInteger(options.maxEntries ?? 500, "Research cache capacity");
+    this.minimumAcquisitionCount = options.minimumAcquisitionCount ?? 20;
+    validateLimit(this.minimumAcquisitionCount);
   }
 
   public async getLastMatches(name: string, limit: number, signal?: AbortSignal): Promise<MatchResult> {
@@ -115,7 +120,7 @@ export class ResearchHistoryService {
     const player = PlayerIdentitySchema.parse(identity);
     throwIfAborted(signal);
     const dateTo = nextBudapestDate(this.clock());
-    const acquiredLimit = Math.max(20, limit);
+    const acquiredLimit = Math.max(this.minimumAcquisitionCount, limit);
     const key = `${player.id}:${dateTo}:${acquiredLimit}`;
     const current = this.entries.get(key);
     if (current !== undefined && current.snapshot.player.name === player.name && current.snapshot.player.slug === player.slug && this.isFresh(current.snapshot)) {
@@ -163,7 +168,7 @@ export class ResearchHistoryService {
   public peekFreshSnapshot(identity: PlayerIdentity, limit: number = 20): ResearchHistoryRead | null {
     const player = PlayerIdentitySchema.parse(identity);
     validateLimit(limit);
-    const entry = this.entries.get(`${player.id}:${nextBudapestDate(this.clock())}:${Math.max(20, limit)}`);
+    const entry = this.entries.get(`${player.id}:${nextBudapestDate(this.clock())}:${Math.max(this.minimumAcquisitionCount, limit)}`);
     if (entry === undefined || entry.snapshot.player.name !== player.name || entry.snapshot.player.slug !== player.slug || !this.isFresh(entry.snapshot)) return null;
     return this.toRead(entry, limit);
   }

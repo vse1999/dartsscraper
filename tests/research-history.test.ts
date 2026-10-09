@@ -22,6 +22,16 @@ function setup(ledger: EvidenceLedger = new MemoryEvidenceLedger({ now }), clock
 }
 
 describe("canonical research history", () => {
+  it("supports a bounded lightweight ten-row acquisition without fabricating previous-ten history", async () => {
+    const scrape = vi.fn(async (): Promise<Match[]> => history(10));
+    const service = new ResearchHistoryService({ resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player }, scraper: { getPlayerMatches: scrape }, ledger: new MemoryEvidenceLedger({ now }), now, minimumAcquisitionCount: 10 });
+    const result = await service.getLastMatchesSnapshot(player.name, 10);
+    expect(scrape).toHaveBeenCalledWith(player, 10, "2026-10-01", expect.any(AbortSignal));
+    expect(result.value.matches).toHaveLength(10);
+    expect(result.research.previous10.matchCount).toBe(0);
+    expect(service.peekFreshSnapshot(player, 10)?.evidence.id).toBe(result.evidence.id);
+    expect(() => new ResearchHistoryService({ resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player }, scraper: { getPlayerMatches: scrape }, ledger: new MemoryEvidenceLedger(), minimumAcquisitionCount: 1001 })).toThrow();
+  });
   it("rejects conflicting identities before joining an in-flight acquisition", async () => {
     let release: (matches: Match[]) => void = (): void => undefined;
     const pending = new Promise<Match[]>((resolve): void => { release = resolve; });

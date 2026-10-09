@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { EredmenyekPdcFixtureSource, parseEredmenyekPdcDetail, parseEredmenyekPdcSchedule } from "../src/pdc/eredmenyek-fixture-source.js";
 import { OfficialPdcScheduleUnavailableError } from "../src/pdc/official-api-fixture-source.js";
 import type { PdcFixture, PdcFixtureSource } from "../src/pdc/schemas.js";
+import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
+import { PlayerStatsResponseSchema } from "../src/schemas/player.js";
 
 const event = "2026 ET14 - Swiss Darts Trophy";
 const date = "2026-10-09";
@@ -67,6 +69,22 @@ describe("Eredmenyek official-event-backed PDC fallback", () => {
     const fixtures = await new EredmenyekPdcFixtureSource({ officialSource: official(), fetchImpl: fetchCapture(), resolver: { resolve }, now: (): Date => new Date(`${date}T08:00:00Z`) }).getFixtures(date);
     expect(resolve).toHaveBeenCalledWith("Niels Zonneveld", expect.any(AbortSignal));
     expect(fixtures[0]?.playerOne).toBe("Canonical Niels Zonneveld");
+  });
+
+  it("resolves provider Alexander/A. to directory Alex only through a unique displayed abbreviation", async () => {
+    const captured = PlayerStatsResponseSchema.parse({ draw: 0, recordsTotal: 2, recordsFiltered: 2, data: [
+      { player_key: 15005, player_name: "Alex Fehlmann", player_profile_url: "https://dartsorakel.com/player/details/15005/alex-fehlmann" },
+      { player_key: 74, player_name: "Bradley Brooks", player_profile_url: "https://dartsorakel.com/player/details/74/bradley-brooks" },
+    ] });
+    const resolver = new FixtureNameResolver({ getPlayerStats: async () => captured });
+    const listing = singleSchedule.replace("Zonneveld N.", "Fehlmann A.");
+    const page = detail.replaceAll("Zonneveld N.", "Fehlmann A.").replace("zonneveld-niels/MeTrr5Fk", "fehlmann-alexander/pv0dXxUj");
+    const fixtures = await new EredmenyekPdcFixtureSource({ officialSource: official(), fetchImpl: fetchCapture(listing, page), resolver, now: (): Date => new Date(`${date}T08:00:00Z`) }).getFixtures(date);
+    expect(fixtures[0]?.playerOne).toBe("Alex Fehlmann");
+    captured.data.push({ player_key: 999, player_name: "Alan Fehlmann", player_profile_url: "https://dartsorakel.com/player/details/999/alan-fehlmann" });
+    const ambiguous = new FixtureNameResolver({ getPlayerStats: async () => captured });
+    const unresolved = await new EredmenyekPdcFixtureSource({ officialSource: official(), fetchImpl: fetchCapture(listing, page), resolver: ambiguous, now: (): Date => new Date(`${date}T08:00:00Z`) }).getFixtures(date);
+    expect(unresolved[0]?.playerOne).toBe("Alexander Fehlmann");
   });
 
   it("does not fetch fallback for verified official fixtures or verified empty calendar", async () => {

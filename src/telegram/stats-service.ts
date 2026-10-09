@@ -12,6 +12,7 @@ import { PlayerResolver } from "../player/resolver.js";
 import type { Match, MatchResult } from "../schemas/match.js";
 import { ResearchHistoryService, type ResearchEvidenceReference, type ResearchHistoryReader } from "../research/history-service.js";
 import { createResearchStorage, createResearchReaderFetch } from "../research/config.js";
+import { MemoryEvidenceLedger } from "../research/ledger.js";
 import type { ResearchHistorySummary } from "../research/statistics.js";
 import { assessResearchQuality, type QualityAssessment } from "../research/quality.js";
 import { diagnoseResearchCoverageScopes } from "../research/coverage.js";
@@ -39,6 +40,8 @@ export interface PlayerStatsResult {
 }
 
 export interface PlayerStatsReader {
+  /** Optional light first pass for large slates; no 180/checkout requests. */
+  getPlayerStatsBase?(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PlayerStatsResult>;
   getPlayerStats(
     playerName: string,
     matchCount: number,
@@ -201,13 +204,30 @@ function createDartsPlayerStatsService(
     fetchImpl: createResearchReaderFetch(),
   });
   const storage = createResearchStorage();
+  const resolver = new PlayerResolver(client);
   const matchesService = new ResearchHistoryService({
-    resolver: new PlayerResolver(client),
-    scraper: new DartsOrakelScraper(client, { enrichStatistics }),
+    resolver,
+    scraper: new DartsOrakelScraper(client, { enrichStatistics, logger }),
     ...storage,
     onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; valid source research remains non-durable."),
   });
-  return new DartsPlayerStatsService(matchesService, logger);
+  const full = new DartsPlayerStatsService(matchesService, logger);
+  // Base evidence is separate and ephemeral: never let an average-only
+  // snapshot replace the canonical enriched snapshot or durable ledger entry.
+  const base = new DartsPlayerStatsService(new ResearchHistoryService({
+    resolver,
+    scraper: new DartsOrakelScraper(client, { enrichStatistics: false }),
+    ledger: new MemoryEvidenceLedger(),
+    minimumAcquisitionCount: 10,
+  }), logger);
+  return {
+    getPlayerStats: (name: string, count: number, source?: PlayerStatsSource, signal?: AbortSignal): Promise<PlayerStatsResult> => full.getPlayerStats(name, count, source, signal),
+    getPlayerStatsBase: async (name: string, count: number, signal?: AbortSignal): Promise<PlayerStatsResult> => {
+      const player = await resolver.resolvePlayer(name, signal);
+      if (matchesService.peekFreshSnapshot(player, count) !== null) return full.getPlayerStats(name, count, "dartsorakel", signal);
+      return base.getPlayerStats(name, count, "dartsorakel", signal);
+    },
+  };
 }
 
 async function observePlayerStats(

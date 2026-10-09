@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { load } from "cheerio";
 
 export const PlayerIdentitySchema = z.object({
   id: z.number().int().positive(),
@@ -10,7 +11,14 @@ export type PlayerIdentity = z.infer<typeof PlayerIdentitySchema>;
 
 const PlayerStatsRowSchema = z.object({
   player_key: z.number().int().positive(),
-  player_name: z.string().trim().min(1),
+  // The JSON directory contains HTML entities (e.g. O&#039;Connor). Decode
+  // once at the provider boundary so every resolver shares the same identity.
+  player_name: z.string().trim().min(1).transform((value: string): string => {
+    if (!/[<&]/u.test(value)) return value.replace(/\s+/gu, " ").trim();
+    const $ = load(value, {}, false);
+    $("script, style").remove();
+    return $.root().text().replace(/\s+/gu, " ").trim();
+  }).pipe(z.string().min(1)),
   player_profile_url: z.string().url(),
 });
 

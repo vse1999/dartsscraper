@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 
 import { IsoDateSchema, resolveResearchDate } from "../agent/date.js";
+import { PlayerNotFoundError } from "../errors.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { modusNameBaseKey } from "../modus/identity.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
@@ -89,7 +90,7 @@ export class EredmenyekPdcFixtureSource implements PdcFixtureSource {
         return PdcFixtureSchema.parse({
           id: `eredmenyek:${new URL(row.url).pathname.split("/")[2]}`, tournamentName: row.tournamentName,
           date, startTime: null, session: `${detail.time} (Eredmenyek display time)`, round: null,
-          playerOne: await this.resolve(detail.playerOne, signal), playerTwo: await this.resolve(detail.playerTwo, signal),
+          playerOne: await this.resolve(detail.playerOne, row.playerOne, signal), playerTwo: await this.resolve(detail.playerTwo, row.playerTwo, signal),
           sourceUrl: row.url, evidenceUrls: ["https://www.pdc.tv/matches", listUrl, row.url],
         });
       }));
@@ -98,11 +99,19 @@ export class EredmenyekPdcFixtureSource implements PdcFixtureSource {
     return fixtures;
   }
 
-  private async resolve(name: string, signal: AbortSignal): Promise<string> {
+  private async resolve(name: string, displayedName: string, signal: AbortSignal): Promise<string> {
     if (this.options.resolver === undefined) return name;
     try { return await this.options.resolver.resolve(name, signal); }
     catch (error: unknown) {
       throwIfAborted(signal);
+      // Cross-provider first names can differ (Alexander vs Alex). The
+      // provider's actual displayed abbreviation may resolve uniquely through
+      // the existing strict surname/initial directory resolver. Never invent
+      // nickname aliases or resolve an ambiguous candidate by taking the first.
+      if (error instanceof PlayerNotFoundError && name !== displayedName) {
+        try { return await this.options.resolver.resolve(displayedName, signal); }
+        catch { throwIfAborted(signal); }
+      }
       this.logger.warn("Eredmenyek player directory resolution unavailable; retaining source-backed name.", { errorType: error instanceof Error ? error.name : "UnknownError" });
       return name;
     }

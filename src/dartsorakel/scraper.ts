@@ -7,6 +7,8 @@ import {
 import type { Match } from "../schemas/match.js";
 import type { PlayerIdentity } from "../schemas/player.js";
 import { throwIfAborted } from "../services/cancellation.js";
+import { DartsOrakelRequestError } from "../errors.js";
+import { noopLogger, type Logger } from "../logger.js";
 
 const RECENT_LOOKBACK_DAYS = [90, 180, 365, 730] as const;
 const MINIMUM_REQUEST_ROWS = 50;
@@ -17,6 +19,7 @@ export interface RecentPlayerMatchesOptions {
 }
 
 export interface DartsOrakelScraperOptions {
+  readonly logger?: Logger;
   readonly now?: () => Date;
   readonly enrichStatistics?: boolean;
 }
@@ -25,11 +28,13 @@ export class DartsOrakelScraper {
   private readonly client: Pick<DartsOrakelClient, "getPlayerMatches">;
   private readonly now: () => Date;
   private readonly enrichStatistics: boolean;
+  private readonly logger: Logger;
 
   public constructor(client: Pick<DartsOrakelClient, "getPlayerMatches">, options: DartsOrakelScraperOptions = {}) {
     this.client = client;
     this.now = options.now ?? (() => new Date());
     this.enrichStatistics = options.enrichStatistics ?? true;
+    this.logger = options.logger ?? noopLogger;
   }
 
   public async getPlayerMatches(
@@ -107,17 +112,25 @@ export class DartsOrakelScraper {
     if (!this.enrichStatistics) return parseDartsOrakelMatches(player, average);
     const oneEightiesRequest: DartsOrakelMatchRequestOptions = { ...request, statistic: "oneEighties" };
     const checkoutRequest: DartsOrakelMatchRequestOptions = { ...request, statistic: "checkoutPercentage" };
-    const [oneEighties, checkoutPercentage] = signal === undefined
-      ? await Promise.all([
-        this.client.getPlayerMatches(player.id, oneEightiesRequest),
-        this.client.getPlayerMatches(player.id, checkoutRequest),
-      ])
-      : await Promise.all([
-        this.client.getPlayerMatches(player.id, oneEightiesRequest, signal),
-        this.client.getPlayerMatches(player.id, checkoutRequest, signal),
-      ]);
+    const [oneEighties, checkoutPercentage] = await Promise.all([
+      this.readOptionalStatistic(player.id, oneEightiesRequest, signal),
+      this.readOptionalStatistic(player.id, checkoutRequest, signal),
+    ]);
     throwIfAborted(signal);
     return parseDartsOrakelMatchesWithStatistics(player, { average, oneEighties, checkoutPercentage });
+  }
+
+  private async readOptionalStatistic(playerId: number, request: DartsOrakelMatchRequestOptions, signal?: AbortSignal): Promise<DartsOrakelMatchesResponse> {
+    try {
+      return signal === undefined ? await this.client.getPlayerMatches(playerId, request) : await this.client.getPlayerMatches(playerId, request, signal);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      // A transport failure of an optional metric cannot erase valid average
+      // rows. Invalid schema/correlation evidence still fails closed.
+      if (!(error instanceof DartsOrakelRequestError)) throw error;
+      this.logger.warn("Optional DartsOrakel statistic unavailable; retaining valid history.", { statistic: request.statistic, status: error.status ?? null });
+      return { draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] };
+    }
   }
 }
 

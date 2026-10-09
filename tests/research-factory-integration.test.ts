@@ -31,6 +31,9 @@ describe("real research factory integration", () => {
     const bulk = createDefaultBulkPlayerStatsService();
     const first = await interactive.getPlayerStats("Damon Heta", 10, "auto", new AbortController().signal);
     const second = await bulk.getPlayerStats("heta", 20);
+    const warmBase = await bulk.getPlayerStatsBase?.("Damon Heta", 10);
+    expect(warmBase?.evidence?.id).toBe(first.evidence?.id);
+    expect(warmBase?.matches[0]?.oneEighties).toBe(2);
     expect(first.matches).toHaveLength(10);
     expect(second.matches).toHaveLength(20);
     expect(first.research?.previous10.matchCount).toBe(10);
