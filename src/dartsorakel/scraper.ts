@@ -19,6 +19,7 @@ export interface RecentPlayerMatchesOptions {
 }
 
 export interface DartsOrakelScraperOptions {
+  readonly requireStatistics?: boolean;
   readonly logger?: Logger;
   readonly now?: () => Date;
   readonly enrichStatistics?: boolean;
@@ -29,12 +30,14 @@ export class DartsOrakelScraper {
   private readonly now: () => Date;
   private readonly enrichStatistics: boolean;
   private readonly logger: Logger;
+  private readonly requireStatistics: boolean;
 
   public constructor(client: Pick<DartsOrakelClient, "getPlayerMatches">, options: DartsOrakelScraperOptions = {}) {
     this.client = client;
     this.now = options.now ?? (() => new Date());
     this.enrichStatistics = options.enrichStatistics ?? true;
     this.logger = options.logger ?? noopLogger;
+    this.requireStatistics = options.requireStatistics ?? false;
   }
 
   public async getPlayerMatches(
@@ -127,7 +130,7 @@ export class DartsOrakelScraper {
       throwIfAborted(signal);
       // A transport failure of an optional metric cannot erase valid average
       // rows. Invalid schema/correlation evidence still fails closed.
-      if (!(error instanceof DartsOrakelRequestError)) throw error;
+      if (this.requireStatistics || !(error instanceof DartsOrakelRequestError)) throw error;
       this.logger.warn("Optional DartsOrakel statistic unavailable; retaining valid history.", { statistic: request.statistic, status: error.status ?? null });
       return { draw: 0, recordsTotal: 0, recordsFiltered: 0, data: [] };
     }

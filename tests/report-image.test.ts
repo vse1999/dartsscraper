@@ -21,6 +21,13 @@ function sender(apiFetch: typeof fetch, renderImage?: (card: ReportImageCard, si
   return createTelegramSender({ token: "123456:abcdefghijklmnopqrstuvwxyz_123456", imagesEnabled: true, apiFetch, deliveryPolicy: createTelegramDeliveryPolicy({ minIntervalMs: 1 }), ...(renderImage === undefined ? {} : { renderImage }) });
 }
 describe("production image reports", () => {
+  it("wraps player headings at a word boundary instead of orphaning a surname letter", () => {
+    const card = report().card;
+    if (card === undefined) throw new Error("Missing test card");
+    const svg = renderReportSvg({ ...card, columns: ["Niels Zonneveld", "Bradley Brooks"] });
+    expect(svg).toContain(">Zonneveld<");
+    expect(svg).not.toContain(">Niels Zonnevel<");
+  });
   it("renders successive pages using the same report deadline signal", async () => {
     const card = report().card; if (card === undefined) throw new Error("Missing test card");
     const signal = AbortSignal.timeout(10_000);

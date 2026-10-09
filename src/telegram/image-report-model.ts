@@ -81,10 +81,11 @@ export function playerImageReports(stats: PlayerStatsResult): readonly ImageRepo
   });
 }
 
-export function limitImageReports(reports: readonly ImageReport[]): readonly ImageReport[] {
-  const result: ImageReport[] = reports.slice(0, MAX_REPORT_IMAGES);
+export function limitImageReports(reports: readonly ImageReport[], imageLimit: number = MAX_REPORT_IMAGES): readonly ImageReport[] {
+  if (!Number.isSafeInteger(imageLimit) || imageLimit < 0 || imageLimit > MAX_REPORT_IMAGES) throw new Error("Image limit must be between zero and MAX_REPORT_IMAGES.");
+  const result: ImageReport[] = reports.slice(0, imageLimit);
   let text = "";
-  for (const report of reports.slice(MAX_REPORT_IMAGES)) {
+  for (const report of reports.slice(imageLimit)) {
     if (text.length > 0 && text.length + report.text.length + 2 > 3800) {
       result.push({ text, caption: "Additional matchups · text" }); text = "";
     }

@@ -28,7 +28,9 @@ import {
   resolveModusPlayerCallback,
 } from "./modus-player-callback.js";
 import { parseStatsBatchQuery, statsQueryUsage, type StatsBatchQuery, type StatsQuery } from "./query.js";
-import { handlePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
+import { handlePdcReportCommand, parsePdcReportCommand, type PdcTournamentReader } from "./pdc-command.js";
+import { createPdcJobDispatcher, newPdcReportJob, PdcJobDispatchError, type PdcReportJobDispatcher } from "./pdc-job-trigger.js";
+import { readPdcSigningSecret } from "../pdc/report-job-protocol.js";
 import { createDefaultPdcTournamentService } from "../pdc/default.js";
 import { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService, type PlayerStatsReader, type PlayerStatsResult } from "./stats-service.js";
 import { handleCompareCommand, type CompareMessageResponder } from "./compare-command.js";
@@ -52,6 +54,8 @@ const BATCH_TIMEOUT_MS = 150_000;
 export const TELEGRAM_BOT_RELEASE = "image-reports-v1";
 
 export interface BotEnvironment {
+  readonly PDC_REPORT_URL?: string;
+  readonly WEBHOOK_SECRET?: string;
   readonly REPORT_IMAGES_ENABLED?: string;
   readonly BOT_TOKEN?: string;
   readonly ALLOWED_USER_ID?: string;
@@ -73,6 +77,8 @@ export interface CreateBotOptions {
   readonly botInfo?: UserFromGetMe;
   readonly modusReportTrigger?: ModusReportTrigger;
   readonly pdcTournamentService?: PdcTournamentReader;
+  readonly pdcJobDispatcher?: PdcReportJobDispatcher;
+  readonly pdcFullStatisticsUnavailable?: boolean;
   readonly oddsReader?: OddsReader;
   readonly valueReader?: ValueReader;
   readonly scheduleBackgroundTask?: BackgroundTaskScheduler;
@@ -219,6 +225,23 @@ export function createBot(options: CreateBotOptions): Bot<Context> {
   bot.command("pdc", async (ctx: Context): Promise<void> => {
     const chatId = ctx.chat?.id;
     if (chatId === undefined) return;
+    const expression = parsePdcReportCommand(ctx.message?.text ?? "");
+    if (options.pdcFullStatisticsUnavailable === true && (expression === "today" || expression === "tomorrow")) {
+      await ctx.reply("Complete PDC statistics reporting is not configured. Check the report endpoint and existing CRON_SECRET/WEBHOOK_SECRET settings. No partial report was substituted.");
+      return;
+    }
+    if (options.pdcJobDispatcher !== undefined && (expression === "today" || expression === "tomorrow")) {
+      const date = resolveResearchDate(expression, { timeZone: "Europe/Budapest" }).date;
+      const acknowledgement = await ctx.reply(`PDC · ${date}\nPreparing averages, 180s and checkout statistics for every player. Complete cards arrive in batches; a large report can take several minutes.`);
+      try { await options.pdcJobDispatcher.dispatch(newPdcReportJob(date, acknowledgement.message_id)); }
+      catch (error: unknown) {
+        logger.error("PDC complete report dispatch failed.", { errorType: error instanceof Error ? error.name : "UnknownError" });
+        await ctx.api.editMessageText(chatId, acknowledgement.message_id, error instanceof PdcJobDispatchError && error.uncertain
+          ? "PDC report scheduling could not be confirmed and may still be running. No automatic retry was sent."
+          : "PDC full statistics report could not be started. Please retry later.");
+      }
+      return;
+    }
     await handlePdcReportCommand(
       ctx.message?.text ?? "",
       options.pdcTournamentService,
@@ -363,11 +386,14 @@ export function createConfiguredBot(
   const valueReader = oddsReader === undefined
     ? undefined
     : createDefaultValueReader({ oddsReader, playerStatsReader: bulkPlayerStats });
+  const pdcJobDispatcher = createConfiguredPdcJobDispatcher(environment, logger);
   return createBot({
     imagesEnabled: reportImagesEnabled(environment),
     ...configuration,
     statsService,
     pdcTournamentService: createDefaultPdcTournamentService(logger, bulkPlayerStats),
+    ...(pdcJobDispatcher === undefined ? {} : { pdcJobDispatcher }),
+    pdcFullStatisticsUnavailable: pdcJobDispatcher === undefined,
     ...(oddsReader === undefined ? {} : { oddsReader }),
     ...(valueReader === undefined ? {} : { valueReader }),
     ...(modusReportTrigger === undefined
@@ -401,6 +427,23 @@ function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusR
   const endpointUrl = resolveModusReportEndpointUrl(environment);
   if (cronSecret === undefined || cronSecret === "" || endpointUrl === undefined || endpointUrl === "") return undefined;
   return createHttpModusReportTrigger({ endpointUrl, cronSecret });
+}
+
+export function createConfiguredPdcJobDispatcher(environment: BotEnvironment, logger: Logger): PdcReportJobDispatcher | undefined {
+  const endpoint = resolvePdcReportEndpointUrl(environment);
+  if (endpoint === undefined) return undefined;
+  try { return createPdcJobDispatcher({ endpointUrl: endpoint, cronSecret: environment.CRON_SECRET?.trim() ?? "", signingSecret: readPdcSigningSecret(environment) }); }
+  catch (error: unknown) {
+    logger.warn("Complete PDC reporting unavailable: check endpoint and existing signing/cron secrets.", { errorType: error instanceof Error ? error.name : "UnknownError" });
+    return undefined;
+  }
+}
+
+export function resolvePdcReportEndpointUrl(environment: BotEnvironment): string | undefined {
+  const configured = environment.PDC_REPORT_URL?.trim();
+  if (configured !== undefined && configured !== "") return configured;
+  const host = environment.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  return host === undefined || host === "" ? undefined : `https://${host}/api/pdc-report`;
 }
 
 function createConfiguredOddsReader(environment: BotEnvironment, logger: Logger): OddsReader | undefined {

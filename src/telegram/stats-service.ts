@@ -207,7 +207,7 @@ function createDartsPlayerStatsService(
   const resolver = new PlayerResolver(client);
   const matchesService = new ResearchHistoryService({
     resolver,
-    scraper: new DartsOrakelScraper(client, { enrichStatistics, logger }),
+    scraper: new DartsOrakelScraper(client, { enrichStatistics, requireStatistics: true, logger }),
     ...storage,
     onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; valid source research remains non-durable."),
   });

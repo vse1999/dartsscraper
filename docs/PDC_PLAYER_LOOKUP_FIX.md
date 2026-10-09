@@ -1,5 +1,7 @@
 # PDC player lookup regression — 9 October 2026
 
+**Follow-up:** the average-first approach below was insufficient for the user's required 180/checkout coverage. Production PDC commands now use sequential complete-statistics batches; the read-only real-source test retrieved all three ten-row statistic views for all 32 players. See `PDC_COMPLETE_STATISTICS.md`. The investigation below remains historical evidence for the identity/deadline causes.
+
 ## What failed
 
 This was primarily a collection/deadline regression, not DartsOrakel losing its top players. A cold reproduction for the 16 Swiss fixtures returned histories for **18/32 players** at the unchanged 220-second research deadline. Dave Chisnall, Alan Soutar and Raymond van Barneveld timed out; Damon Heta, Michael Smith and other later-listed players were never started. Earlier owner-chat testing returned 19/32; network timing changes the exact cutoff.

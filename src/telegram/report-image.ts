@@ -65,7 +65,7 @@ function wrap(value: string, columns: number): readonly string[] {
   const lines: string[] = [];
   while (characters.length > columns) {
     let end = characters.slice(0, columns + 1).lastIndexOf(" ");
-    if (end < columns / 2) end = columns;
+    if (end < 1) end = columns;
     lines.push(characters.splice(0, end).join(""));
     if (characters[0] === " ") characters.shift();
   }

@@ -143,6 +143,16 @@ export class PdcTournamentService {
       throw new Error("Upcoming PDC research requires both a fixture source and a player statistics reader.");
     }
     const fixtures = await this.getFixturesForDate(validatedDate, signal);
+    return this.getReportForFixtures(validatedDate, fixtures, signal, onPartial);
+  }
+
+  /** Research a previously verified, immutable schedule batch without rediscovery. */
+  public async getReportForFixtures(date: string, input: readonly PdcFixture[], signal?: AbortSignal, onPartial?: (report: PdcUpcomingReport) => void): Promise<PdcUpcomingReport> {
+    const validatedDate = IsoDateSchema.parse(date);
+    const fixtures = PdcFixtureSchema.array().parse(input);
+    if (fixtures.some((fixture) => fixture.date !== validatedDate)) throw new Error("PDC batch contains a fixture from another date.");
+    if (this.playerStats === undefined) throw new Error("PDC player statistics reader is unavailable.");
+    throwIfAborted(signal);
     const names = deduplicatePlayerNames(fixtures.flatMap((fixture) => [fixture.playerOne, fixture.playerTwo]));
     const partialPlayers: Array<PdcPlayerResearch> = names.map((requestedName) => ({
       requestedName,
@@ -206,7 +216,7 @@ export class PdcTournamentService {
     });
     this.logger.info("Upcoming PDC research completed.", {
       date: validatedDate,
-      fixtureSource: this.fixtureSource.name,
+      fixtureSource: this.fixtureSource?.name ?? "verified schedule batch",
       fixtures: fixtures.length,
       players: players.length,
       successfulPlayers: players.filter((player) => player.stats !== null).length,

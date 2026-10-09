@@ -30,6 +30,14 @@ describe("bounded DartsOrakel player history", () => {
     });
     await expect(new DartsOrakelScraper({ getPlayerMatches }).getPlayerMatches(player)).rejects.toThrow("invalid schema");
   });
+  it("requires successful metric transport when the full-statistics contract is enabled", async () => {
+    const fixture = readMatchFixture("rob-cross-matches.json");
+    const getPlayerMatches = vi.fn(async (_id: number, options: DartsOrakelMatchRequestOptions = {}): Promise<DartsOrakelMatchesResponse> => {
+      if (options.statistic === "checkoutPercentage") throw new DartsOrakelRequestError("HTTP 503", { url: "https://dartsorakel.com/api/player/matches/29", status: 503, retryable: true });
+      return responseForStatistic(fixture, options.statistic);
+    });
+    await expect(new DartsOrakelScraper({ getPlayerMatches }, { requireStatistics: true }).getPlayerMatches(player)).rejects.toThrow("HTTP 503");
+  });
   it("stops a lookback expansion when its caller is cancelled", async () => {
     const fixture = readMatchFixture("rob-cross-matches.json");
     const controller = new AbortController();
