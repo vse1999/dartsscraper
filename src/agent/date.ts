@@ -52,6 +52,27 @@ export function resolveTomorrowDate(
   return resolveResearchDate("tomorrow", options).date;
 }
 
+/** Resolve an offset-bearing source timestamp to its calendar date in a named timezone. */
+export function dateInTimeZone(timestamp: string, timeZone: string = "Europe/Budapest"): string {
+  const parsed = z.string().datetime({ offset: true }).safeParse(timestamp);
+  if (!parsed.success) throw new Error("Timestamp must be an ISO date-time with an explicit timezone offset.");
+  const date = new Date(parsed.data);
+  if (!Number.isFinite(date.getTime())) throw new Error("Timestamp is outside the supported date range.");
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const value = (type: Intl.DateTimeFormatPartTypes): string => parts.find((part) => part.type === type)?.value ?? "";
+    return IsoDateSchema.parse(`${value("year")}-${value("month")}-${value("day")}`);
+  } catch (error: unknown) {
+    if (error instanceof RangeError) throw new Error(`Unsupported time zone ${JSON.stringify(timeZone)}.`, { cause: error });
+    throw error;
+  }
+}
+
 function normalizeExpression(value: string): string {
   return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("en-US");
 }

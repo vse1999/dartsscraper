@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveResearchDate, resolveTomorrowDate } from "../src/agent/date.js";
+import { dateInTimeZone, resolveResearchDate, resolveTomorrowDate } from "../src/agent/date.js";
 
 describe("research date resolution", () => {
   const now = new Date("2026-08-08T12:00:00Z");
@@ -21,5 +21,13 @@ describe("research date resolution", () => {
   });
   it("rejects impossible ISO dates", () => expect(() => resolveResearchDate("2026-02-31", { now })).toThrow());
   it("rejects unresolved prose rather than guessing", () => expect(() => resolveResearchDate("valamikor", { now })).toThrow("Unable to resolve"));
+  it("converts offset-bearing live timestamps to Budapest dates across midnight and the DST fallback", () => {
+    expect(dateInTimeZone("2026-10-10T22:30:00Z")).toBe("2026-10-11");
+    expect(dateInTimeZone("2026-10-25T00:30:00Z")).toBe("2026-10-25");
+    expect(dateInTimeZone("2026-10-25T01:30:00Z")).toBe("2026-10-25");
+  });
+  it("requires an explicit timezone instead of interpreting a bare local time as UTC", () => {
+    expect(() => dateInTimeZone("2026-10-11T23:30:00")).toThrow("explicit timezone offset");
+  });
 });
 
