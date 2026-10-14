@@ -292,6 +292,7 @@ describe("automatic MODUS report", () => {
     expect(result.discoverySucceeded).toBe(false);
     expect(value.getPlayerStats).not.toHaveBeenCalled();
     expect(value.sendMessage.mock.calls[1]?.[1]).toContain("could not be discovered");
+    expect(value.sendMessage.mock.calls[1]?.[1]).toContain("Per-player DartsOrakel form research was not started");
   });
 
   it("never exceeds configured lookup concurrency", async () => {

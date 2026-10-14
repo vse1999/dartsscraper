@@ -228,10 +228,10 @@ export async function runModusReport(options: RunModusReportOptions): Promise<Mo
         options.dependencies.telegram,
         options.chatId,
         discoveryStatus === "empty"
-          ? `⚠️ No MODUS players were found for ${date}. No DartsOrakel lookups were attempted. Try again later.`
+          ? `⚠️ No MODUS players were found for ${date}. Per-player DartsOrakel form research was not started. Try again later.`
           : researchTimedOut
-            ? `⚠️ MODUS fixture discovery timed out for ${date}. No DartsOrakel lookups were attempted.`
-            : `⚠️ MODUS fixtures could not be discovered for ${date}. No DartsOrakel lookups were attempted. Try again later.`,
+            ? `⚠️ MODUS fixture discovery timed out for ${date}. Per-player DartsOrakel form research was not started.`
+            : `⚠️ MODUS fixtures could not be discovered for ${date}. Per-player DartsOrakel form research was not started. Try again later.`,
         logger,
         date,
         "TELEGRAM_WARNING_SEND_FAILED",

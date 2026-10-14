@@ -5,6 +5,7 @@ import { DartsOrakelClient } from "../src/dartsorakel/client.js";
 import { DartsOrakelScraper } from "../src/dartsorakel/scraper.js";
 import { resolveResearchDate } from "../src/agent/date.js";
 import { DartsNerdModusSource } from "../src/modus/darts-nerd-source.js";
+import { EredmenyekModusSource } from "../src/modus/eredmenyek-source.js";
 import { FixtureNameResolver } from "../src/modus/fixture-name-resolver.js";
 import { ModusFixtureIdentitySource } from "../src/modus/fixture-identity-source.js";
 import { OfficialModusHistorySource } from "../src/modus/history-source.js";
@@ -160,6 +161,7 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
   const modusPlayersService = new ModusPlayersService({
     sources: [
       new OfficialModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
+      new EredmenyekModusSource({ resolver: fixtureNameResolver, logger }),
       new DartsNerdModusSource({ resolver: fixtureNameResolver, fixtureIdentityFallback, logger }),
     ],
     logger,
