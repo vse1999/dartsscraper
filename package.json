@@ -8,6 +8,7 @@
   },
   "scripts": {
     "research": "tsx scripts/research-workflow.ts",
+    "benchmark:speed": "tsx scripts/benchmark-speed.ts",
     "research:benchmark": "tsx scripts/research-benchmark.ts",
     "research:planning-benchmark": "tsx scripts/research-planning-benchmark.ts",
     "verify:research": "tsx scripts/verify-research.ts",
