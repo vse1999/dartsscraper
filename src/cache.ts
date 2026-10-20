@@ -16,6 +16,52 @@ export interface CacheStore {
   set(key: string, value: unknown, ttlMs: number): Promise<void>;
 }
 
+export interface MemoryCacheOptions {
+  readonly maxEntries?: number;
+  readonly now?: () => number;
+}
+
+interface MemoryCacheEntry {
+  readonly value: unknown;
+  readonly expiresAt: number;
+}
+
+/** Bounded process-local cache for serverless runtimes with no writable durable filesystem. */
+export class MemoryCache implements CacheStore {
+  private readonly entries = new Map<string, MemoryCacheEntry>();
+  private readonly maxEntries: number;
+  private readonly now: () => number;
+
+  public constructor(options: MemoryCacheOptions = {}) {
+    this.maxEntries = options.maxEntries ?? 256;
+    this.now = options.now ?? Date.now;
+    if (!Number.isSafeInteger(this.maxEntries) || this.maxEntries <= 0) throw new Error("Memory cache capacity must be a positive safe integer.");
+  }
+
+  public async get(key: string): Promise<unknown | null> {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return null;
+    if (entry.expiresAt <= this.now()) {
+      this.entries.delete(key);
+      return null;
+    }
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+
+  public async set(key: string, value: unknown, ttlMs: number): Promise<void> {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error("Cache TTL must be a positive finite number.");
+    this.entries.delete(key);
+    this.entries.set(key, { value, expiresAt: this.now() + ttlMs });
+    while (this.entries.size > this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+}
+
 export interface FileCacheOptions {
   directory: string;
   logger?: Logger;
@@ -88,4 +134,18 @@ export class FileCache implements CacheStore {
     const code = error.code;
     return typeof code === "string" ? code : undefined;
   }
+}
+
+/**
+ * Returns a persistent FileCache for local execution environments and a bounded
+ * MemoryCache for serverless environments (e.g. Vercel).
+ */
+export function createDefaultDartsCache(logger?: Logger, env: NodeJS.ProcessEnv = process.env): CacheStore {
+  if (env.RESEARCH_LOCAL_LEDGER_ENABLED === "true" && env.VERCEL !== "1" && env.AWS_LAMBDA_FUNCTION_NAME === undefined) {
+    return new FileCache({
+      directory: path.resolve(process.cwd(), ".cache", "dartsorakel"),
+      ...(logger === undefined ? {} : { logger }),
+    });
+  }
+  return new MemoryCache({ maxEntries: 512 });
 }
