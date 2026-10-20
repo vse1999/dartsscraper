@@ -12,6 +12,7 @@ import { PdcTournamentService } from "../src/pdc/service.js";
 import {
   PdcTournamentEventSchema,
   type PdcFixture,
+  type PdcScheduleSnapshot,
   type PdcTournamentEvent,
   type PdcTournamentResult,
   type PdcTournamentSource,
@@ -208,6 +209,15 @@ describe("live PDC fixture corroboration", () => {
       playerOne: "van Gerwen M.",
       playerTwo: "Gurney D.",
     }]);
+  });
+
+  it("uses the Budapest calendar date for UTC live timestamps near midnight", () => {
+    const html = `<div class="hm-match">
+      <span class="hm-time" data-utc="2026-10-10T22:30:00Z"></span>
+      <span class="hm-name">van Gerwen M.</span><span class="hm-name">Gurney D.</span>
+    </div>`;
+    expect(parseDartsNerdPdcFixtures(html, "2026-10-11")).toHaveLength(1);
+    expect(parseDartsNerdPdcFixtures(html, "2026-10-10")).toEqual([]);
   });
 
   it("attaches the PDC event label only when the group and match route agree", () => {
@@ -483,5 +493,70 @@ describe("PDC tournament service", () => {
       { name: "Rob Cross", count: 10, source: "dartsorakel" },
       { name: "Ryan Searle", count: 10, source: "dartsorakel" },
     ]);
+  });
+
+  it("coalesces same-date schedule reads and isolates one caller's cancellation", async () => {
+    const fixture: PdcFixture = {
+      id: "official:one", tournamentName: "European Tour", date: "2026-09-17", startTime: null,
+      session: null, round: "Last 16", playerOne: "Rob Cross", playerTwo: "Ryan Searle", sourceUrl: "https://www.pdc.tv/matches",
+    };
+    const snapshot: PdcScheduleSnapshot = {
+      schemaVersion: 1, date: fixture.date, timeZone: "Europe/Budapest", observedAt: new Date().toISOString(),
+      calendarStatus: "verified", calendarReason: null,
+      events: [{ eventId: "event-1", name: "European Tour", coverage: "available", fixtures: [fixture], pendingSlots: 0, reason: null, evidenceUrls: [fixture.sourceUrl] }],
+    };
+    let release: ((value: PdcScheduleSnapshot) => void) | undefined;
+    let sharedSignal: AbortSignal | undefined;
+    const getSchedule = vi.fn((_date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> => new Promise((resolve, reject) => {
+      sharedSignal = signal;
+      release = resolve;
+      signal?.addEventListener("abort", (): void => reject(signal.reason), { once: true });
+    }));
+    const service = new PdcTournamentService({
+      source: { getCalendar: async (): Promise<readonly PdcTournamentEvent[]> => [], getResults: async (): Promise<PdcTournamentResult> => { throw new Error("not used"); } },
+      fixtureSource: { name: "schedule test", getFixtures: async () => [fixture], getSchedule },
+    });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = service.getScheduleForDate(fixture.date, firstController.signal);
+    const second = service.getScheduleForDate(fixture.date, secondController.signal);
+    await vi.waitFor(() => expect(getSchedule).toHaveBeenCalledTimes(1));
+    firstController.abort(new Error("one caller stopped waiting"));
+    await expect(first).rejects.toThrow("one caller stopped waiting");
+    expect(sharedSignal?.aborted).toBe(false);
+    release?.(snapshot);
+    await expect(second).resolves.toEqual(snapshot);
+    expect(getSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses participant changes when researching a pinned schedule batch", async () => {
+    const fixture: PdcFixture = {
+      id: "official:pinned", tournamentName: "European Tour", date: "2026-09-17", startTime: null,
+      session: null, round: "Last 16", playerOne: "Rob Cross", playerTwo: "Ryan Searle", sourceUrl: "https://www.pdc.tv/matches",
+    };
+    const snapshot: PdcScheduleSnapshot = {
+      schemaVersion: 1, date: fixture.date, timeZone: "Europe/Budapest", observedAt: new Date().toISOString(),
+      calendarStatus: "verified", calendarReason: null,
+      events: [{ eventId: "event-pinned", name: fixture.tournamentName, coverage: "available", fixtures: [fixture], pendingSlots: 0, reason: null, evidenceUrls: [fixture.sourceUrl] }],
+    };
+    const getPlayerStats = vi.fn(async (playerName: string) => ({
+      playerName, requestedCount: 10, matches: [], meanAverage: null, availableAverageCount: 0,
+      sourceUrl: "https://dartsorakel.com/player/details/1/player", sourceLabel: "DartsOrakel" as const,
+      provider: "dartsorakel" as const, evidenceUrls: [],
+    }));
+    const service = new PdcTournamentService({
+      source: { getCalendar: async () => [], getResults: async () => { throw new Error("not used"); } },
+      fixtureSource: { name: "pinned test", getFixtures: async () => [fixture] },
+      playerStats: { getPlayerStats },
+    });
+
+    await expect(service.getReportForFixtures(
+      fixture.date,
+      [{ ...fixture, playerOne: "Different player" }],
+      undefined,
+      undefined,
+      snapshot,
+    )).rejects.toThrow("does not match its pinned schedule");
+    expect(getPlayerStats).not.toHaveBeenCalled();
   });
 });

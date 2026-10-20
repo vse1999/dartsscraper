@@ -7,7 +7,8 @@ import { modusNameBaseKey } from "../modus/identity.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 import type { PdcFixtureNameResolver } from "./darts-nerd-fixture-source.js";
 import { OfficialPdcScheduleUnavailableError } from "./official-api-fixture-source.js";
-import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import { PdcFixtureSchema, PdcScheduleSnapshotSchema, type PdcFixture, type PdcFixtureSource, type PdcScheduleSnapshot } from "./schemas.js";
+import { createFallbackScheduleSnapshot, mergeFallbackFixtures } from "./schedule.js";
 
 const ORIGIN = "https://m.eredmenyek.com";
 const MAX_FIXTURES = 128;
@@ -71,6 +72,51 @@ export class EredmenyekPdcFixtureSource implements PdcFixtureSource {
         controller.abort(new Error("Eredmenyek fallback finished."));
         signal?.removeEventListener("abort", abort);
       }
+    }
+  }
+
+  public async getSchedule(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    const validatedDate = IsoDateSchema.parse(date);
+    throwIfAborted(signal);
+    const scheduleReader = this.options.officialSource.getSchedule;
+    if (scheduleReader === undefined) {
+      const fixtures = await this.options.officialSource.getFixtures(validatedDate, signal);
+      return createFallbackScheduleSnapshot(validatedDate, new Date().toISOString(), fixtures);
+    }
+
+    const schedule = PdcScheduleSnapshotSchema.parse(await scheduleReader.call(this.options.officialSource, validatedDate, signal));
+    if (schedule.calendarStatus !== "verified") return schedule;
+    const unresolvedEvents = schedule.events.filter((event) => event.coverage !== "available");
+    if (unresolvedEvents.length === 0) return schedule;
+
+    const controller = new AbortController();
+    const abort = (): void => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted === true) abort();
+    const timeout = setTimeout(() => controller.abort(new Error("Eredmenyek fixture fallback timed out.")), this.timeoutMs);
+    try {
+      const fixtures = await this.discover(validatedDate, unresolvedEvents.map((event) => event.name), controller.signal);
+      if (fixtures.length === 0) return schedule;
+      const supplemented = mergeFallbackFixtures(schedule, fixtures);
+      const covered = unresolvedEvents.filter((event) => supplemented.events.some((candidate) => candidate.eventId === event.eventId && candidate.fixtures.length > event.fixtures.length));
+      this.logger.info("Eredmenyek supplemented unresolved PDC event coverage.", {
+        date: validatedDate,
+        unresolvedEvents: unresolvedEvents.length,
+        supplementedEvents: covered.length,
+        fallbackFixtures: fixtures.length,
+      });
+      return supplemented;
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("Eredmenyek PDC fallback left unresolved events unchanged.", {
+        date: validatedDate,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return schedule;
+    } finally {
+      clearTimeout(timeout);
+      controller.abort(new Error("Eredmenyek fallback finished."));
+      signal?.removeEventListener("abort", abort);
     }
   }
 

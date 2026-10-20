@@ -3,7 +3,8 @@ import { z } from "zod";
 import { IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
-import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import { PdcFixtureSchema, PdcScheduleSnapshotSchema, type PdcFixture, type PdcFixtureSource, type PdcScheduleEvent, type PdcScheduleSnapshot } from "./schemas.js";
+import { createCalendarUnavailableSnapshot, flattenScheduleFixtures, mergeFallbackFixtures } from "./schedule.js";
 import type { PdcFixtureNameResolver } from "./darts-nerd-fixture-source.js";
 
 // Public, unauthenticated endpoints used by www.pdc.tv's DartsWeb client.
@@ -78,76 +79,145 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
   }
 
   public async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
-    const validatedDate = IsoDateSchema.parse(date);
-    throwIfAborted(signal);
-    try {
-      return await this.discover(validatedDate, signal);
-    } catch (error: unknown) {
-      throwIfAborted(signal);
-      this.logger.warn("Official PDC API discovery unavailable; checking dated PDPA draw.", {
-        date: validatedDate, errorType: error instanceof Error ? error.name : "UnknownError",
-      });
-      if (this.fallbackSource !== undefined) {
-        try {
-          const fallback = await this.fallbackSource.getFixtures(validatedDate, signal);
-          if (fallback.length > 0) return fallback;
-        } catch (fallbackError: unknown) {
-          throwIfAborted(signal);
-          this.logger.warn("PDPA fallback unavailable.", { errorType: fallbackError instanceof Error ? fallbackError.name : "UnknownError" });
-        }
-      }
-      // An outage or an event without a published draw is not a verified empty day.
-      throw error instanceof OfficialPdcScheduleUnavailableError ? error
-        : new OfficialPdcScheduleUnavailableError(`Official PDC schedule could not be verified for ${validatedDate}. Please retry later.`, error);
+    const schedule = await this.getSchedule(date, signal);
+    const fixtures = flattenScheduleFixtures(schedule);
+    const unavailableEvents = schedule.events.filter((event) => event.coverage !== "available");
+    if (schedule.calendarStatus !== "verified" || unavailableEvents.length > 0) {
+      throw new OfficialPdcScheduleUnavailableError(
+        `Official PDC schedule could not be fully verified for ${schedule.date}. Please retry later.`,
+        undefined,
+        { date: schedule.date, tournamentNames: unavailableEvents.map((event) => event.name), availableFixtures: fixtures },
+      );
     }
+    return fixtures;
   }
 
-  private async discover(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
+  public async getSchedule(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    const validatedDate = IsoDateSchema.parse(date);
+    throwIfAborted(signal);
+    let schedule: PdcScheduleSnapshot;
+    try {
+      schedule = await this.discover(validatedDate, signal);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("Official PDC calendar could not be validated.", {
+        date: validatedDate,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      schedule = createCalendarUnavailableSnapshot(validatedDate, new Date().toISOString());
+    }
+    return this.applyFallback(schedule, signal);
+  }
+
+  private async discover(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    const startedAt = performance.now();
     const year = Number(date.slice(0, 4));
     const seasons = date.slice(5, 7) === "01" ? [year - 1, year] : [year];
     const tournaments = new Map<string, z.infer<typeof TournamentSchema>>();
+    let requestCount = 0;
     for (const season of seasons) {
-      const rows = await this.pages(TOURNAMENTS_URL, `seasonID:eq:${season}`, TournamentSchema, signal);
+      const rows = await this.pages(TOURNAMENTS_URL, `seasonID:eq:${season}`, TournamentSchema, signal, (): void => { requestCount += 1; });
       for (const row of rows) {
         if (row.attributes.startDate <= date && row.attributes.endDate >= date) tournaments.set(row.id, row);
       }
     }
-    const fixtures = new Map<string, PdcFixture>();
-    const unpublished: string[] = [];
-    for (const tournament of tournaments.values()) {
-      // startDate filters currently return false empty responses. Tournament ID
-      // filtering is the official site's reliable path; validate dates locally.
-      const rows = await this.pages(FIXTURES_URL, `tournamentID:eq:${tournament.id}`, FixtureRowSchema, signal);
-      let datedNamedRows = 0;
-      for (const row of rows) {
-        const attributes = row.attributes;
-        if (attributes.tournamentID !== tournament.id) throw new Error("PDC API returned a fixture from another tournament.");
-        if (attributes.startDate !== date) continue;
-        const playerOne = participantName(attributes.participant1);
-        const playerTwo = participantName(attributes.participant2);
-        if (playerOne === null || playerTwo === null) continue;
-        // startTime's timezone is not documented: retain no match-level timestamp
-        // rather than silently treating a bare local time as UTC.
-        const timestamp = z.string().datetime({ offset: true }).safeParse(attributes.startTime);
-        const fixture = PdcFixtureSchema.parse({
-          id: `pdc-official:${row.id}`, tournamentName: tournament.attributes.name,
-          date, startTime: timestamp.success ? timestamp.data : null,
-          session: null, round: attributes.stage?.name ?? null,
-          playerOne: await this.resolveName(playerOne, signal), playerTwo: await this.resolveName(playerTwo, signal), sourceUrl: `${FIXTURES_URL}/${row.id}`,
-          evidenceUrls: [`${TOURNAMENTS_URL}/${tournament.id}`, `${FIXTURES_URL}/${row.id}`],
+    if (tournaments.size > 64) throw new Error("PDC calendar exceeded the supported event count.");
+
+    const events = await mapEventsWithConcurrency([...tournaments.values()], 2, async (tournament): Promise<PdcScheduleEvent> => {
+      try {
+        // The tournament-ID endpoint is the reliable path; validate dates locally.
+        const rows = await this.pages(FIXTURES_URL, `tournamentID:eq:${tournament.id}`, FixtureRowSchema, signal, (): void => { requestCount += 1; });
+        const datedRows = rows.filter((row) => row.attributes.startDate === date);
+        const fixtures: PdcFixture[] = [];
+        let pendingSlots = 0;
+        for (const row of datedRows) {
+          const attributes = row.attributes;
+          if (attributes.tournamentID !== tournament.id) throw new Error("PDC API returned a fixture from another tournament.");
+          const playerOne = participantName(attributes.participant1);
+          const playerTwo = participantName(attributes.participant2);
+          if (playerOne === null) pendingSlots += 1;
+          if (playerTwo === null) pendingSlots += 1;
+          if (playerOne === null || playerTwo === null) continue;
+          // The official API's source timezone is not established; only retain an explicit offset.
+          const timestamp = z.string().datetime({ offset: true }).safeParse(attributes.startTime);
+          fixtures.push(PdcFixtureSchema.parse({
+            id: `pdc-official:${row.id}`, tournamentName: tournament.attributes.name,
+            date, startTime: timestamp.success ? timestamp.data : null,
+            session: null, round: attributes.stage?.name ?? null,
+            playerOne: await this.resolveName(playerOne, signal), playerTwo: await this.resolveName(playerTwo, signal), sourceUrl: `${FIXTURES_URL}/${row.id}`,
+            evidenceUrls: [`${TOURNAMENTS_URL}/${tournament.id}`, `${FIXTURES_URL}/${row.id}`],
+          }));
+        }
+        if (datedRows.length === 0) {
+          return unavailableEvent(tournament.id, tournament.attributes.name, "no_dated_fixtures", `${TOURNAMENTS_URL}/${tournament.id}`);
+        }
+        if (pendingSlots > 0) {
+          return {
+            eventId: tournament.id,
+            name: tournament.attributes.name,
+            coverage: fixtures.length === 0 ? "opponents_pending" : "partial",
+            fixtures,
+            pendingSlots,
+            reason: "opponents_unassigned",
+            evidenceUrls: [`${TOURNAMENTS_URL}/${tournament.id}`, ...datedRows.map((row) => `${FIXTURES_URL}/${row.id}`)].slice(0, 10),
+          };
+        }
+        return {
+          eventId: tournament.id,
+          name: tournament.attributes.name,
+          coverage: "available",
+          fixtures,
+          pendingSlots: 0,
+          reason: null,
+          evidenceUrls: [`${TOURNAMENTS_URL}/${tournament.id}`, ...datedRows.map((row) => `${FIXTURES_URL}/${row.id}`)].slice(0, 10),
+        };
+      } catch (error: unknown) {
+        throwIfAborted(signal);
+        this.logger.warn("Official PDC event draw could not be validated.", {
+          date,
+          eventId: tournament.id,
+          errorType: error instanceof Error ? error.name : "UnknownError",
         });
-        fixtures.set(fixture.id, fixture);
-        datedNamedRows += 1;
+        return unavailableEvent(tournament.id, tournament.attributes.name, "event_unavailable", `${TOURNAMENTS_URL}/${tournament.id}`);
       }
-      if (datedNamedRows === 0) unpublished.push(tournament.attributes.name);
+    }, signal);
+    const snapshot = PdcScheduleSnapshotSchema.parse({
+      schemaVersion: 1,
+      date,
+      timeZone: "Europe/Budapest",
+      observedAt: new Date().toISOString(),
+      calendarStatus: "verified",
+      calendarReason: null,
+      events,
+    });
+    this.logger.info("Official PDC schedule discovery completed.", {
+      date,
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      requestCount,
+      events: events.length,
+      availableEvents: events.filter((event) => event.coverage === "available").length,
+      partialEvents: events.filter((event) => event.coverage === "partial").length,
+      pendingEvents: events.filter((event) => event.coverage === "opponents_pending").length,
+      unavailableEvents: events.filter((event) => event.coverage === "unavailable").length,
+    });
+    return snapshot;
+  }
+
+  private async applyFallback(schedule: PdcScheduleSnapshot, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    const needsFallback = schedule.calendarStatus === "unavailable"
+      || schedule.events.some((event) => event.coverage !== "available");
+    if (!needsFallback || this.fallbackSource === undefined) return schedule;
+    try {
+      const rows = await this.fallbackSource.getFixtures(schedule.date, signal);
+      return mergeFallbackFixtures(schedule, rows);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("PDPA PDC fallback could not supplement unresolved schedule coverage.", {
+        date: schedule.date,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+      return schedule;
     }
-    if (unpublished.length > 0) {
-      throw new OfficialPdcScheduleUnavailableError(
-        `Official PDC event exists on ${date}, but its dated matchups are not published or could not be verified: ${unpublished.join(", ")}. Please retry later.`,
-        undefined, { date, tournamentNames: unpublished, availableFixtures: [...fixtures.values()] },
-      );
-    }
-    return [...fixtures.values()];
   }
 
   private async resolveName(name: string, signal?: AbortSignal): Promise<string> {
@@ -160,7 +230,7 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
     }
   }
 
-  private async pages<T extends { readonly id: string }>(baseUrl: string, filter: string, schema: z.ZodType<T>, signal?: AbortSignal): Promise<readonly T[]> {
+  private async pages<T extends { readonly id: string }>(baseUrl: string, filter: string, schema: z.ZodType<T>, signal: AbortSignal | undefined, onRequest: () => void): Promise<readonly T[]> {
     const rows: T[] = [];
     const ids = new Set<string>();
     const pageSchema = z.object({
@@ -172,7 +242,7 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
       url.searchParams.set("filter", filter);
       url.searchParams.set("page.size", String(PAGE_SIZE));
       url.searchParams.set("page.number", String(page));
-      const parsed = pageSchema.parse(await this.fetchJson(url.toString(), signal));
+      const parsed = pageSchema.parse(await this.fetchJson(url.toString(), signal, onRequest));
       if (parsed.meta.count !== parsed.data.length) throw new Error("PDC API page count did not match its rows.");
       if (expectedTotal !== undefined && expectedTotal !== parsed.meta.totalCount) throw new Error("PDC schedule changed during pagination; retry the report.");
       expectedTotal = parsed.meta.totalCount;
@@ -187,13 +257,14 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
     throw new Error(`PDC API exceeded the safety limit of ${MAX_PAGES} pages.`);
   }
 
-  private async fetchJson(url: string, callerSignal?: AbortSignal): Promise<unknown> {
+  private async fetchJson(url: string, callerSignal: AbortSignal | undefined, onRequest: () => void): Promise<unknown> {
     throwIfAborted(callerSignal);
     const controller = new AbortController();
     const abort = (): void => controller.abort(callerSignal?.reason);
     callerSignal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => controller.abort(new Error("Official PDC API request timed out.")), this.timeoutMs);
     try {
+      onRequest();
       const response = await waitWithSignal(this.fetchImpl(url, {
         headers: { Accept: "application/json", "User-Agent": "DartsResearchAgent/0.8" }, signal: controller.signal,
       }), controller.signal);
@@ -204,6 +275,40 @@ export class OfficialPdcApiFixtureSource implements PdcFixtureSource {
       callerSignal?.removeEventListener("abort", abort);
     }
   }
+}
+
+function unavailableEvent(eventId: string, name: string, reason: "event_unavailable" | "no_dated_fixtures", evidenceUrl: string): PdcScheduleEvent {
+  return {
+    eventId,
+    name,
+    coverage: "unavailable",
+    fixtures: [],
+    pendingSlots: null,
+    reason,
+    evidenceUrls: [evidenceUrl],
+  };
+}
+
+async function mapEventsWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<R>,
+  signal?: AbortSignal,
+): Promise<readonly R[]> {
+  const results: Array<R | undefined> = new Array<R | undefined>(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async (): Promise<void> => {
+    while (nextIndex < values.length) {
+      throwIfAborted(signal);
+      const index = nextIndex;
+      nextIndex += 1;
+      const value = values[index];
+      if (value === undefined) continue;
+      results[index] = await mapper(value);
+    }
+  });
+  await Promise.all(workers);
+  return results.filter((result): result is R => result !== undefined);
 }
 
 function participantName(participant: z.infer<typeof ParticipantSchema> | null): string | null {

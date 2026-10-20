@@ -98,6 +98,61 @@ export const PdcFixtureSchema = z.object({
 
 export type PdcFixture = z.infer<typeof PdcFixtureSchema>;
 
+export const PdcEventCoverageSchema = z.enum(["available", "partial", "opponents_pending", "unavailable"]);
+export type PdcEventCoverage = z.infer<typeof PdcEventCoverageSchema>;
+
+export const PdcScheduleEventSchema = z.object({
+  eventId: z.string().trim().min(1).max(160),
+  name: z.string().trim().min(1).max(160),
+  coverage: PdcEventCoverageSchema,
+  fixtures: z.array(PdcFixtureSchema).max(128),
+  pendingSlots: z.number().int().nonnegative().nullable(),
+  reason: z.enum(["event_unavailable", "no_dated_fixtures", "opponents_unassigned", "fallback_only"]).nullable(),
+  evidenceUrls: z.array(z.string().url()).max(10),
+}).strict().superRefine((event, context): void => {
+  if (event.coverage === "available" && event.fixtures.length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "An available event must contain a validated named fixture." });
+  }
+  if (event.coverage === "opponents_pending" && (event.pendingSlots === null || event.pendingSlots === 0)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Pending opponents require an explicit positive slot count." });
+  }
+  if (event.coverage === "unavailable" && event.fixtures.length > 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Events with verified fixtures and a gap must be marked partial." });
+  }
+});
+
+export type PdcScheduleEvent = z.infer<typeof PdcScheduleEventSchema>;
+
+export const PdcScheduleSnapshotSchema = z.object({
+  schemaVersion: z.literal(1),
+  date: IsoDateSchema,
+  timeZone: z.literal("Europe/Budapest"),
+  observedAt: z.string().datetime({ offset: true }),
+  calendarStatus: z.enum(["verified", "unavailable"]),
+  calendarReason: z.enum(["calendar_unavailable"]).nullable(),
+  events: z.array(PdcScheduleEventSchema).max(64),
+}).strict().superRefine((snapshot, context): void => {
+  const eventIds = snapshot.events.map((event) => event.eventId);
+  if (new Set(eventIds).size !== eventIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A PDC schedule cannot repeat an event identity." });
+  }
+  const fixtures = snapshot.events.flatMap((event) => event.fixtures);
+  if (new Set(fixtures.map((fixture) => fixture.id)).size !== fixtures.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A PDC schedule cannot repeat a fixture identity." });
+  }
+  if (fixtures.some((fixture) => fixture.date !== snapshot.date)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Schedule fixtures must use the snapshot date." });
+  }
+  if (snapshot.calendarStatus === "verified" && snapshot.calendarReason !== null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "A verified calendar cannot have an unavailable reason." });
+  }
+  if (snapshot.calendarStatus === "unavailable" && snapshot.calendarReason === null) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "An unavailable calendar must state its bounded reason." });
+  }
+});
+
+export type PdcScheduleSnapshot = z.infer<typeof PdcScheduleSnapshotSchema>;
+
 export interface PdcTournamentSource {
   getCalendar(year: number, category: PdcCalendarCategory, signal?: AbortSignal): Promise<readonly PdcTournamentEvent[]>;
   getResults(event: PdcTournamentEvent, signal?: AbortSignal): Promise<PdcTournamentResult>;
@@ -106,4 +161,5 @@ export interface PdcTournamentSource {
 export interface PdcFixtureSource {
   readonly name: string;
   getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]>;
+  getSchedule?(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot>;
 }

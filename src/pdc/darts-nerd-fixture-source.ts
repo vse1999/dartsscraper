@@ -1,10 +1,11 @@
 import * as cheerio from "cheerio";
 import type { AnyNode } from "domhandler";
 
-import { IsoDateSchema } from "../agent/date.js";
+import { dateInTimeZone, IsoDateSchema } from "../agent/date.js";
 import { noopLogger, type Logger } from "../logger.js";
 import { normalizePlayerName } from "../player/resolver.js";
-import { PdcFixtureSchema, type PdcFixture, type PdcFixtureSource } from "./schemas.js";
+import { PdcFixtureSchema, PdcScheduleSnapshotSchema, type PdcFixture, type PdcFixtureSource, type PdcScheduleSnapshot } from "./schemas.js";
+import { createFallbackScheduleSnapshot } from "./schedule.js";
 import { throwIfAborted, waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_PREVIEW_URL = "https://www.darts-nerd.com/en/matches/preview";
@@ -15,7 +16,7 @@ export interface PdcFixtureNameResolver {
 }
 
 export interface DartsNerdPdcFixtureSourceOptions {
-  readonly resolver: PdcFixtureNameResolver;
+  readonly resolver?: PdcFixtureNameResolver;
   readonly previewUrl?: string;
   readonly fetchImpl?: typeof fetch;
   readonly timeoutMs?: number;
@@ -24,7 +25,7 @@ export interface DartsNerdPdcFixtureSourceOptions {
 
 export class DartsNerdPdcFixtureSource implements PdcFixtureSource {
   public readonly name = "Darts Nerd live fixture feed";
-  private readonly resolver: PdcFixtureNameResolver;
+  private readonly resolver: PdcFixtureNameResolver | undefined;
   private readonly previewUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -56,6 +57,7 @@ export class DartsNerdPdcFixtureSource implements PdcFixtureSource {
       throwIfAborted(callerSignal);
       if (body.trim() === "") throw new Error("empty response");
       const fixtures = parseDartsNerdPdcFixtures(body, validatedDate, this.previewUrl);
+      if (this.resolver === undefined) return fixtures;
       return Promise.all(fixtures.map(async (fixture): Promise<PdcFixture> => PdcFixtureSchema.parse({
         ...fixture,
         playerOne: await this.resolveName(fixture.playerOne, validatedDate, callerSignal),
@@ -72,6 +74,7 @@ export class DartsNerdPdcFixtureSource implements PdcFixtureSource {
   }
 
   private async resolveName(name: string, date: string, signal?: AbortSignal): Promise<string> {
+    if (this.resolver === undefined) return name;
     try {
       return await this.resolver.resolve(name, signal);
     } catch (error: unknown) {
@@ -103,7 +106,13 @@ export function parseDartsNerdPdcFixtures(
       && normalizeText(competition.attr("data-federation") ?? "").toLocaleLowerCase("en-US") !== "pdc"
     ) return;
     const startTime = match.find(".hm-time[data-utc]").first().attr("data-utc");
-    if (startTime?.slice(0, 10) !== validatedDate) return;
+    if (startTime === undefined) return;
+    try {
+      if (dateInTimeZone(startTime, "Europe/Budapest") !== validatedDate) return;
+    } catch (error: unknown) {
+      if (error instanceof Error) return;
+      throw error;
+    }
     const names = match.find(".hm-name").map((_nameIndex, nameElement) => normalizeText($(nameElement).text())).get();
     const playerOne = names[0];
     const playerTwo = names[1];
@@ -168,6 +177,17 @@ export class CorroboratedPdcFixtureSource implements PdcFixtureSource {
       });
       return official;
     }
+  }
+
+  /** Return fast official coverage; live-feed corroboration is intentionally not on the preview path. */
+  public async getSchedule(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    throwIfAborted(signal);
+    const scheduleReader = this.officialSource.getSchedule;
+    if (scheduleReader !== undefined) {
+      return PdcScheduleSnapshotSchema.parse(await scheduleReader.call(this.officialSource, date, signal));
+    }
+    const fixtures = await this.officialSource.getFixtures(date, signal);
+    return createFallbackScheduleSnapshot(IsoDateSchema.parse(date), new Date().toISOString(), fixtures);
   }
 }
 

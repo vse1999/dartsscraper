@@ -393,7 +393,8 @@ describe("report deadline coordination", () => {
     expect(replies.join("\n")).toContain("A vs B");
     expect(sourceSignals).toHaveLength(1);
     expect(statsSignals).toHaveLength(2);
-    expect(statsSignals.every((signal) => signal === sourceSignals[0])).toBe(true);
+    expect(statsSignals.every((signal) => signal === statsSignals[0])).toBe(true);
+    expect(statsSignals[0]).not.toBe(sourceSignals[0]);
   });
 
   it("preserves a PDC partial snapshot with completed, timed-out, and unstarted players", async () => {
@@ -451,7 +452,7 @@ describe("report deadline coordination", () => {
 
     expect(outcome).toBe("failed");
     expect(replies[0]).toContain("Scanning PDC tomorrow");
-    expect(replies[1]).toContain("Research incomplete");
+    expect(replies.join("\n")).toContain("Research incomplete");
     const playerAReport = replies.find((reply): boolean => reply.includes("\n🎯 A\n"));
     expect(playerAReport).toContain("1 latest completed matches");
     expect(playerAReport).toContain("Average: 101.00");
@@ -462,7 +463,7 @@ describe("report deadline coordination", () => {
     expect(playerCalls).toEqual(["A", "B"]);
     expect(statsSignals).toHaveLength(2);
     expect(statsSignals.every((signal) => signal.aborted)).toBe(true);
-    expect(sourceSignals[0]?.aborted).toBe(true);
+    expect(sourceSignals[0]?.aborted).toBe(false);
 
     const repliesAtDeadline = replies.length;
     hanging.resolve(pdcStats("B", 10));

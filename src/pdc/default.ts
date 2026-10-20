@@ -1,8 +1,8 @@
 import path from "node:path";
 
-import { FileCache } from "../cache.js";
+import { FileCache, MemoryCache } from "../cache.js";
 import { DartsOrakelClient } from "../dartsorakel/client.js";
-import { createJinaReaderFetch } from "../dartsorakel/reader-fetch.js";
+import { createResearchReaderFetch } from "../research/config.js";
 import type { Logger } from "../logger.js";
 import { FixtureNameResolver } from "../modus/fixture-name-resolver.js";
 import { CorroboratedPdcFixtureSource, DartsNerdPdcFixtureSource } from "./darts-nerd-fixture-source.js";
@@ -20,23 +20,17 @@ export function createDefaultPdcTournamentService(
   sharedFixtureNameResolver?: FixtureNameResolver,
 ): PdcTournamentService {
   const resolvedCacheDirectory = cacheDirectory ?? path.resolve(process.cwd(), ".cache", "pdc");
-  const readerFetch = createJinaReaderFetch();
-  const fixtureNameClient = sharedFixtureNameClient ?? new DartsOrakelClient({
-    fetchImpl: readerFetch,
-    maxRetries: 1,
-    minRequestIntervalMs: 500,
-    logger,
-  });
-  const resolver = sharedFixtureNameResolver ?? new FixtureNameResolver(fixtureNameClient);
+  const readerFetch = createResearchReaderFetch();
+  // Schedule presentation retains provider-backed labels. An explicit resolver
+  // remains available to the offline research workflow's targeted fallback.
+  const fallbackResolver = sharedFixtureNameResolver
+    ?? (sharedFixtureNameClient === undefined ? undefined : new FixtureNameResolver(sharedFixtureNameClient));
   const officialFixtures = new EredmenyekPdcFixtureSource({
-    officialSource: new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }),
-      resolver: { resolve: (name: string, signal?: AbortSignal): Promise<string> => resolver.resolveProviderName(name, signal) },
-    }),
-    resolver,
+    officialSource: new OfficialPdcApiFixtureSource({ logger, fallbackSource: new PdpaPdcFixtureSource({ logger }) }),
+    ...(fallbackResolver === undefined ? {} : { resolver: fallbackResolver }),
     logger,
   });
   const liveFixtures = new DartsNerdPdcFixtureSource({
-    resolver,
     logger,
   });
   return new PdcTournamentService({
@@ -47,7 +41,7 @@ export function createDefaultPdcTournamentService(
       logger,
     }),
     ...(playerStats === undefined ? {} : { playerStats }),
-    cache: new FileCache({ directory: resolvedCacheDirectory, logger }),
+    cache: process.env.VERCEL === "1" ? new MemoryCache({ maxEntries: 256 }) : new FileCache({ directory: resolvedCacheDirectory, logger }),
     logger,
   });
 }

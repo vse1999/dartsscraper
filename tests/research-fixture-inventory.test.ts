@@ -220,8 +220,11 @@ describe("fixture-derived participant inventory", () => {
     };
     const service = new PdcTournamentService({ source, fixtureSource: { name: "fixtures", getFixtures } });
 
-    await expect(service.getFixturesForDate(DATE)).resolves.toEqual([pdcFixture()]);
-    expect(getFixtures).toHaveBeenCalledWith(DATE);
+    const schedule = await service.getScheduleForDate(DATE);
+    expect(schedule.events.flatMap((event) => event.fixtures)).toEqual([pdcFixture()]);
+    expect(schedule.calendarStatus).toBe("unavailable");
+    await expect(service.getFixturesForDate(DATE)).rejects.toThrow("PDC schedule coverage is incomplete");
+    expect(getFixtures).toHaveBeenNthCalledWith(1, DATE, expect.any(AbortSignal));
     await expect(service.getFixturesForDate("bad-date")).rejects.toThrow();
     await expect(new PdcTournamentService({ source }).getFixturesForDate(DATE)).rejects.toThrow("PDC fixture source is not configured.");
   });

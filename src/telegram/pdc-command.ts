@@ -4,13 +4,14 @@ import {
   type ReportSession,
 } from "../daily/report-lifecycle.js";
 import type { Logger } from "../logger.js";
-import type { PdcTournamentResult } from "../pdc/schemas.js";
+import type { PdcFixture, PdcScheduleSnapshot, PdcTournamentResult } from "../pdc/schemas.js";
 import type { PdcTournamentService, PdcUpcomingReport } from "../pdc/service.js";
-import { formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
+import { formatPdcSchedulePreviewMessages, formatPdcTournamentMessages, formatPdcUpcomingMessages } from "./pdc-formatter.js";
 import type { ImageReport } from "./report-image.js";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import { pdcImageReports, pdcPlayerKeyboard } from "./pdc-image-reports.js";
 import { OfficialPdcScheduleUnavailableError } from "../pdc/official-api-fixture-source.js";
+import { flattenScheduleFixtures } from "../pdc/schedule.js";
 import type { BackgroundTaskScheduler } from "./modus-command.js";
 
 export type PdcReportDateExpression = "today" | "tomorrow" | "latest";
@@ -23,6 +24,14 @@ export interface PdcTournamentReader {
     date: string,
     signal?: AbortSignal,
     onPartial?: (report: PdcUpcomingReport) => void,
+  ): Promise<PdcUpcomingReport>;
+  getScheduleForDate?(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot>;
+  getReportForFixtures?(
+    date: string,
+    fixtures: readonly PdcFixture[],
+    signal?: AbortSignal,
+    onPartial?: (report: PdcUpcomingReport) => void,
+    schedule?: PdcScheduleSnapshot,
   ): Promise<PdcUpcomingReport>;
   getLatestResults(date: string, signal?: AbortSignal): Promise<readonly PdcTournamentResult[]>;
 }
@@ -88,8 +97,8 @@ export async function handlePdcReportCommand(
     acknowledge: (signal: AbortSignal): Promise<void | PdcAcknowledgement> => (
       responder.reply(`🎯 Scanning PDC ${expression} tournaments…`, { signal })
     ),
-    report: (session: ReportSession): Promise<PdcCommandOutcome> => (
-      runPdcReport(expression, reader, dateResolver, responder, logger, session)
+    report: (session: ReportSession, acknowledgement: PdcAcknowledgement | void): Promise<PdcCommandOutcome> => (
+      runPdcReport(expression, reader, dateResolver, responder, logger, session, acknowledgement)
     ),
     ...(expression === "latest" || scheduleBackgroundTask === undefined
       ? {}
@@ -123,6 +132,7 @@ async function runPdcReport(
   responder: PdcCommandResponder,
   logger: Logger,
   session: ReportSession,
+  acknowledgement: PdcAcknowledgement | void,
 ): Promise<Exclude<PdcCommandOutcome, "invalid" | "unavailable">> {
   try {
     const latest = expression === "latest";
@@ -138,15 +148,25 @@ async function runPdcReport(
       let latestPartial: PdcUpcomingReport | undefined;
       let report: PdcUpcomingReport;
       try {
-        report = await session.research(
-          (signal: AbortSignal): Promise<PdcUpcomingReport> => reader.getUpcomingReportForDate(
+        if (reader.getScheduleForDate !== undefined && reader.getReportForFixtures !== undefined) {
+          const schedule = await session.research((signal: AbortSignal): Promise<PdcScheduleSnapshot> => reader.getScheduleForDate?.(date, signal) ?? Promise.reject(new Error("PDC schedule reader is unavailable.")));
+          await sendPdcSchedulePreview(responder, acknowledgement, schedule, session);
+          report = await session.research((signal: AbortSignal): Promise<PdcUpcomingReport> => reader.getReportForFixtures?.(
             date,
+            flattenScheduleFixtures(schedule),
             signal,
-            (partial: PdcUpcomingReport): void => {
-              latestPartial = partial;
-            },
-          ),
-        );
+            (partial: PdcUpcomingReport): void => { latestPartial = partial; },
+            schedule,
+          ) ?? Promise.reject(new Error("PDC fixture research reader is unavailable.")));
+        } else {
+          report = await session.research(
+            (signal: AbortSignal): Promise<PdcUpcomingReport> => reader.getUpcomingReportForDate(
+              date,
+              signal,
+              (partial: PdcUpcomingReport): void => { latestPartial = partial; },
+            ),
+          );
+        }
       } catch (error: unknown) {
         if (!isReportDeadlineExceeded(error) || error.phase !== "research" || latestPartial === undefined) {
           throw error;
@@ -182,6 +202,25 @@ async function runPdcReport(
     }
     return "failed";
   }
+}
+
+async function sendPdcSchedulePreview(
+  responder: PdcCommandResponder,
+  acknowledgement: PdcAcknowledgement | void,
+  schedule: PdcScheduleSnapshot,
+  session: ReportSession,
+): Promise<void> {
+  const messages = formatPdcSchedulePreviewMessages(schedule);
+  const first = messages[0];
+  if (first === undefined) return;
+  if (isPdcAcknowledgement(acknowledgement) && responder.edit !== undefined) {
+    await session.deliver((signal: AbortSignal): Promise<void> => responder.edit?.(acknowledgement.messageId, first, { signal }) ?? Promise.resolve());
+    for (const message of messages.slice(1)) {
+      await session.deliver((signal: AbortSignal): Promise<void | PdcAcknowledgement> => responder.reply(message, { signal }));
+    }
+    return;
+  }
+  await sendPdcMessages(responder, messages, session);
 }
 
 function officialScheduleUnavailableMessage(error: OfficialPdcScheduleUnavailableError): string {

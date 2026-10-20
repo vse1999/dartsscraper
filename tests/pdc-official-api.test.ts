@@ -16,6 +16,10 @@ function oneTournament(date: string): unknown {
   return { data: [{ id: "10823", attributes: { name: "Swiss Darts Trophy", startDate: date, endDate: date } }], meta: { count: 1, totalCount: 1 } };
 }
 
+function tournament(id: string, name: string, date: string): unknown {
+  return { id, attributes: { name, startDate: date, endDate: date } };
+}
+
 function oneFixture(overrides: Readonly<Record<string, unknown>> = {}): unknown {
   return { id: "123", attributes: {
     tournamentID: "10823", startDate: "2026-10-09", startTime: null,
@@ -114,9 +118,8 @@ describe("official PDC public API discovery", () => {
     ]) {
       const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(response(oneTournament("2026-10-09")))
         .mockResolvedValueOnce(response({ data: [oneFixture(), { ...(oneFixture({ participant2: participant }) as object), id: "124" }], meta: { count: 2, totalCount: 2 } }));
-      const fixtures = await new OfficialPdcApiFixtureSource({ fetchImpl }).getFixtures("2026-10-09");
-      expect(fixtures).toHaveLength(1);
-      expect(fixtures[0]).toMatchObject({ playerOne: "Rob Cross", playerTwo: "Ryan Searle" });
+      const schedule = await new OfficialPdcApiFixtureSource({ fetchImpl }).getSchedule("2026-10-09");
+      expect(schedule.events[0]).toMatchObject({ coverage: "partial", pendingSlots: 1, fixtures: [expect.objectContaining({ playerOne: "Rob Cross", playerTwo: "Ryan Searle" })] });
     }
   });
 
@@ -155,7 +158,132 @@ describe("official PDC public API discovery", () => {
   it("accepts an official dated PDPA fallback when API is unavailable", async () => {
     const fixture: PdcFixture = { id: "pdpa:1", tournamentName: "Swiss", date: "2026-10-09", playerOne: "Rob Cross", playerTwo: "Ryan Searle", startTime: null, session: null, round: null, sourceUrl: "https://pdpa.co.uk/event/swiss/" };
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValueOnce(new Error("offline"));
-    await expect(new OfficialPdcApiFixtureSource({ fetchImpl, fallbackSource: { name: "PDPA", getFixtures: async (): Promise<readonly PdcFixture[]> => [fixture] } }).getFixtures("2026-10-09")).resolves.toEqual([fixture]);
+    const source = new OfficialPdcApiFixtureSource({ fetchImpl, fallbackSource: { name: "PDPA", getFixtures: async (): Promise<readonly PdcFixture[]> => [fixture] } });
+    const schedule = await source.getSchedule("2026-10-09");
+    expect(schedule.calendarStatus).toBe("unavailable");
+    expect(schedule.events[0]).toMatchObject({ coverage: "partial", reason: "fallback_only", fixtures: [fixture] });
+    await expect(source.getFixtures("2026-10-09")).rejects.toBeInstanceOf(OfficialPdcScheduleUnavailableError);
+  });
+
+  it("does not merge distinct event identities that differ only by their ET number", async () => {
+    const date = "2026-10-09";
+    const fallbackFixtures: PdcFixture[] = [13, 14].map((number): PdcFixture => ({
+      id: `pdpa:et${number}`,
+      tournamentName: `ET ${number}`,
+      date,
+      playerOne: `Player ${number}`,
+      playerTwo: `Opponent ${number}`,
+      startTime: null,
+      session: null,
+      round: null,
+      sourceUrl: `https://pdpa.co.uk/event/et-${number}/`,
+    }));
+    const schedule = await new OfficialPdcApiFixtureSource({
+      fetchImpl: vi.fn<typeof fetch>().mockRejectedValue(new Error("calendar unavailable")),
+      fallbackSource: { name: "PDPA", getFixtures: async (): Promise<readonly PdcFixture[]> => fallbackFixtures },
+    }).getSchedule(date);
+
+    expect(schedule.events.map((event) => event.name)).toEqual(["ET 13", "ET 14"]);
+    expect(schedule.events.map((event) => event.fixtures)).toEqual([[fallbackFixtures[0]], [fallbackFixtures[1]]]);
+  });
+
+  it("keeps a synthetic 16-match Swiss event visible beside two isolated unresolved events", async () => {
+    const date = "2026-10-11";
+    const swissRows = Array.from({ length: 16 }, (_, index) => ({
+      ...(oneFixture({ tournamentID: "10823", startDate: date }) as { id: string; attributes: Record<string, unknown> }),
+      id: String(2000 + index),
+    }));
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ data: [
+        tournament("10823", "Swiss Darts Trophy", date),
+        tournament("10824", "Women's World Matchplay", date),
+        tournament("10825", "Players Championship", date),
+      ], meta: { count: 3, totalCount: 3 } }))
+      .mockResolvedValueOnce(response({ data: swissRows, meta: { count: 16, totalCount: 16 } }))
+      .mockResolvedValueOnce(new Response("event unavailable", { status: 503 }))
+      .mockResolvedValueOnce(response(empty));
+
+    const schedule = await new OfficialPdcApiFixtureSource({ fetchImpl }).getSchedule(date);
+
+    expect(schedule.calendarStatus).toBe("verified");
+    expect(schedule.events.map((event) => [event.name, event.coverage])).toEqual([
+      ["Swiss Darts Trophy", "available"],
+      ["Women's World Matchplay", "unavailable"],
+      ["Players Championship", "unavailable"],
+    ]);
+    expect(schedule.events[0]?.fixtures).toHaveLength(16);
+    expect(schedule.events.slice(1).every((event) => event.fixtures.length === 0 && event.pendingSlots === null)).toBe(true);
+  });
+
+  it("counts only explicit unassigned participant slots and preserves named rows", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(oneTournament("2026-10-09")))
+      .mockResolvedValueOnce(response({ data: [
+        oneFixture(),
+        { ...(oneFixture({ participant2: null }) as object), id: "124" },
+      ], meta: { count: 2, totalCount: 2 } }));
+
+    const schedule = await new OfficialPdcApiFixtureSource({ fetchImpl }).getSchedule("2026-10-09");
+
+    expect(schedule.events[0]).toMatchObject({ coverage: "partial", pendingSlots: 1, fixtures: [expect.objectContaining({ id: "pdc-official:123" })] });
+  });
+
+  it("merges fallback rows without erasing unrelated verified official fixtures", async () => {
+    const date = "2026-10-09";
+    const officialFixture = oneFixture();
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ data: [
+        tournament("10823", "Swiss Darts Trophy", date),
+        tournament("10824", "Players Championship", date),
+      ], meta: { count: 2, totalCount: 2 } }))
+      .mockResolvedValueOnce(response({ data: [officialFixture], meta: { count: 1, totalCount: 1 } }))
+      .mockResolvedValueOnce(response(empty));
+    const fallbackFixture: PdcFixture = {
+      id: "pdpa:players-championship", tournamentName: "Players Championship 2026", date,
+      startTime: null, session: null, round: "Last 64", playerOne: "Other One", playerTwo: "Other Two",
+      sourceUrl: "https://pdpa.co.uk/event/players-championship/",
+    };
+    const source = new OfficialPdcApiFixtureSource({ fetchImpl, fallbackSource: {
+      name: "PDPA", getFixtures: async (): Promise<readonly PdcFixture[]> => [fallbackFixture],
+    } });
+
+    const schedule = await source.getSchedule(date);
+
+    const swiss = schedule.events.find((event) => event.eventId === "10823");
+    const playersChampionship = schedule.events.find((event) => event.eventId === "10824");
+    expect(swiss?.fixtures).toHaveLength(1);
+    expect(swiss?.fixtures[0]?.id).toBe("pdc-official:123");
+    expect(swiss?.coverage).toBe("available");
+    expect(playersChampionship).toMatchObject({ coverage: "partial", reason: "fallback_only", fixtures: [expect.objectContaining({ id: fallbackFixture.id })] });
+  });
+
+  it("keeps validated official rows when fallback data fails validation", async () => {
+    const date = "2026-10-09";
+    const pendingFixture = {
+      ...(oneFixture({ tournamentID: "10824", participant2: { participantID: null, firstName: null, lastName: null } }) as { id: string; attributes: Record<string, unknown> }),
+      id: "124",
+    };
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ data: [
+        tournament("10823", "Swiss Darts Trophy", date),
+        tournament("10824", "Players Championship", date),
+      ], meta: { count: 2, totalCount: 2 } }))
+      .mockResolvedValueOnce(response({ data: [oneFixture()], meta: { count: 1, totalCount: 1 } }))
+      .mockResolvedValueOnce(response({ data: [pendingFixture], meta: { count: 1, totalCount: 1 } }));
+    const badFallbackFixture: PdcFixture = {
+      id: "pdpa:wrong-date", tournamentName: "Players Championship", date: "2026-10-10",
+      startTime: null, session: null, round: null, playerOne: "A", playerTwo: "B",
+      sourceUrl: "https://pdpa.co.uk/event/players-championship/",
+    };
+
+    const schedule = await new OfficialPdcApiFixtureSource({
+      fetchImpl,
+      fallbackSource: { name: "PDPA", getFixtures: async (): Promise<readonly PdcFixture[]> => [badFallbackFixture] },
+    }).getSchedule(date);
+
+    expect(schedule.calendarStatus).toBe("verified");
+    expect(schedule.events[0]).toMatchObject({ name: "Swiss Darts Trophy", coverage: "available", fixtures: [expect.objectContaining({ id: "pdc-official:123" })] });
+    expect(schedule.events[1]).toMatchObject({ name: "Players Championship", coverage: "opponents_pending", pendingSlots: 1 });
   });
 
   it("propagates caller cancellation without fetching fallback", async () => {

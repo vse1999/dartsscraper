@@ -8,20 +8,32 @@ import type { Match } from "../schemas/match.js";
 import {
   PDC_CALENDAR_CATEGORIES,
   PdcFixtureSchema,
+  PdcScheduleSnapshotSchema,
   PdcTournamentEventSchema,
   PdcTournamentResultSchema,
   type PdcCalendarCategory,
   type PdcFixture,
   type PdcFixtureSource,
+  type PdcScheduleSnapshot,
   type PdcTournamentEvent,
   type PdcTournamentResult,
   type PdcTournamentSource,
 } from "./schemas.js";
+import { createFallbackScheduleSnapshot, flattenScheduleFixtures, samePdcFixture } from "./schedule.js";
+import { OfficialPdcScheduleUnavailableError } from "./official-api-fixture-source.js";
+import { waitWithSignal } from "../services/cancellation.js";
 
 const DEFAULT_CACHE_TTL_MS = 30_000;
 const DEFAULT_FIXTURE_CACHE_TTL_MS = 5 * 60_000;
 const DEFAULT_PLAYER_MATCH_COUNT = 10;
 const DEFAULT_PLAYER_CONCURRENCY = 4;
+
+interface SharedFlight<T> {
+  readonly controller: AbortController;
+  readonly promise: Promise<T>;
+  subscribers: number;
+  settled: boolean;
+}
 
 export interface PdcPlayerStats {
   readonly playerName: string;
@@ -50,6 +62,7 @@ export interface PdcUpcomingReport {
   readonly date: string;
   readonly fixtures: readonly PdcFixture[];
   readonly players: readonly PdcPlayerResearch[];
+  readonly schedule?: PdcScheduleSnapshot;
 }
 
 export interface PdcTournamentServiceOptions {
@@ -76,8 +89,8 @@ export class PdcTournamentService {
   private readonly playerMatchCount: number;
   private readonly playerConcurrency: number;
   private readonly logger: Logger;
-  private readonly calendarPromises = new Map<number, Promise<readonly PdcTournamentEvent[]>>();
-  private readonly fixturePromises = new Map<string, Promise<readonly PdcFixture[]>>();
+  private readonly calendarFlights = new Map<string, SharedFlight<readonly PdcTournamentEvent[]>>();
+  private readonly scheduleFlights = new Map<string, SharedFlight<PdcScheduleSnapshot>>();
 
   public constructor(options: PdcTournamentServiceOptions) {
     this.source = options.source;
@@ -128,8 +141,60 @@ export class PdcTournamentService {
   public async getFixturesForDate(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
     throwIfAborted(signal);
     const validatedDate = IsoDateSchema.parse(date);
+    const schedule = await this.getScheduleForDate(validatedDate, signal);
+    const fixtures = flattenScheduleFixtures(schedule);
+    const unresolved = schedule.events.filter((event) => event.coverage !== "available");
+    if (schedule.calendarStatus !== "verified" || unresolved.length > 0) {
+      throw new OfficialPdcScheduleUnavailableError(
+        `PDC schedule coverage is incomplete for ${validatedDate}.`,
+        undefined,
+        { date: validatedDate, tournamentNames: unresolved.map((event) => event.name), availableFixtures: fixtures },
+      );
+    }
+    return fixtures;
+  }
+
+  public async getScheduleForDate(date: string, signal?: AbortSignal): Promise<PdcScheduleSnapshot> {
+    throwIfAborted(signal);
+    const validatedDate = IsoDateSchema.parse(date);
     if (this.fixtureSource === undefined) throw new Error("PDC fixture source is not configured.");
-    return withOptionalDeadline(this.getFixtures(validatedDate, signal), signal);
+    const cacheKey = `pdc-schedule-v1-${validatedDate}`;
+    let cachedValue: unknown | null = null;
+    try {
+      cachedValue = await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("PDC schedule cache read failed; refreshing the validated source.", {
+        date: validatedDate,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+    const cached = PdcScheduleSnapshotSchema.safeParse(cachedValue);
+    if (cached.success && cached.data.date === validatedDate) {
+      const ageMs = Date.now() - Date.parse(cached.data.observedAt);
+      if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= this.fixtureCacheTtlMs) {
+        this.logger.debug("PDC schedule cache hit.", { date: validatedDate, ageMs: Math.round(ageMs) });
+        return cached.data;
+      }
+    }
+    this.logger.debug("PDC schedule cache miss.", { date: validatedDate });
+    return joinSharedFlight(this.scheduleFlights, validatedDate, signal, async (sharedSignal): Promise<PdcScheduleSnapshot> => {
+      const source = this.fixtureSource;
+      if (source === undefined) throw new Error("PDC fixture source is not configured.");
+      const loaded = source.getSchedule === undefined
+        ? createFallbackScheduleSnapshot(validatedDate, new Date().toISOString(), await source.getFixtures(validatedDate, sharedSignal))
+        : PdcScheduleSnapshotSchema.parse(await source.getSchedule(validatedDate, sharedSignal));
+      if (loaded.date !== validatedDate) throw new Error("PDC schedule source returned a different date.");
+      try {
+        await this.cache?.set(cacheKey, loaded, this.fixtureCacheTtlMs);
+      } catch (error: unknown) {
+        this.logger.warn("PDC schedule cache write failed; using the validated source result.", {
+          date: validatedDate,
+          errorType: error instanceof Error ? error.name : "UnknownError",
+        });
+      }
+      return loaded;
+    });
   }
 
   public async getUpcomingReportForDate(
@@ -142,15 +207,33 @@ export class PdcTournamentService {
     if (this.fixtureSource === undefined || this.playerStats === undefined) {
       throw new Error("Upcoming PDC research requires both a fixture source and a player statistics reader.");
     }
-    const fixtures = await this.getFixturesForDate(validatedDate, signal);
-    return this.getReportForFixtures(validatedDate, fixtures, signal, onPartial);
+    const schedule = await this.getScheduleForDate(validatedDate, signal);
+    const fixtures = flattenScheduleFixtures(schedule);
+    if (fixtures.length === 0 && (schedule.calendarStatus !== "verified" || schedule.events.some((event) => event.coverage !== "available"))) {
+      const unresolved = schedule.events.filter((event) => event.coverage !== "available");
+      throw new OfficialPdcScheduleUnavailableError(
+        `PDC schedule could not be verified for ${validatedDate}.`,
+        undefined,
+        { date: validatedDate, tournamentNames: unresolved.map((event) => event.name), availableFixtures: [] },
+      );
+    }
+    return this.getReportForFixtures(validatedDate, fixtures, signal, onPartial, schedule);
   }
 
   /** Research a previously verified, immutable schedule batch without rediscovery. */
-  public async getReportForFixtures(date: string, input: readonly PdcFixture[], signal?: AbortSignal, onPartial?: (report: PdcUpcomingReport) => void): Promise<PdcUpcomingReport> {
+  public async getReportForFixtures(date: string, input: readonly PdcFixture[], signal?: AbortSignal, onPartial?: (report: PdcUpcomingReport) => void, schedule?: PdcScheduleSnapshot): Promise<PdcUpcomingReport> {
     const validatedDate = IsoDateSchema.parse(date);
     const fixtures = PdcFixtureSchema.array().parse(input);
     if (fixtures.some((fixture) => fixture.date !== validatedDate)) throw new Error("PDC batch contains a fixture from another date.");
+    if (schedule !== undefined) {
+      const validatedSchedule = PdcScheduleSnapshotSchema.parse(schedule);
+      if (validatedSchedule.date !== validatedDate) throw new Error("PDC report schedule contains a different date.");
+      const scheduleFixtures = new Map(flattenScheduleFixtures(validatedSchedule).map((fixture) => [fixture.id, fixture]));
+      if (fixtures.some((fixture) => {
+        const pinnedFixture = scheduleFixtures.get(fixture.id);
+        return pinnedFixture === undefined || !samePdcFixture(pinnedFixture, fixture);
+      })) throw new Error("PDC report batch does not match its pinned schedule.");
+    }
     if (this.playerStats === undefined) throw new Error("PDC player statistics reader is unavailable.");
     throwIfAborted(signal);
     const names = deduplicatePlayerNames(fixtures.flatMap((fixture) => [fixture.playerOne, fixture.playerTwo]));
@@ -160,7 +243,7 @@ export class PdcTournamentService {
       failureCode: "unstarted",
     }));
     const publishPartial = (): void => {
-      onPartial?.({ date: validatedDate, fixtures, players: partialPlayers.map((player) => ({ ...player })) });
+      onPartial?.({ date: validatedDate, fixtures, players: partialPlayers.map((player) => ({ ...player })), ...(schedule === undefined ? {} : { schedule }) });
     };
     publishPartial();
     const bases = new Map<string, PdcPlayerResearch>();
@@ -224,7 +307,7 @@ export class PdcTournamentService {
       unstartedPlayers: players.filter((player) => player.failureCode === "unstarted").length,
       requestedMatchesPerPlayer: this.playerMatchCount,
     });
-    return { date: validatedDate, fixtures, players };
+    return { date: validatedDate, fixtures, players, ...(schedule === undefined ? {} : { schedule }) };
   }
 
   private async getResults(events: readonly PdcTournamentEvent[], signal?: AbortSignal): Promise<readonly PdcTournamentResult[]> {
@@ -235,56 +318,80 @@ export class PdcTournamentService {
   }
 
   private async getCalendar(year: number, signal?: AbortSignal): Promise<readonly PdcTournamentEvent[]> {
-    const cached = PdcTournamentEventSchema.array().safeParse(await withOptionalDeadline(this.cache?.get(`pdc-calendar-v1-${year}`) ?? Promise.resolve(undefined), signal));
-    if (cached.success) return cached.data;
-    // A caller-owned signal must never reuse or poison an unscoped shared
-    // promise: its cancellation is specific to that report invocation.
-    const existing = signal === undefined ? this.calendarPromises.get(year) : undefined;
-    if (existing !== undefined) return existing;
-
-    const request = Promise.all(this.categories.map((category) => signal === undefined
-      ? this.source.getCalendar(year, category)
-      : this.source.getCalendar(year, category, signal)))
-      .then((categoryEvents) => {
-        const byEventKey = new Map<number, PdcTournamentEvent>();
-        for (const events of categoryEvents) for (const event of events) byEventKey.set(event.eventKey, PdcTournamentEventSchema.parse(event));
-        const merged = [...byEventKey.values()].sort((left, right) => left.eventDate.localeCompare(right.eventDate) || left.eventKey - right.eventKey);
-        this.logger.debug("PDC calendar categories merged.", { year, categories: this.categories, events: merged.length });
-        return this.cache?.set(`pdc-calendar-v1-${year}`, merged, this.cacheTtlMs).then(() => merged) ?? merged;
-      })
-        .finally(() => {
-          if (signal === undefined) this.calendarPromises.delete(year);
-        });
-    if (signal === undefined) this.calendarPromises.set(year, request);
-    return request;
-  }
-
-  private async getFixtures(date: string, signal?: AbortSignal): Promise<readonly PdcFixture[]> {
-    const cacheKey = `pdc-fixtures-v9-${date}`;
-    const cached = PdcFixtureSchema.array().safeParse(await withOptionalDeadline(this.cache?.get(cacheKey) ?? Promise.resolve(undefined), signal));
-    if (cached.success) return cached.data;
-    const existing = signal === undefined ? this.fixturePromises.get(date) : undefined;
-    if (existing !== undefined) return existing;
-    const source = this.fixtureSource;
-    if (source === undefined) throw new Error("PDC fixture source is not configured.");
-    const request = (signal === undefined ? source.getFixtures(date) : source.getFixtures(date, signal))
-      .then((fixtures) => PdcFixtureSchema.array().parse(fixtures))
-      .then((fixtures) => this.cache?.set(cacheKey, fixtures, this.fixtureCacheTtlMs).then(() => fixtures) ?? fixtures)
-      .finally(() => {
-        if (signal === undefined) this.fixturePromises.delete(date);
+    let cachedValue: unknown = undefined;
+    try {
+      cachedValue = await waitWithSignal(this.cache?.get(`pdc-calendar-v1-${year}`) ?? Promise.resolve(undefined), signal);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      this.logger.warn("PDC calendar cache read failed; refreshing the validated source.", {
+        year,
+        errorType: error instanceof Error ? error.name : "UnknownError",
       });
-    if (signal === undefined) this.fixturePromises.set(date, request);
-    return request;
+    }
+    const cached = PdcTournamentEventSchema.array().safeParse(cachedValue);
+    if (cached.success) return cached.data;
+    return joinSharedFlight(this.calendarFlights, String(year), signal, async (sharedSignal): Promise<readonly PdcTournamentEvent[]> => {
+      const categoryEvents = await Promise.all(this.categories.map((category) => this.source.getCalendar(year, category, sharedSignal)));
+      const byEventKey = new Map<number, PdcTournamentEvent>();
+      for (const events of categoryEvents) for (const event of events) byEventKey.set(event.eventKey, PdcTournamentEventSchema.parse(event));
+      const merged = [...byEventKey.values()].sort((left, right) => left.eventDate.localeCompare(right.eventDate) || left.eventKey - right.eventKey);
+      this.logger.debug("PDC calendar categories merged.", { year, categories: this.categories, events: merged.length });
+      try {
+        await this.cache?.set(`pdc-calendar-v1-${year}`, merged, this.cacheTtlMs);
+      } catch (error: unknown) {
+        this.logger.warn("PDC calendar cache write failed; using the validated source result.", {
+          year,
+          errorType: error instanceof Error ? error.name : "UnknownError",
+        });
+      }
+      return merged;
+    });
   }
 
   public clearInMemoryCache(): void {
-    this.calendarPromises.clear();
-    this.fixturePromises.clear();
+    this.calendarFlights.clear();
+    this.scheduleFlights.clear();
   }
 }
 
 function deduplicateCategories(categories: readonly PdcCalendarCategory[]): readonly PdcCalendarCategory[] {
   return [...new Set(categories)];
+}
+
+async function joinSharedFlight<T>(
+  flights: Map<string, SharedFlight<T>>,
+  key: string,
+  signal: AbortSignal | undefined,
+  load: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  throwIfAborted(signal);
+  let flight = flights.get(key);
+  if (flight === undefined) {
+    const controller = new AbortController();
+    const promise = Promise.resolve().then((): Promise<T> => load(controller.signal));
+    flight = { controller, promise, subscribers: 0, settled: false };
+    const registeredFlight = flight;
+    flights.set(key, registeredFlight);
+    void promise.then(
+      (): void => finishSharedFlight(flights, key, registeredFlight),
+      (): void => finishSharedFlight(flights, key, registeredFlight),
+    );
+  }
+  flight.subscribers += 1;
+  try {
+    return await waitWithSignal(flight.promise, signal);
+  } finally {
+    flight.subscribers -= 1;
+    if (flight.subscribers === 0 && !flight.settled) {
+      flight.controller.abort(new Error("No active PDC schedule consumers remain."));
+      if (flights.get(key) === flight) flights.delete(key);
+    }
+  }
+}
+
+function finishSharedFlight<T>(flights: Map<string, SharedFlight<T>>, key: string, flight: SharedFlight<T>): void {
+  flight.settled = true;
+  if (flights.get(key) === flight) flights.delete(key);
 }
 
 function positiveFinite(value: number, label: string): number {

@@ -9,7 +9,7 @@ import { newPdcReportJob } from "../src/telegram/pdc-job-trigger.js";
 import { renderReportImage, type ImageReport } from "../src/telegram/report-image.js";
 import { createTelegramSender } from "../src/telegram/sender.js";
 import { readBotConfiguration } from "../src/telegram/bot.js";
-import type { PdcFixture } from "../src/pdc/schemas.js";
+import type { PdcFixture, PdcScheduleSnapshot } from "../src/pdc/schemas.js";
 import type { PdcUpcomingReport } from "../src/pdc/service.js";
 
 const sendOwner = process.argv.includes("--send-owner");
@@ -32,8 +32,8 @@ while (queued.length > 0 && !failed) {
   if (job === undefined) break;
   batches += 1;
   await runPdcReportJob(job, {
-    reader: { getFixturesForDate: service.getFixturesForDate.bind(service), getReportForFixtures: async (requested: string, fixtures: readonly PdcFixture[], signal?: AbortSignal): Promise<PdcUpcomingReport> => {
-      const report = await service.getReportForFixtures(requested, fixtures, signal);
+    reader: { getScheduleForDate: service.getScheduleForDate.bind(service), getReportForFixtures: async (requested: string, fixtures: readonly PdcFixture[], signal?: AbortSignal, _onPartial?: (report: PdcUpcomingReport) => void, schedule?: PdcScheduleSnapshot): Promise<PdcUpcomingReport> => {
+      const report = await service.getReportForFixtures(requested, fixtures, signal, undefined, schedule);
       for (const player of report.players) players.push({ name: player.requestedName, rows: player.stats?.matches.length ?? 0, averageRows: player.stats?.availableAverageCount ?? 0,
         oneEightiesRows: player.stats?.matches.filter((match) => match.oneEighties !== undefined).length ?? 0,
         checkoutRows: player.stats?.matches.filter((match) => match.checkoutHits !== undefined && match.checkoutAttempts !== undefined).length ?? 0 });

@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { noopLogger } from "../src/logger.js";
 import { runPdcReportJob, type PdcReportJobDependencies } from "../src/pdc/report-job.js";
 import { signPdcJob, verifyPdcJob, type PdcReportJob } from "../src/pdc/report-job-protocol.js";
+import { InMemoryPdcJobReceiptStore, type PdcJobReceiptReservation, type PdcJobReceiptStore } from "../src/pdc/job-receipt-store.js";
 import { handlePdcJobRequest, type PdcJobEndpointDependencies } from "../api/pdc-report.js";
 import { createPdcJobDispatcher, PdcJobDispatchError } from "../src/telegram/pdc-job-trigger.js";
-import type { PdcFixture } from "../src/pdc/schemas.js";
+import type { PdcFixture, PdcScheduleSnapshot } from "../src/pdc/schemas.js";
 import type { PdcUpcomingReport, PdcPlayerStats } from "../src/pdc/service.js";
 import type { ImageReport } from "../src/telegram/report-image.js";
 import { createBot, createConfiguredPdcJobDispatcher } from "../src/telegram/bot.js";
@@ -18,11 +19,18 @@ function job(): PdcReportJob { return { version: 1, jobId: "85fba983-a3f7-4817-b
 function fixtures(count: number = 16): PdcFixture[] {
   return Array.from({ length: count }, (_, index): PdcFixture => ({ id: `fixture-${index}`, date: "2026-10-09", tournamentName: "Swiss Darts Trophy", startTime: null, session: null, round: null, playerOne: `Player ${index * 2}`, playerTwo: `Player ${index * 2 + 1}`, sourceUrl: "https://www.pdc.tv/matches" }));
 }
+function schedule(input: readonly PdcFixture[]): PdcScheduleSnapshot {
+  return {
+    schemaVersion: 1, date: "2026-10-09", timeZone: "Europe/Budapest", observedAt: new Date().toISOString(),
+    calendarStatus: "verified", calendarReason: null,
+    events: input.length === 0 ? [] : [{ eventId: "event-1", name: input[0]?.tournamentName ?? "Swiss Darts Trophy", coverage: "available", fixtures: [...input], pendingSlots: 0, reason: null, evidenceUrls: ["https://www.pdc.tv/matches"] }],
+  };
+}
 function stats(name: string): PdcPlayerStats { return { playerName: name, requestedCount: 10, matches: Array.from({ length: 10 }, (_, index) => ({ date: "2026-10-08", tournament: "PDC", round: null, result: "Won", opponent: `Other ${index}`, score: "6-3", average: 95, oneEighties: 3, checkoutPercentage: 50, checkoutHits: 6, checkoutAttempts: 12 })), meanAverage: 95, availableAverageCount: 10, sourceUrl: "https://dartsorakel.com/player/details/1/example", sourceLabel: "DartsOrakel", provider: "dartsorakel", evidenceUrls: [] }; }
 function report(input: readonly PdcFixture[]): PdcUpcomingReport { return { date: "2026-10-09", fixtures: input, players: [...new Set(input.flatMap((fixture) => [fixture.playerOne, fixture.playerTwo]))].map((requestedName) => ({ requestedName, stats: stats(requestedName), failureCode: null })) }; }
 function endpoint(): PdcJobEndpointDependencies & { readonly tasks: Promise<void>[] } {
   const tasks: Promise<void>[] = [];
-  return { tasks, cronSecret: cron, signingSecret: secret, logger: noopLogger, receipts: new Map(), execute: vi.fn(async (): Promise<void> => {}), schedule: (task: Promise<void>): void => { tasks.push(task); } };
+  return { tasks, cronSecret: cron, signingSecret: secret, logger: noopLogger, receiptStore: new InMemoryPdcJobReceiptStore(), execute: vi.fn(async (): Promise<void> => {}), schedule: (task: Promise<void>): void => { tasks.push(task); } };
 }
 function request(value: unknown = signPdcJob(job(), secret), authorization: string = `Bearer ${cron}`): Request { return new Request("https://example.test/api/pdc-report", { method: "POST", headers: { authorization }, body: JSON.stringify(value) }); }
 
@@ -34,6 +42,32 @@ describe("signed PDC job endpoint", () => {
     expect((await handlePdcJobRequest(request(signed), dependencies)).status).toBe(202);
     await Promise.all(dependencies.tasks);
     expect(dependencies.execute).toHaveBeenCalledTimes(1);
+  });
+  it("admits concurrent duplicate requests through one atomic in-process reservation", async () => {
+    const dependencies = endpoint();
+    const signed = signPdcJob(job(), secret);
+
+    const responses = await Promise.all([
+      handlePdcJobRequest(request(signed), dependencies),
+      handlePdcJobRequest(request(signed), dependencies),
+    ]);
+
+    expect(responses.map((response) => response.status)).toEqual([202, 202]);
+    expect(dependencies.tasks).toHaveLength(1);
+  });
+  it("fails closed when duplicate-receipt admission is unavailable", async () => {
+    const dependencies = endpoint();
+    const schedule = vi.fn((_task: Promise<void>): void => undefined);
+    const receiptStore: PdcJobReceiptStore = {
+      reserve: async (): Promise<PdcJobReceiptReservation> => { throw new Error("private store details"); },
+      release: async (): Promise<void> => undefined,
+    };
+
+    const result = await handlePdcJobRequest(request(), { ...dependencies, receiptStore, schedule });
+
+    expect(result.status).toBe(503);
+    expect(schedule).not.toHaveBeenCalled();
+    expect(dependencies.execute).not.toHaveBeenCalled();
   });
   it("rejects missing/wrong authorization and modified or expired signed data", async () => {
     const dependencies = endpoint();
@@ -56,12 +90,22 @@ describe("signed PDC job endpoint", () => {
     const changed = { ...signed, job: { ...signed.job, fixtures: signed.job.fixtures?.map((fixture, index) => index === 0 ? { ...fixture, playerOne: "Wrong player" } : fixture) } };
     expect((await handlePdcJobRequest(request(changed), endpoint())).status).toBe(400);
   });
+  it("rejects participant changes when the full schedule is pinned", () => {
+    const input = fixtures(4);
+    const pinned = signPdcJob({ ...job(), fixtures: input, schedule: schedule(input) }, secret);
+    const changed = {
+      ...pinned,
+      job: { ...pinned.job, fixtures: pinned.job.fixtures?.map((fixture, index) => index === 0 ? { ...fixture, playerOne: "Different player" } : fixture) },
+    };
+    expect(() => verifyPdcJob(changed, secret)).toThrow("schedule and pinned fixtures disagree");
+  });
   it("does not start any work when scheduler registration fails", async () => {
     const dependencies = endpoint();
-    expect((await handlePdcJobRequest(request(), { ...dependencies, schedule: (): never => { throw new Error("scheduler unavailable"); } })).status).toBe(503);
+    const signed = signPdcJob(job(), secret);
+    expect((await handlePdcJobRequest(request(signed), { ...dependencies, schedule: (): never => { throw new Error("scheduler unavailable"); } })).status).toBe(503);
     await Promise.resolve();
     expect(dependencies.execute).not.toHaveBeenCalled();
-    expect(dependencies.receipts.size).toBe(0);
+    expect(await dependencies.receiptStore.reserve(`${signed.job.jobId}:${signed.job.cursor}`, { signature: signed.signature, expiresAt: Date.now() + 10000 }, Date.now())).toBe("reserved");
   });
   it("bounds request bytes, admission capacity and key reuse with changed input", async () => {
     const dependencies = endpoint();
@@ -70,7 +114,10 @@ describe("signed PDC job endpoint", () => {
     expect((await handlePdcJobRequest(request(signPdcJob({ ...first, acknowledgementMessageId: 2 }, secret)), dependencies)).status).toBe(409);
     const oversized = new Request("https://example.test/api/pdc-report", { method: "POST", headers: { authorization: `Bearer ${cron}`, "content-length": "999999" }, body: "{}" });
     expect((await handlePdcJobRequest(oversized, dependencies)).status).toBe(413);
-    for (let i = 0; i < 1024; i += 1) dependencies.receipts.set(`old-${i}`, { signature: "x", expiresAt: Date.now() + 10000 });
+    const now = Date.now();
+    for (let i = 0; i < 1023; i += 1) {
+      expect(await dependencies.receiptStore.reserve(`old-${i}`, { signature: "x", expiresAt: now + 10000 }, now)).toBe("reserved");
+    }
     expect((await handlePdcJobRequest(request(signPdcJob({ ...job(), jobId: "ff879acd-29f4-4c1c-b026-acd880f15bcb" }, secret)), dependencies)).status).toBe(503);
   });
 });
@@ -80,7 +127,7 @@ describe("complete statistic chunks", () => {
     const sendReport = vi.fn();
     const editStatus = vi.fn(async (): Promise<void> => {});
     const dispatch = vi.fn();
-    await runPdcReportJob(job(), { reader: { getFixturesForDate: async () => fixtures(4), getReportForFixtures: async () => new Promise<PdcUpcomingReport>(() => {}) }, sender: { sendReport, sendMessage: vi.fn() }, editStatus, dispatcher: { dispatch }, logger: noopLogger, chatId: 1, researchMs: 10, totalMs: 100 });
+    await runPdcReportJob(job(), { reader: { getScheduleForDate: async () => schedule(fixtures(4)), getReportForFixtures: async () => new Promise<PdcUpcomingReport>(() => {}) }, sender: { sendReport, sendMessage: vi.fn() }, editStatus, dispatcher: { dispatch }, logger: noopLogger, chatId: 1, researchMs: 10, totalMs: 100 });
     expect(sendReport).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();
     expect(editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("lookup stopped"), expect.any(AbortSignal));
@@ -89,18 +136,109 @@ describe("complete statistic chunks", () => {
     const input = fixtures();
     const queued: PdcReportJob[] = [job()];
     let sent = 0;
-    const getFixturesForDate = vi.fn(async (): Promise<readonly PdcFixture[]> => input);
+    const getScheduleForDate = vi.fn(async (): Promise<PdcScheduleSnapshot> => schedule(input));
+    const editStatus = vi.fn(async (_id: number, _text: string, _signal: AbortSignal): Promise<void> => {});
     const dependencies: PdcReportJobDependencies = {
-      reader: { getFixturesForDate, getReportForFixtures: vi.fn(async (_date: string, batch: readonly PdcFixture[]): Promise<PdcUpcomingReport> => { expect(batch.length).toBeLessThanOrEqual(4); return report(batch); }) },
+      reader: { getScheduleForDate, getReportForFixtures: vi.fn(async (_date: string, batch: readonly PdcFixture[]): Promise<PdcUpcomingReport> => { expect(batch.length).toBeLessThanOrEqual(4); return report(batch); }) },
       sender: { sendReport: vi.fn(async (): Promise<void> => { sent += 1; }), sendMessage: vi.fn(async (): Promise<void> => {}) },
-      editStatus: vi.fn(async (): Promise<void> => {}), chatId: 1, logger: noopLogger,
+      editStatus, chatId: 1, logger: noopLogger,
       dispatcher: { dispatch: vi.fn(async (next: PdcReportJob): Promise<void> => { expect(sent).toBe(next.cursor); queued.push(next); }) },
     };
     while (queued.length > 0) { const next = queued.shift(); if (next !== undefined) await runPdcReportJob(next, dependencies); }
     expect(sent).toBe(16);
-    expect(getFixturesForDate).toHaveBeenCalledTimes(1);
+    expect(getScheduleForDate).toHaveBeenCalledTimes(1);
     expect(dependencies.reader.getReportForFixtures).toHaveBeenCalledTimes(4);
+    expect(editStatus.mock.calls.filter(([, text]) => text.includes("PDC SCHEDULE"))).toHaveLength(1);
     expect(dependencies.editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("Completed: 16"), expect.any(AbortSignal));
+  });
+  it("continues an older pinned job without rediscovery or repeating the schedule preview", async () => {
+    const input = fixtures(8);
+    const getScheduleForDate = vi.fn(async (): Promise<PdcScheduleSnapshot> => schedule(input));
+    const getReportForFixtures = vi.fn(async (_date: string, batch: readonly PdcFixture[]): Promise<PdcUpcomingReport> => report(batch));
+    const editStatus = vi.fn(async (_id: number, _text: string, _signal: AbortSignal): Promise<void> => {});
+    await runPdcReportJob({ ...job(), cursor: 4, fixtures: input }, {
+      reader: { getScheduleForDate, getReportForFixtures },
+      sender: { sendReport: vi.fn(async (): Promise<void> => {}), sendMessage: vi.fn(async (): Promise<void> => {}) },
+      editStatus,
+      dispatcher: { dispatch: vi.fn(async (): Promise<void> => {}) },
+      logger: noopLogger,
+      chatId: 1,
+    });
+
+    expect(getScheduleForDate).not.toHaveBeenCalled();
+    expect(getReportForFixtures).toHaveBeenCalledWith("2026-10-09", input.slice(4, 8), expect.any(AbortSignal), undefined, expect.objectContaining({ calendarStatus: "unavailable" }));
+    expect(editStatus.mock.calls.some(([, text]) => text.includes("PDC SCHEDULE"))).toBe(false);
+  });
+  it("shows full event coverage and named fixtures before starting history work", async () => {
+    const input = fixtures(16);
+    const base = schedule(input);
+    const snapshot: PdcScheduleSnapshot = {
+      ...base,
+      events: [
+        ...(base.events),
+        { eventId: "womens", name: "Women's World Matchplay", coverage: "unavailable", fixtures: [], pendingSlots: null, reason: "event_unavailable", evidenceUrls: ["https://www.pdc.tv/matches"] },
+        { eventId: "pending", name: "Players Championship", coverage: "opponents_pending", fixtures: [], pendingSlots: 2, reason: "opponents_unassigned", evidenceUrls: ["https://www.pdc.tv/matches"] },
+      ],
+    };
+    const order: string[] = [];
+    const editStatus = vi.fn(async (_id: number, text: string): Promise<void> => { order.push(`edit:${text}`); });
+    const getReportForFixtures = vi.fn(async (_date: string, batch: readonly PdcFixture[]): Promise<PdcUpcomingReport> => {
+      order.push("statistics");
+      return report(batch);
+    });
+    await runPdcReportJob(job(), {
+      reader: { getScheduleForDate: async () => snapshot, getReportForFixtures },
+      sender: { sendReport: vi.fn(async (): Promise<void> => {}), sendMessage: vi.fn(async (): Promise<void> => {}) },
+      editStatus,
+      dispatcher: { dispatch: vi.fn(async (): Promise<void> => {}) },
+      logger: noopLogger,
+      chatId: 1,
+    });
+
+    const preview = order.find((entry) => entry.startsWith("edit:")) ?? "";
+    expect(order[1]).toBe("statistics");
+    expect(preview).toContain("Swiss Darts Trophy · 16 named matchups · validated");
+    expect(preview).toContain("Women's World Matchplay · schedule verification unavailable");
+    expect(preview).toContain("Players Championship · 2 opponent slots pending · no history requested");
+    expect(getReportForFixtures).toHaveBeenCalledWith("2026-10-09", input.slice(0, 4), expect.any(AbortSignal), undefined, snapshot);
+  });
+  it("withholds only pairings that depend on a failed player and continues later batches", async () => {
+    const input = fixtures(8);
+    const queued: PdcReportJob[] = [job()];
+    const sent: string[] = [];
+    const dispatch = vi.fn(async (next: PdcReportJob): Promise<void> => { queued.push(next); });
+    const reports = vi.fn(async (_date: string, batch: readonly PdcFixture[]): Promise<PdcUpcomingReport> => {
+      const complete = report(batch);
+      return {
+        ...complete,
+        players: complete.players.map((player) => player.requestedName === "Player 0"
+          ? { ...player, stats: null, failureCode: "unavailable" }
+          : player),
+      };
+    });
+    const dependencies: PdcReportJobDependencies = {
+      reader: { getScheduleForDate: async () => schedule(input), getReportForFixtures: reports },
+      sender: {
+        sendReport: async (_chat: number | string, image: ImageReport): Promise<void> => { sent.push(image.caption); },
+        sendMessage: vi.fn(async (): Promise<void> => {}),
+      },
+      editStatus: vi.fn(async (): Promise<void> => {}),
+      chatId: 1,
+      logger: noopLogger,
+      dispatcher: { dispatch },
+    };
+
+    while (queued.length > 0) {
+      const next = queued.shift();
+      if (next !== undefined) await runPdcReportJob(next, dependencies);
+    }
+
+    expect(reports).toHaveBeenCalledTimes(2);
+    expect(sent).toHaveLength(7);
+    expect(dependencies.editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("7/8 complete cards delivered"), expect.any(AbortSignal));
+    const continuation = dispatch.mock.calls[0]?.[0];
+    expect(continuation).toMatchObject({ cursor: 4, deliveredCount: 3, failedCount: 1 });
+    expect(continuation?.deliveredFixtureIds).toHaveLength(3);
   });
   it("withholds incomplete/empty/foreign report batches and stops instead of sending partial cards", async () => {
     for (const broken of [
@@ -108,11 +246,14 @@ describe("complete statistic chunks", () => {
       { ...report(fixtures(2)), date: "2026-10-10" },
       { ...report(fixtures(2)), players: report(fixtures(2)).players.map((player) => ({ ...player, stats: null, failureCode: "timeout" as const })) },
     ]) {
-      const dependencies: PdcReportJobDependencies = { reader: { getFixturesForDate: async () => fixtures(2), getReportForFixtures: async () => broken }, sender: { sendReport: vi.fn(), sendMessage: vi.fn() }, editStatus: vi.fn(async (): Promise<void> => {}), chatId: 1, logger: noopLogger, dispatcher: { dispatch: vi.fn() } };
+      const dependencies: PdcReportJobDependencies = { reader: { getScheduleForDate: async () => schedule(fixtures(2)), getReportForFixtures: async () => broken }, sender: { sendReport: vi.fn(), sendMessage: vi.fn() }, editStatus: vi.fn(async (): Promise<void> => {}), chatId: 1, logger: noopLogger, dispatcher: { dispatch: vi.fn() } };
       await runPdcReportJob(job(), dependencies);
       expect(dependencies.sender.sendReport).not.toHaveBeenCalled();
       expect(dependencies.dispatcher.dispatch).not.toHaveBeenCalled();
-      expect(dependencies.editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("Incomplete cards were not substituted"), expect.any(AbortSignal));
+      const validIdentity = broken.date === "2026-10-09" && broken.players.length > 0;
+      expect(dependencies.editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining(validIdentity
+        ? "Completed: 0/2 complete cards delivered"
+        : "Incomplete cards were not substituted"), expect.any(AbortSignal));
     }
   });
   it("does not automatically repeat an ambiguous continuation or exceed the global image cap", async () => {
@@ -120,14 +261,14 @@ describe("complete statistic chunks", () => {
     const sendReport = vi.fn(async (_chat: number | string, _image: ImageReport): Promise<void> => {});
     const editStatus = vi.fn(async (): Promise<void> => {});
     const dispatch = vi.fn(async (): Promise<void> => { throw new PdcJobDispatchError("network", true); });
-    await runPdcReportJob({ ...job(), cursor: 24, fixtures: input }, { reader: { getFixturesForDate: vi.fn(), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) }, sender: { sendReport, sendMessage: vi.fn() }, editStatus, dispatcher: { dispatch }, logger: noopLogger, chatId: 1 });
+    await runPdcReportJob({ ...job(), cursor: 24, fixtures: input }, { reader: { getScheduleForDate: async () => schedule(input), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) }, sender: { sendReport, sendMessage: vi.fn() }, editStatus, dispatcher: { dispatch }, logger: noopLogger, chatId: 1 });
     expect(sendReport.mock.calls.filter((call) => { const value: unknown = call[1]; return typeof value === "object" && value !== null && "card" in value; })).toHaveLength(1);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(editStatus).toHaveBeenLastCalledWith(1, expect.stringContaining("may still be running"), expect.any(AbortSignal));
   });
   it("reports a safe continuation stage and HTTP code without exposing error details", async () => {
     const editStatus = vi.fn(async (_messageId: number, _text: string, _signal: AbortSignal): Promise<void> => {});
-    await runPdcReportJob(job(), { reader: { getFixturesForDate: async () => fixtures(8), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) },
+    await runPdcReportJob(job(), { reader: { getScheduleForDate: async () => schedule(fixtures(8)), getReportForFixtures: async (_date: string, batch: readonly PdcFixture[]) => report(batch) },
       sender: { sendReport: vi.fn(async (): Promise<void> => {}), sendMessage: vi.fn() }, editStatus, chatId: 1, logger: noopLogger,
       dispatcher: { dispatch: async (): Promise<void> => { throw new PdcJobDispatchError("private credential detail", false, undefined, 400); } },
     });

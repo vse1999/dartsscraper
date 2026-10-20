@@ -22,6 +22,18 @@ export interface TelegramMessageSender {
   ): Promise<void>;
 }
 
+export interface TelegramMessageEditor {
+  editMessageText(chatId: number | string, messageId: number, text: string, signal?: AbortSignal): Promise<void>;
+}
+
+export interface TelegramMessageEditorOptions {
+  readonly token: string;
+  readonly apiFetch?: typeof fetch;
+  readonly timeoutMs?: number;
+  readonly apiBaseUrl?: string;
+  readonly signal?: AbortSignal;
+}
+
 export interface TelegramSendMessageOptions {
   readonly replyMarkup?: InlineKeyboardMarkup;
   readonly signal?: AbortSignal;
@@ -49,6 +61,53 @@ export class TelegramApiError extends Error {
   }
 }
 
+/** Narrow status-edit adapter for background report workers that do not need a Bot instance. */
+export function createTelegramMessageEditor(options: TelegramMessageEditorOptions): TelegramMessageEditor {
+  const token = options.token.trim();
+  if (token === "") throw new Error("Telegram bot token must not be empty.");
+  const timeoutMs = options.timeoutMs ?? 15_000;
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error("Telegram timeoutMs must be a positive integer.");
+  const apiBaseUrl = (options.apiBaseUrl ?? "https://api.telegram.org").replace(/\/$/u, "");
+  const fetchImpl = options.apiFetch ?? fetch;
+  return {
+    async editMessageText(chatId: number | string, messageId: number, text: string, signal?: AbortSignal): Promise<void> {
+      if (!Number.isSafeInteger(messageId) || messageId <= 0) throw new Error("Telegram message ID must be a positive safe integer.");
+      if (text.trim() === "") throw new Error("Telegram status text must not be empty.");
+      const combined = combineAbortSignals(options.signal, signal);
+      try {
+        if (combined.signal?.aborted === true) throw createAbortError();
+        const timeoutSignal = AbortSignal.timeout(timeoutMs);
+        const requestSignal = combined.signal === undefined
+          ? timeoutSignal
+          : AbortSignal.any([combined.signal, timeoutSignal]);
+        const response = await fetchWithCancellation(fetchImpl, `${apiBaseUrl}/bot${token}/editMessageText`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ chat_id: chatId, message_id: messageId, text }),
+          signal: requestSignal,
+        }, requestSignal);
+        const payload = response.status === 429 || response.ok
+          ? await readResponseJson(response, requestSignal)
+          : undefined;
+        if (!response.ok) {
+          if (response.body !== null) void response.body.cancel().catch((): void => undefined);
+          if (response.status === 429) throw rateLimitOrHttpError(payload, response.status);
+          throw new TelegramApiError(`Telegram editMessageText failed with HTTP ${response.status}.`, response.status);
+        }
+        if (!isSuccessfulTelegramResponse(payload)) {
+          throw new TelegramApiError("Telegram editMessageText returned an unsuccessful response.", response.status);
+        }
+      } catch (error: unknown) {
+        if (error instanceof TelegramApiError || error instanceof TelegramRateLimitError) throw error;
+        if (error instanceof Error && error.name === "AbortError") throw error;
+        throw new Error("Telegram editMessageText request failed.", { cause: error });
+      } finally {
+        combined.cleanup();
+      }
+    },
+  };
+}
+
 export function createTelegramSender(options: TelegramSenderOptions): TelegramMessageSender {
   const token = options.token.trim();
   if (token === "") throw new Error("Telegram bot token must not be empty.");
@@ -59,6 +118,7 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
   const fetchImpl = options.apiFetch ?? fetch;
   const apiBaseUrl = (options.apiBaseUrl ?? "https://api.telegram.org").replace(/\/$/u, "");
   const deliveryPolicy = options.deliveryPolicy ?? createTelegramDeliveryPolicy();
+  const logger = options.logger ?? noopLogger;
 
   const sender: TelegramMessageSender = {
     imagesEnabled: options.imagesEnabled === true,
@@ -73,19 +133,19 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
         try { png = await (options.renderImage ?? renderReportImage)(report.card, combined.signal); }
         catch (error: unknown) {
           if (combined.signal?.aborted) throw createAbortError();
-          (options.logger ?? noopLogger).warn("Report image rendering failed; using text.", { code: "REPORT_IMAGE_RENDER_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" });
+          logger.warn("Report image rendering failed; using text.", { code: "REPORT_IMAGE_RENDER_FAILED", errorType: error instanceof Error ? error.name : "UnknownError" });
           await sendReportText(sender, chatId, report.text, sendOptions); return;
         }
-        (options.logger ?? noopLogger).info("Report image rendered.", { renderMs: Math.round(performance.now() - started), bytes: png.byteLength });
+        logger.info("Report image rendered.", { renderMs: Math.round(performance.now() - started), bytes: png.byteLength });
         try {
           await deliveryPolicy.execute(makeChatKey(chatId), async (signal?: TelegramAbortSignal): Promise<void> => {
-            await sendMessageRequest(fetchImpl, apiBaseUrl, token, timeoutMs, chatId, report.caption, sendOptions, signal, png);
+            await sendMessageRequest(fetchImpl, apiBaseUrl, token, timeoutMs, chatId, report.caption, sendOptions, signal, png, logger);
           }, { ...(combined.signal === undefined ? {} : { signal: combined.signal }), retryAfterFromError: getTelegramRetryAfterSeconds });
-          (options.logger ?? noopLogger).info("Report image delivered.", { bytes: png.byteLength });
+          logger.info("Report image delivered.", { bytes: png.byteLength });
         } catch (error: unknown) {
           // Only a definitive Telegram rejection is safe to replace. Never duplicate an ambiguously delivered photo.
           if (!(error instanceof TelegramApiError) || error.status !== 400 || combined.signal?.aborted) throw error;
-          (options.logger ?? noopLogger).warn("Telegram rejected report photo; using text.", { code: "REPORT_IMAGE_REJECTED" });
+          logger.warn("Telegram rejected report photo; using text.", { code: "REPORT_IMAGE_REJECTED" });
           await sendReportText(sender, chatId, report.text, sendOptions);
         }
       } finally { combined.cleanup(); }
@@ -110,6 +170,8 @@ export function createTelegramSender(options: TelegramSenderOptions): TelegramMe
               text,
               sendOptions,
               policySignal,
+              undefined,
+              logger,
             );
           },
           {
@@ -147,8 +209,10 @@ async function sendMessageRequest(
   sendOptions: TelegramSendMessageOptions | undefined,
   policySignal?: TelegramAbortSignal,
   photo?: Buffer,
+  logger: Logger = noopLogger,
 ): Promise<void> {
   if (policySignal?.aborted === true) throw createAbortError();
+  const operation = photo === undefined ? "sendMessage" : "sendPhoto";
   const controller = new AbortController();
   const onAbort = (): void => controller.abort();
   policySignal?.addEventListener("abort", onAbort, { once: true });
@@ -160,19 +224,57 @@ async function sendMessageRequest(
       form.set("photo", new Blob([new Uint8Array(photo)], { type: "image/png" }), "darts-report.png");
       if (sendOptions?.replyMarkup !== undefined) form.set("reply_markup", JSON.stringify(sendOptions.replyMarkup));
     }
-    const response = await fetchWithCancellation(fetchImpl, `${apiBaseUrl}/bot${token}/${photo === undefined ? "sendMessage" : "sendPhoto"}`, {
-      method: "POST",
-      headers: photo === undefined ? { "content-type": "application/json", accept: "application/json" } : { accept: "application/json" },
-      body: photo === undefined ? JSON.stringify({
-        chat_id: chatId,
-        text,
-        ...(sendOptions?.replyMarkup === undefined ? {} : { reply_markup: sendOptions.replyMarkup }),
-      }) : form,
-      signal: controller.signal,
-    }, controller.signal);
-    const payload = response.status === 429 || response.ok
-      ? await readResponseJson(response, controller.signal)
+    const startedAt = performance.now();
+    let response: Response;
+    try {
+      response = await fetchWithCancellation(fetchImpl, `${apiBaseUrl}/bot${token}/${operation}`, {
+        method: "POST",
+        headers: photo === undefined ? { "content-type": "application/json", accept: "application/json" } : { accept: "application/json" },
+        body: photo === undefined ? JSON.stringify({
+          chat_id: chatId,
+          text,
+          ...(sendOptions?.replyMarkup === undefined ? {} : { reply_markup: sendOptions.replyMarkup }),
+        }) : form,
+        signal: controller.signal,
+      }, controller.signal);
+    } catch (error: unknown) {
+      logger.warn("Telegram delivery ended without an HTTP response; acceptance is unknown.", {
+        event: "telegram_delivery_unknown",
+        operation,
+        outcome: "unknown",
+        errorType: error instanceof Error ? error.name : "UnknownError",
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      });
+      throw error;
+    }
+    let payload: unknown;
+    try {
+      payload = response.status === 429 || response.ok
+        ? await readResponseJson(response, controller.signal)
+        : undefined;
+    } catch (error: unknown) {
+      logger.warn("Telegram response could not be validated; message acceptance is unknown.", {
+        event: "telegram_delivery_unknown",
+        operation,
+        outcome: "unknown",
+        status: response.status,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      });
+      throw error;
+    }
+    const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
+    const retryAfterSeconds = response.status === 429
+      ? getTelegramRetryAfterSecondsFromResponse(payload)
       : undefined;
+    logger.info("Telegram returned an HTTP response.", {
+      event: "telegram_http_response",
+      operation,
+      status: response.status,
+      outcome: response.status === 429 ? "rate_limited" : response.ok ? "http_success" : "http_error",
+      ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+      durationMs,
+    });
     if (!response.ok) {
       // Non-429 error bodies are intentionally not parsed, but they still
       // need to be cancelled so a keep-alive transport can reuse the socket.
@@ -183,8 +285,8 @@ async function sendMessageRequest(
       throw new TelegramApiError(`Telegram sendMessage failed with HTTP ${response.status}.`, response.status);
     }
     if (isSuccessfulTelegramResponse(payload)) return;
-    const retryAfterSeconds = getTelegramRetryAfterSecondsFromResponse(payload);
-    if (retryAfterSeconds !== undefined) throw new TelegramRateLimitError(retryAfterSeconds);
+    const apiRetryAfterSeconds = getTelegramRetryAfterSecondsFromResponse(payload);
+    if (apiRetryAfterSeconds !== undefined) throw new TelegramRateLimitError(apiRetryAfterSeconds);
     throw new TelegramApiError("Telegram sendMessage returned an unsuccessful response.", response.status);
   } catch (error: unknown) {
     if (error instanceof TelegramApiError || error instanceof TelegramRateLimitError) throw error;
