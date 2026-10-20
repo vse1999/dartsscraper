@@ -412,12 +412,13 @@ class EredmenyekOddsReader implements OddsReader, OddsIdentityReader {
         stats.detailRequests += 1;
         const html = await this.fetchIdentityDocument(detailUrl, timeoutSignal);
         const profileUrls = profileUrlsFromDetailUrl(detailUrl, match.eventId);
-        const verifiedProfiles: EredmenyekPlayerProfile[] = [];
-        for (const profileUrl of profileUrls) {
-          stats.profileRequests += 1;
-          const profileHtml = await this.fetchIdentityDocument(profileUrl, timeoutSignal);
-          verifiedProfiles.push(parseEredmenyekPlayerProfile({ html: profileHtml, profileUrl }));
-        }
+        const verifiedProfiles = await Promise.all(
+          profileUrls.map(async (profileUrl) => {
+            stats.profileRequests += 1;
+            const profileHtml = await this.fetchIdentityDocument(profileUrl, timeoutSignal);
+            return parseEredmenyekPlayerProfile({ html: profileHtml, profileUrl });
+          }),
+        );
         const parsed = parseEredmenyekMatchIdentity({ html, detailUrl, match, date, profileUrls, verifiedProfiles });
         evidence.set(match.eventId, parsed);
         stats.verifiedMatches += 1;
