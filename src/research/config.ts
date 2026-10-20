@@ -23,7 +23,15 @@ export function createResearchStorage(environment: NodeJS.ProcessEnv = process.e
 }
 
 export function createResearchReaderFetch(environment: NodeJS.ProcessEnv = process.env): typeof fetch {
-  const transport = createJinaReaderFetch();
+  if (environment.DARTSORAKEL_DIRECT_FETCH === "true") {
+    return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const fetchImpl = fetch;
+      return fetchImpl(input, init);
+    };
+  }
+  const transport = createJinaReaderFetch(
+    environment.JINA_API_KEY === undefined ? {} : { apiKey: environment.JINA_API_KEY },
+  );
   if (environment.RESEARCH_LOCAL_LEDGER_ENABLED !== "true") return transport;
   if (environment.VERCEL === "1" || environment.AWS_LAMBDA_FUNCTION_NAME !== undefined) {
     throw new Error("Local Reader reservations cannot coordinate serverless instances; disable local retention.");

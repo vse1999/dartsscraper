@@ -12,6 +12,7 @@ const JinaReaderResponseSchema = z.object({
 
 export interface JinaReaderFetchOptions {
   readonly fetchImpl?: typeof fetch;
+  readonly apiKey?: string;
 }
 
 /**
@@ -33,9 +34,14 @@ export function createJinaReaderFetch(options: JinaReaderFetchOptions = {}): typ
     }
 
     const readerUrl = `${JINA_READER_ORIGIN}/${target.toString()}`;
+    const headers: Record<string, string> = { accept: "application/json" };
+    const apiKey = options.apiKey?.trim();
+    if (apiKey !== undefined && apiKey !== "") {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
     const response = await fetchImpl(readerUrl, {
       method: "GET",
-      headers: { accept: "application/json" },
+      headers,
       ...(init?.signal === undefined || init.signal === null ? {} : { signal: init.signal }),
     });
     if (!response.ok) {

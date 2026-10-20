@@ -18,7 +18,8 @@ import { ConsoleLogger, type Logger } from "../src/logger.js";
 import { createTelegramSender } from "../src/telegram/sender.js";
 import { reportImagesEnabled } from "../src/telegram/report-image.js";
 import { readBotConfiguration } from "../src/telegram/bot.js";
-import { DartsPlayerStatsService } from "../src/telegram/stats-service.js";
+import { DartsPlayerStatsService, resolveDartsOrakelRequestIntervalMs } from "../src/telegram/stats-service.js";
+import { createDefaultDartsCache } from "../src/cache.js";
 import { runModusReport, type ModusReportResult } from "../src/daily/modus-report.js";
 import type { ModusReportDateExpression } from "../src/telegram/modus-command.js";
 
@@ -140,9 +141,10 @@ async function executeProductionReport(dateExpression?: ModusReportDateExpressio
     timeoutMs: DARTSORAKEL_TIMEOUT_MS,
     maxRetries: AUTOMATED_MAX_RETRIES,
     backoffMs: AUTOMATED_RETRY_BACKOFF_MS,
-    minRequestIntervalMs: AUTOMATED_REQUEST_INTERVAL_MS,
+    minRequestIntervalMs: resolveDartsOrakelRequestIntervalMs(process.env, AUTOMATED_REQUEST_INTERVAL_MS),
     logger,
     fetchImpl: createResearchReaderFetch(),
+    cache: createDefaultDartsCache(logger),
   });
   const playerResolver = new PlayerResolver(client);
   const scraper = new DartsOrakelScraper(client);

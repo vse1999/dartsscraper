@@ -1,4 +1,5 @@
 import { DartsOrakelClient } from "../dartsorakel/client.js";
+import { createDefaultDartsCache } from "../cache.js";
 import { DartsOrakelScraper } from "../dartsorakel/scraper.js";
 import { DartsOrakelRequestError, DartsOrakelStructureChangedError, InsufficientMatchDataError, ModusHistoryUnavailableError, PlayerAmbiguousError, PlayerNotFoundError } from "../errors.js";
 import { ConsoleLogger, noopLogger, type Logger } from "../logger.js";
@@ -185,8 +186,26 @@ export function createDefaultBulkPlayerStatsService(
 let sharedResearchStats: PlayerStatsReader | undefined;
 
 /** One paced canonical history reader for interactive, compare, PDC and value commands per process. */
+export function resolveDartsOrakelRequestIntervalMs(
+  env: NodeJS.ProcessEnv = process.env,
+  fallbackMs = 3_200,
+): number {
+  const configured = env.DARTSORAKEL_REQUEST_INTERVAL_MS?.trim();
+  if (configured !== undefined && configured !== "") {
+    const parsed = Number(configured);
+    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+  }
+  if (env.DARTSORAKEL_DIRECT_FETCH === "true") {
+    return 250;
+  }
+  if (env.JINA_API_KEY !== undefined && env.JINA_API_KEY.trim() !== "") {
+    return 300;
+  }
+  return fallbackMs;
+}
+
 function sharedDartsStats(logger: Logger): PlayerStatsReader {
-  sharedResearchStats ??= createDartsPlayerStatsService(logger, true, 3_200, 2);
+  sharedResearchStats ??= createDartsPlayerStatsService(logger, true, resolveDartsOrakelRequestIntervalMs(process.env, 3_200), 2);
   return sharedResearchStats;
 }
 
@@ -202,6 +221,7 @@ function createDartsPlayerStatsService(
     minRequestIntervalMs,
     logger,
     fetchImpl: createResearchReaderFetch(),
+    cache: createDefaultDartsCache(logger),
   });
   const storage = createResearchStorage();
   const resolver = new PlayerResolver(client);
