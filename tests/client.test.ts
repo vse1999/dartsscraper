@@ -36,6 +36,28 @@ describe("DartsOrakelClient", () => {
     expect(cacheSet).toHaveBeenCalledTimes(1);
   });
 
+  it("records request latency and cache outcome without logging player identifiers or URLs", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const matchResponse = readMatchFixture("damon-heta-matches.json");
+    const fetchImpl = vi.fn<typeof fetch>(async (): Promise<Response> => Response.json(matchResponse));
+    const client = new DartsOrakelClient({
+      baseUrl: "https://example.com",
+      cache: { get: async (): Promise<unknown | null> => null, set: async (): Promise<void> => undefined },
+      fetchImpl,
+      minRequestIntervalMs: 0,
+      logger,
+    });
+
+    await client.getPlayerMatches(13);
+
+    expect(logger.info).toHaveBeenCalledWith("dartsorakel_request_completed", expect.objectContaining({
+      operation: "player-matches", statistic: "average", outcome: "fetched", latencyMs: expect.any(Number),
+    }));
+    const context = logger.info.mock.calls[0]?.[1];
+    expect(context).not.toHaveProperty("cacheKey");
+    expect(context).not.toHaveProperty("url");
+  });
+
   it("retries a transient HTTP failure with deterministic backoff", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response("temporary failure", { status: 503 }))

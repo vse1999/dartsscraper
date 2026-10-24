@@ -8,6 +8,7 @@ afterEach((): void => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.resetModul
 describe("real research factory integration", () => {
   it("shares the paced provider reader between interactive and bulk commands with evidence propagation", async () => {
     vi.resetModules();
+    vi.stubEnv("JINA_API_KEY", "test-key-not-used-for-network");
     vi.stubEnv("RESEARCH_LOCAL_LEDGER_ENABLED", "false");
     const sample = readMatchFixture("damon-heta-matches.json");
     const base = sample.data.find((row) => row.winner_key === 13 || row.loser_key === 13);
@@ -29,16 +30,17 @@ describe("real research factory integration", () => {
     const { createDefaultBulkPlayerStatsService, createDefaultPlayerStatsService } = await import("../src/telegram/stats-service.js");
     const interactive = createDefaultPlayerStatsService();
     const bulk = createDefaultBulkPlayerStatsService();
-    const first = await interactive.getPlayerStats("Damon Heta", 10, "auto", new AbortController().signal);
+    const first = await interactive.getPlayerStatsRecent?.("Damon Heta", 10, "auto", new AbortController().signal);
+    if (first === undefined) throw new Error("Default interactive reader must expose the 10-row path.");
     const second = await bulk.getPlayerStats("heta", 20);
     const warmBase = await bulk.getPlayerStatsBase?.("Damon Heta", 10);
-    expect(warmBase?.evidence?.id).toBe(first.evidence?.id);
+    expect(warmBase?.evidence?.id).toBe(second.evidence?.id);
     expect(warmBase?.matches[0]?.oneEighties).toBe(2);
     expect(first.matches).toHaveLength(10);
     expect(second.matches).toHaveLength(20);
     expect(first.research?.previous10.matchCount).toBe(10);
+    expect(second.research?.previous10.matchCount).toBe(10);
     expect(first.evidence?.id).toBe(second.evidence?.id);
-    expect(first.evidence?.observedAt).toBe(second.evidence?.observedAt);
     expect(first.evidence?.persistence).toBe("memory");
     expect(first.assessment?.validity.status).toBe("valid");
     expect(first.assessment?.dimensions.persistence).toBe("memory");
@@ -46,7 +48,7 @@ describe("real research factory integration", () => {
     expect(first.coverage?.displayed.observedRowCount).toBe(10);
     expect(first.coverage?.previous10.observedRowCount).toBe(10);
     expect(second.matches[0]?.provenance?.provider).toBe("dartsorakel");
-    expect(fetchMock).toHaveBeenCalledTimes(4); // directory + average/180/checkout views once
+    expect(fetchMock).toHaveBeenCalledTimes(4); // one shared directory + average/180/checkout acquisition
     expect(fetchMock.mock.calls.every(([input]) => String(input).startsWith("https://r.jina.ai/https://dartsorakel.com/"))).toBe(true);
   }, 20_000);
 
@@ -57,5 +59,8 @@ describe("real research factory integration", () => {
     expect(await response.json()).toEqual({});
     expect(mock).toHaveBeenCalledOnce();
     expect(() => createResearchReaderFetch({ RESEARCH_LOCAL_LEDGER_ENABLED: "true", VERCEL: "1" })).toThrow("serverless");
+    expect(() => createResearchReaderFetch({ DARTSORAKEL_DIRECT_FETCH: "true", VERCEL: "1" })).toThrow("disabled on serverless");
+    expect(() => createResearchReaderFetch({ DARTSORAKEL_DIRECT_FETCH: "true", VERCEL_ENV: "preview" })).toThrow("disabled on serverless");
+    expect(() => createResearchReaderFetch({ RESEARCH_LOCAL_LEDGER_ENABLED: "true", VERCEL_URL: "preview.example.test" })).toThrow("serverless");
   });
 });

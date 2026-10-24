@@ -73,7 +73,7 @@ This is deliberately a modular-monolith flow: the domain schedule/research code 
 
 1. The owner command receives an acknowledgement. Once the schedule is known, the bot edits that message into the schedule preview; the preview lists named matchups and separately identifies pending or unavailable event coverage.
 2. Only concrete named fixtures generate participant history requests. Pending slots never trigger guessed players or history lookups. Partial but named matches remain eligible even when another event is unresolved.
-3. Statistics stay on the existing DartsOrakel research path and retain average, 180 and checkout evidence. Missing values remain unavailable; they are never replaced with zero.
+3. Statistics stay on the existing DartsOrakel research path and retain average, 180 and checkout evidence. Missing values remain unavailable; they are never replaced with zero. A separate average-only first pass is performed only when a caller supplies a partial-progress consumer; the sequential complete-statistics worker skips that pass to avoid re-fetching every player's average view before enrichment.
 4. A pairing is delivered only when both players have successful history results. A player's isolated failure withholds only dependent pairings, and later pairings continue. A schedule cursor is distinct from successful-card and failed-pairing counts.
 5. Full reports use sequential batches of four and pin the same fixture snapshot into every continuation. A signed job authenticates the payload; it does not make delivery exactly-once.
 

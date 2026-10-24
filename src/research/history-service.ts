@@ -56,6 +56,13 @@ export interface ResearchHistoryOptions {
   readonly ledger: EvidenceLedger;
   readonly persistence?: "memory" | "local";
   readonly freshTtlMs?: number;
+  /** Maximum age at which an in-memory observation may be served while it refreshes. */
+  readonly maxStaleAgeMs?: number;
+  /** Keeps refresh work alive after a serverless handler returns. */
+  readonly scheduleBackgroundTask?: (task: Promise<void>) => void;
+  /** Called when a detached refresh fails; callers should avoid logging sensitive error text. */
+  readonly onBackgroundRefreshError?: (error: unknown) => void;
+  readonly backgroundRefreshFailureCooldownMs?: number;
   readonly maxEntries?: number;
   readonly now?: () => Date;
   readonly onPersistenceError?: () => void;
@@ -70,6 +77,7 @@ interface Flight {
   readonly player: PlayerIdentity;
   readonly controller: AbortController;
   readonly promise: Promise<Entry>;
+  readonly background: boolean;
   subscribers: number;
   settled: boolean;
 }
@@ -86,10 +94,13 @@ export class ResearchHistoryService {
   private readonly options: ResearchHistoryOptions;
   private readonly now: () => Date;
   private readonly freshTtlMs: number;
+  private readonly maxStaleAgeMs: number;
+  private readonly backgroundRefreshFailureCooldownMs: number;
   private readonly maxEntries: number;
   private readonly minimumAcquisitionCount: number;
   private readonly entries = new Map<string, Entry>();
   private readonly flights = new Map<string, Flight>();
+  private readonly backgroundRetryAfter = new Map<string, number>();
   private acquisitions = 0;
   private cacheHits = 0;
   private failures = 0;
@@ -98,6 +109,9 @@ export class ResearchHistoryService {
     this.options = options;
     this.now = options.now ?? ((): Date => new Date());
     this.freshTtlMs = positiveInteger(options.freshTtlMs ?? 60_000, "Research freshness TTL");
+    this.maxStaleAgeMs = positiveInteger(options.maxStaleAgeMs ?? this.freshTtlMs, "Maximum stale research age");
+    if (this.maxStaleAgeMs < this.freshTtlMs) throw new Error("Maximum stale research age must be at least the freshness TTL.");
+    this.backgroundRefreshFailureCooldownMs = positiveInteger(options.backgroundRefreshFailureCooldownMs ?? 30_000, "Background refresh failure cooldown");
     this.maxEntries = positiveInteger(options.maxEntries ?? 500, "Research cache capacity");
     this.minimumAcquisitionCount = options.minimumAcquisitionCount ?? 20;
     validateLimit(this.minimumAcquisitionCount);
@@ -123,7 +137,8 @@ export class ResearchHistoryService {
     const acquiredLimit = Math.max(this.minimumAcquisitionCount, limit);
     const key = `${player.id}:${dateTo}:${acquiredLimit}`;
     const current = this.entries.get(key);
-    if (current !== undefined && current.snapshot.player.name === player.name && current.snapshot.player.slug === player.slug && this.isFresh(current.snapshot)) {
+    const currentMatchesIdentity = current !== undefined && current.snapshot.player.name === player.name && current.snapshot.player.slug === player.slug;
+    if (currentMatchesIdentity && this.isFresh(current.snapshot)) {
       this.cacheHits += 1;
       return this.toRead(current, limit);
     }
@@ -131,33 +146,23 @@ export class ResearchHistoryService {
     if (flight !== undefined && (flight.player.name !== player.name || flight.player.slug !== player.slug)) {
       throw new Error("Research acquisition has a conflicting canonical identity; verify the player directory before retrying.");
     }
+    if (currentMatchesIdentity && this.isWithinStaleAge(current.snapshot)) {
+      this.cacheHits += 1;
+      if (flight === undefined && this.flights.size < this.maxEntries && this.canStartBackgroundRefresh(key)) {
+        this.startFlight(key, player, acquiredLimit, dateTo, true);
+      }
+      return this.toRead(current, limit);
+    }
     if (flight === undefined) {
       if (this.flights.size >= this.maxEntries) throw new Error("Research capacity reached; retry after existing history jobs finish.");
-      const controller = new AbortController();
-      flight = { player, controller, subscribers: 0, settled: false, promise: this.acquire(player, acquiredLimit, dateTo, controller.signal) };
-      const active = flight;
-      this.flights.set(key, active);
-      void active.promise.then((entry: Entry): void => {
-        if (!active.controller.signal.aborted) {
-          this.entries.delete(key);
-          this.entries.set(key, entry);
-          while (this.entries.size > this.maxEntries) {
-            const oldest = this.entries.keys().next().value;
-            if (oldest === undefined) break;
-            this.entries.delete(oldest);
-          }
-        }
-      }, (): void => { this.failures += 1; }).finally((): void => {
-        active.settled = true;
-        if (this.flights.get(key) === active) this.flights.delete(key);
-      });
+      flight = this.startFlight(key, player, acquiredLimit, dateTo, false);
     }
     flight.subscribers += 1;
     try {
       return this.toRead(await waitWithSignal(flight.promise, signal), limit);
     } finally {
       flight.subscribers -= 1;
-      if (flight.subscribers === 0 && !flight.settled) {
+      if (flight.subscribers === 0 && !flight.settled && !flight.background) {
         flight.controller.abort(signal?.aborted === true ? abortError(signal) : new Error("No active history consumers remain."));
         if (this.flights.get(key) === flight) this.flights.delete(key);
       }
@@ -215,6 +220,84 @@ export class ResearchHistoryService {
   private isFresh(snapshot: EvidenceSnapshot): boolean {
     const age = this.clock().getTime() - Date.parse(snapshot.observedAt);
     return age >= 0 && age <= this.freshTtlMs;
+  }
+
+  private isWithinStaleAge(snapshot: EvidenceSnapshot): boolean {
+    const age = this.clock().getTime() - Date.parse(snapshot.observedAt);
+    return age > this.freshTtlMs && age <= this.maxStaleAgeMs;
+  }
+
+  private startFlight(key: string, player: PlayerIdentity, limit: number, dateTo: string, background: boolean): Flight {
+    const controller = new AbortController();
+    const active: Flight = {
+      player,
+      controller,
+      background,
+      subscribers: 0,
+      settled: false,
+      promise: this.acquire(player, limit, dateTo, controller.signal),
+    };
+    this.flights.set(key, active);
+    const completion = active.promise.then((entry: Entry): void => {
+      if (!active.controller.signal.aborted) {
+        this.entries.delete(key);
+        this.entries.set(key, entry);
+        while (this.entries.size > this.maxEntries) {
+          const oldest = this.entries.keys().next().value;
+          if (oldest === undefined) break;
+          this.entries.delete(oldest);
+        }
+        this.backgroundRetryAfter.delete(key);
+      }
+    }, (error: unknown): void => {
+      this.failures += 1;
+      if (background) {
+        this.recordBackgroundRefreshFailure(key);
+        this.notifyBackgroundRefreshError(error);
+      }
+    }).finally((): void => {
+      active.settled = true;
+      if (this.flights.get(key) === active) this.flights.delete(key);
+    });
+    if (background) {
+      const schedule = this.options.scheduleBackgroundTask;
+      if (schedule === undefined) void completion;
+      else {
+        try {
+          schedule(completion);
+        } catch (error: unknown) {
+          this.notifyBackgroundRefreshError(error);
+          void completion;
+        }
+      }
+    }
+    return active;
+  }
+
+  private canStartBackgroundRefresh(key: string): boolean {
+    const retryAfter = this.backgroundRetryAfter.get(key);
+    if (retryAfter === undefined) return true;
+    if (retryAfter > this.clock().getTime()) return false;
+    this.backgroundRetryAfter.delete(key);
+    return true;
+  }
+
+  private recordBackgroundRefreshFailure(key: string): void {
+    this.backgroundRetryAfter.delete(key);
+    this.backgroundRetryAfter.set(key, this.clock().getTime() + this.backgroundRefreshFailureCooldownMs);
+    while (this.backgroundRetryAfter.size > this.maxEntries) {
+      const oldest = this.backgroundRetryAfter.keys().next().value;
+      if (oldest === undefined) break;
+      this.backgroundRetryAfter.delete(oldest);
+    }
+  }
+
+  private notifyBackgroundRefreshError(error: unknown): void {
+    try {
+      this.options.onBackgroundRefreshError?.(error);
+    } catch {
+      // A logging hook must not turn an already-handled refresh failure into an unhandled rejection.
+    }
   }
 
   private toRead(entry: Entry, limit: number): ResearchHistoryRead {

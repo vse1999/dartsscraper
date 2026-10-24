@@ -5,6 +5,7 @@ import type { Update } from "grammy/types";
 import { waitUntil } from "@vercel/functions";
 
 import { ConsoleLogger, type Logger } from "../src/logger.js";
+import { readBoundedRequestBody } from "../src/services/bounded-request-body.js";
 import { createConfiguredBot } from "../src/telegram/bot.js";
 
 const TELEGRAM_SECRET_HEADER = "x-telegram-bot-api-secret-token";
@@ -43,19 +44,9 @@ export async function handleTelegramWebhook(
   if (!hasValidSecret(actualSecret, dependencies.expectedSecret)) return notFound();
 
   try {
-    const declaredLength = request.headers.get("content-length");
-    if (declaredLength !== null) {
-      const declaredBytes = Number(declaredLength);
-      if (!Number.isSafeInteger(declaredBytes) || declaredBytes < 0 || declaredBytes > MAX_UPDATE_BYTES) {
-        return invalidUpdate();
-      }
-    }
-
-    const rawBody = await request.text();
-    if (new TextEncoder().encode(rawBody).byteLength > MAX_UPDATE_BYTES) {
-      return invalidUpdate();
-    }
-    const parsed: unknown = JSON.parse(rawBody);
+    const body = await readBoundedRequestBody(request, MAX_UPDATE_BYTES);
+    if (body.kind !== "ok") return invalidUpdate();
+    const parsed: unknown = JSON.parse(body.text);
     const update = parseTelegramUpdate(parsed);
     try {
       await dependencies.processUpdate(update);

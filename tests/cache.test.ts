@@ -1,5 +1,4 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -13,7 +12,9 @@ afterEach(async () => {
 
 describe("FileCache", () => {
   it("persists a valid entry without leaving a staging file behind", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "darts-cache-"));
+    const temporaryRoot = path.join(process.cwd(), ".tmp", "test-cache");
+    await mkdir(temporaryRoot, { recursive: true });
+    const directory = await mkdtemp(path.join(temporaryRoot, "darts-cache-"));
     temporaryDirectories.push(directory);
     const cache = new FileCache({ directory, now: () => 1_000 });
 
@@ -47,5 +48,7 @@ describe("createDefaultDartsCache", () => {
     expect(local).toBeInstanceOf(FileCache);
     const serverless = createDefaultDartsCache(undefined, { RESEARCH_LOCAL_LEDGER_ENABLED: "true", VERCEL: "1" });
     expect(serverless).toBeInstanceOf(MemoryCache);
+    const serverlessWithoutMarker = createDefaultDartsCache(undefined, { RESEARCH_LOCAL_LEDGER_ENABLED: "true", VERCEL_URL: "preview.example.test" });
+    expect(serverlessWithoutMarker).toBeInstanceOf(MemoryCache);
   });
 });

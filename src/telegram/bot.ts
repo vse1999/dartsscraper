@@ -48,6 +48,7 @@ import {
   getTelegramRetryAfterSeconds,
   type TelegramDeliveryPolicy,
 } from "./delivery-policy.js";
+import { isVercelRuntime } from "../services/runtime-environment.js";
 
 const STATUS_MESSAGE = "Looking up completed matches…";
 const BATCH_TIMEOUT_MS = 150_000;
@@ -55,13 +56,16 @@ export const TELEGRAM_BOT_RELEASE = "image-reports-v1";
 
 export interface BotEnvironment {
   readonly PDC_REPORT_URL?: string;
+  readonly VERCEL?: string;
+  readonly VERCEL_ENV?: string;
+  readonly VERCEL_URL?: string;
+  readonly VERCEL_PROJECT_PRODUCTION_URL?: string;
   readonly WEBHOOK_SECRET?: string;
   readonly REPORT_IMAGES_ENABLED?: string;
   readonly BOT_TOKEN?: string;
   readonly ALLOWED_USER_ID?: string;
   readonly CRON_SECRET?: string;
   readonly MODUS_REPORT_URL?: string;
-  readonly VERCEL_PROJECT_PRODUCTION_URL?: string;
   readonly ODDS_FETCH_ENABLED?: string;
   readonly ODDS_BROWSER_EXECUTABLE_PATH?: string;
 }
@@ -379,8 +383,8 @@ export function createConfiguredBot(
   scheduleBackgroundTask?: BackgroundTaskScheduler,
 ): Bot<Context> {
   const configuration = readBotConfiguration(environment);
-  const modusReportTrigger = createConfiguredModusReportTrigger(environment);
-  const statsService = createDefaultPlayerStatsService(logger);
+  const modusReportTrigger = createConfiguredModusReportTrigger(environment, logger);
+  const statsService = createDefaultPlayerStatsService(logger, scheduleBackgroundTask);
   const bulkPlayerStats = createDefaultBulkPlayerStatsService(logger);
   const oddsReader = createConfiguredOddsReader(environment, logger);
   const valueReader = oddsReader === undefined
@@ -422,11 +426,18 @@ function makeTelegramChatKey(chatId: number | string): string {
   return `text:${chatId}`;
 }
 
-function createConfiguredModusReportTrigger(environment: BotEnvironment): ModusReportTrigger | undefined {
+function createConfiguredModusReportTrigger(environment: BotEnvironment, logger: Logger): ModusReportTrigger | undefined {
   const cronSecret = environment.CRON_SECRET?.trim();
   const endpointUrl = resolveModusReportEndpointUrl(environment);
-  if (cronSecret === undefined || cronSecret === "" || endpointUrl === undefined || endpointUrl === "") return undefined;
-  return createHttpModusReportTrigger({ endpointUrl, cronSecret });
+  if (cronSecret === undefined || !/^[A-Za-z0-9_-]{32,256}$/u.test(cronSecret) || endpointUrl === undefined || endpointUrl === "") return undefined;
+  try {
+    return createHttpModusReportTrigger({ endpointUrl, cronSecret });
+  } catch (error: unknown) {
+    logger.warn("MODUS report command disabled because its endpoint configuration is invalid.", {
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    });
+    return undefined;
+  }
 }
 
 export function createConfiguredPdcJobDispatcher(environment: BotEnvironment, logger: Logger): PdcReportJobDispatcher | undefined {
@@ -440,10 +451,7 @@ export function createConfiguredPdcJobDispatcher(environment: BotEnvironment, lo
 }
 
 export function resolvePdcReportEndpointUrl(environment: BotEnvironment): string | undefined {
-  const configured = environment.PDC_REPORT_URL?.trim();
-  if (configured !== undefined && configured !== "") return configured;
-  const host = environment.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  return host === undefined || host === "" ? undefined : `https://${host}/api/pdc-report`;
+  return resolveDeploymentEndpointUrl(environment, environment.PDC_REPORT_URL, "/api/pdc-report");
 }
 
 function createConfiguredOddsReader(environment: BotEnvironment, logger: Logger): OddsReader | undefined {
@@ -472,12 +480,48 @@ function createConfiguredOddsReader(environment: BotEnvironment, logger: Logger)
 }
 
 export function resolveModusReportEndpointUrl(environment: BotEnvironment): string | undefined {
-  const configuredUrl = environment.MODUS_REPORT_URL?.trim();
-  if (configuredUrl !== undefined && configuredUrl !== "") return configuredUrl;
-  const productionHost = environment.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  return productionHost === undefined || productionHost === ""
-    ? undefined
-    : `https://${productionHost}/api/daily-modus-report`;
+  return resolveDeploymentEndpointUrl(environment, environment.MODUS_REPORT_URL, "/api/daily-modus-report");
+}
+
+function resolveDeploymentEndpointUrl(
+  environment: BotEnvironment,
+  configuredValue: string | undefined,
+  pathname: "/api/daily-modus-report" | "/api/pdc-report",
+): string | undefined {
+  const configured = configuredValue?.trim();
+  if (!isVercelRuntime(environment)) return configured === undefined || configured === "" ? undefined : configured;
+
+  const deploymentEnvironment = environment.VERCEL_ENV?.trim();
+  if (deploymentEnvironment !== "production" && deploymentEnvironment !== "preview") return undefined;
+
+  // VERCEL_PROJECT_PRODUCTION_URL is available in preview deployments too.
+  // Use the deployment-specific host there so a preview cannot trigger production work.
+  const rawHost = deploymentEnvironment === "preview"
+    ? environment.VERCEL_URL?.trim()
+    : environment.VERCEL_PROJECT_PRODUCTION_URL?.trim() || environment.VERCEL_URL?.trim();
+  if (rawHost === undefined || rawHost === "" || /[/?#@\s]/u.test(rawHost)) return undefined;
+
+  let expectedHost: string;
+  try {
+    const parsedHost = new URL(`https://${rawHost}`);
+    if (parsedHost.protocol !== "https:" || parsedHost.username !== "" || parsedHost.password !== ""
+      || parsedHost.pathname !== "/" || parsedHost.search !== "" || parsedHost.hash !== "") return undefined;
+    expectedHost = parsedHost.host;
+  } catch {
+    return undefined;
+  }
+
+  const expectedUrl = `https://${expectedHost}${pathname}`;
+  if (configured === undefined || configured === "") return expectedUrl;
+  try {
+    const configuredUrl = new URL(configured);
+    if (configuredUrl.protocol !== "https:" || configuredUrl.host.toLowerCase() !== expectedHost.toLowerCase()
+      || configuredUrl.username !== "" || configuredUrl.password !== "" || configuredUrl.pathname !== pathname
+      || configuredUrl.search !== "" || configuredUrl.hash !== "") return undefined;
+    return configuredUrl.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 export async function handleStatsText(
@@ -625,7 +669,9 @@ async function handleStatsQuery(
   let provider: string | undefined;
   let imageStats: PlayerStatsResult | undefined;
   try {
-    const result = await statsService.getPlayerStats(query.playerName, query.matchCount, query.source);
+    const result = statsService.getPlayerStatsRecent === undefined
+      ? await statsService.getPlayerStats(query.playerName, query.matchCount, query.source)
+      : await statsService.getPlayerStatsRecent(query.playerName, query.matchCount, query.source);
     imageStats = result;
     finalMessage = formatPlayerStats(result);
     returnedCount = result.matches.length;

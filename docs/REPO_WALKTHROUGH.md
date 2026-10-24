@@ -307,8 +307,10 @@ The local factory configures `.cache/dartsorakel`, `.cache/modus`, and `.cache/m
 | `ALLOWED_USER_ID` | Required for Telegram/report | Positive safe integer; both authorization identity and report chat destination. |
 | `WEBHOOK_SECRET` | Required by webhook | Must match Telegram webhook `secret_token`. |
 | `CRON_SECRET` | Required by report; needed to enable `/modus` | Bearer secret for `/api/daily-modus-report`. |
-| `MODUS_REPORT_URL` | Optional | Explicit report endpoint used by `/modus`. |
-| `VERCEL_PROJECT_PRODUCTION_URL` | Platform-provided optional fallback | Builds stable production report URL; per-deployment URL is intentionally not used. |
+| `MODUS_REPORT_URL` | Optional | Explicit report endpoint used by `/modus`; on Vercel it must match the environment-specific host and `/api/daily-modus-report` path. |
+| `PDC_REPORT_URL` | Optional | Complete PDC continuation endpoint outside Vercel; on Vercel it must match the environment-specific host and `/api/pdc-report` path. |
+| `VERCEL_ENV`, `VERCEL_URL` | Platform-provided; expose Vercel system variables | Preview commands target the deployment-specific URL, never the production host. Preview self-requests may require deployment protection to allow server-to-server access. These markers also select serverless-safe cache/transport behavior. |
+| `VERCEL_PROJECT_PRODUCTION_URL` | Platform-provided optional fallback | Used only for production internal report URLs; previews use `VERCEL_URL`. |
 | `OLLAMA_MODEL` | `gemma4:12b` | Browser chat and terminal agent model. |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Browser chat/health. **Terminal `npm run agent` currently does not forward this env override.** |
 | `OLLAMA_KEEP_ALIVE` | `30m` | Browser chat. Accepts `-1`, `0`, or numeric `ms/s/m/h`. **Terminal agent does not forward this env override.** |

@@ -4,10 +4,18 @@ import type { Logger } from "../src/logger.js";
 import type { ModusPlayerHistoryResult } from "../src/modus/player-history-service.js";
 import type { MatchResult } from "../src/schemas/match.js";
 import type { ResearchEvidenceReference } from "../src/research/history-service.js";
-import { DartsPlayerStatsService, SourceRoutedPlayerStatsService, type PlayerStatsReader } from "../src/telegram/stats-service.js";
+import { DartsPlayerStatsService, resolveDartsOrakelRequestIntervalMs, SourceRoutedPlayerStatsService, type PlayerStatsReader } from "../src/telegram/stats-service.js";
 
-function testLogger(): Logger & { readonly info: ReturnType<typeof vi.fn>; readonly warn: ReturnType<typeof vi.fn> } {
-  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+function testLogger(): Logger & {
+  readonly info: ReturnType<typeof vi.fn<Logger["info"]>>;
+  readonly warn: ReturnType<typeof vi.fn<Logger["warn"]>>;
+} {
+  return {
+    debug: vi.fn<Logger["debug"]>(),
+    info: vi.fn<Logger["info"]>(),
+    warn: vi.fn<Logger["warn"]>(),
+    error: vi.fn<Logger["error"]>(),
+  };
 }
 
 function matches(): MatchResult {
@@ -122,5 +130,17 @@ describe("player statistics outcome observability", (): void => {
     expect(findPlayerHistory).toHaveBeenCalledWith("Damon Heta", 10, { forceLiveLookup: true, signal: controller.signal });
     expect(darts.getPlayerStats).not.toHaveBeenCalled();
     expect(result.provider).toBe("modus-official");
+  });
+});
+
+describe("DartsOrakel request pacing policy", (): void => {
+  it("uses safe anonymous pacing unless a faster transport mode is explicitly configured", (): void => {
+    expect(resolveDartsOrakelRequestIntervalMs({}, 3_200)).toBe(3_200);
+    expect(resolveDartsOrakelRequestIntervalMs({ JINA_API_KEY: "present-but-not-logged" })).toBe(300);
+    expect(resolveDartsOrakelRequestIntervalMs({ DARTSORAKEL_DIRECT_FETCH: "true" })).toBe(250);
+    expect(resolveDartsOrakelRequestIntervalMs({ JINA_API_KEY: "present", DARTSORAKEL_REQUEST_INTERVAL_MS: "0" })).toBe(300);
+    expect(resolveDartsOrakelRequestIntervalMs({ DARTSORAKEL_REQUEST_INTERVAL_MS: "250" }, 1_000)).toBe(3_200);
+    expect(resolveDartsOrakelRequestIntervalMs({ DARTSORAKEL_DIRECT_FETCH: "true", DARTSORAKEL_REQUEST_INTERVAL_MS: "0" })).toBe(250);
+    expect(resolveDartsOrakelRequestIntervalMs({ DARTSORAKEL_REQUEST_INTERVAL_MS: "invalid" }, 3_200)).toBe(3_200);
   });
 });

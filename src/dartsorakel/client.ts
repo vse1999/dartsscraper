@@ -58,6 +58,11 @@ interface ActiveFetchAttempt {
   readonly cleanup: () => void;
 }
 
+interface RequestLogContext {
+  readonly operation: "player-directory" | "player-matches";
+  readonly statistic?: DartsOrakelMatchStatistic;
+}
+
 export class DartsOrakelClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -128,6 +133,7 @@ export class DartsOrakelClient {
       "player-stats",
       PlayerStatsResponseSchema,
       this.playerCacheTtlMs,
+      { operation: "player-directory" },
       signal,
       forceRefresh,
     );
@@ -175,7 +181,9 @@ export class DartsOrakelClient {
       ].join("-"),
       DartsOrakelMatchesResponseSchema,
       this.matchCacheTtlMs,
+      { operation: "player-matches", statistic },
       signal,
+      false,
     );
   }
 
@@ -184,33 +192,46 @@ export class DartsOrakelClient {
     cacheKey: string,
     schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: readonly { path: readonly PropertyKey[]; message: string }[] } } },
     ttlMs: number,
+    logContext: RequestLogContext,
     signal?: AbortSignal,
     forceRefresh: boolean = false,
   ): Promise<T> {
-    throwIfAborted(signal);
-    const cached = forceRefresh ? null : await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
-    if (cached !== null && cached !== undefined) {
-      const cachedResult = schema.safeParse(cached);
-      if (cachedResult.success) {
-        this.logger.debug("Using cached DartsOrakel response.", { cacheKey });
-        throwIfAborted(signal);
-        return cachedResult.data;
+    const startedAt = performance.now();
+    let outcome: "cache_hit" | "fetched" | "failed" = "failed";
+    try {
+      throwIfAborted(signal);
+      const cached = forceRefresh ? null : await waitWithSignal(this.cache?.get(cacheKey) ?? Promise.resolve(null), signal);
+      if (cached !== null && cached !== undefined) {
+        const cachedResult = schema.safeParse(cached);
+        if (cachedResult.success) {
+          outcome = "cache_hit";
+          this.logger.debug("Using cached DartsOrakel response.", { operation: logContext.operation });
+          throwIfAborted(signal);
+          return cachedResult.data;
+        }
+        this.logger.warn("Ignoring cached response that no longer matches the schema.", { operation: logContext.operation });
       }
-      this.logger.warn("Ignoring cached response that no longer matches the schema.", { cacheKey });
-    }
 
-    const payload = await this.requestJson(url, signal);
-    const parsed = schema.safeParse(payload);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0];
-      throw new DartsOrakelStructureChangedError(
-        `DartsOrakel response at ${url} failed schema validation${issue === undefined ? "." : ` at ${this.formatPath(issue.path)}: ${issue.message}.`}`,
-      );
+      const payload = await this.requestJson(url, signal);
+      const parsed = schema.safeParse(payload);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        throw new DartsOrakelStructureChangedError(
+          `DartsOrakel response at ${url} failed schema validation${issue === undefined ? "." : ` at ${this.formatPath(issue.path)}: ${issue.message}.`}`,
+        );
+      }
+      throwIfAborted(signal);
+      await waitWithSignal(this.cache?.set(cacheKey, parsed.data, ttlMs) ?? Promise.resolve(), signal);
+      throwIfAborted(signal);
+      outcome = "fetched";
+      return parsed.data;
+    } finally {
+      this.logger.info("dartsorakel_request_completed", {
+        ...logContext,
+        outcome,
+        latencyMs: Math.round(performance.now() - startedAt),
+      });
     }
-    throwIfAborted(signal);
-    await waitWithSignal(this.cache?.set(cacheKey, parsed.data, ttlMs) ?? Promise.resolve(), signal);
-    throwIfAborted(signal);
-    return parsed.data;
   }
 
   private async requestJson(url: string, signal?: AbortSignal): Promise<unknown> {

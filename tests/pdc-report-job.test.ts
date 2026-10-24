@@ -8,7 +8,7 @@ import { createPdcJobDispatcher, PdcJobDispatchError } from "../src/telegram/pdc
 import type { PdcFixture, PdcScheduleSnapshot } from "../src/pdc/schemas.js";
 import type { PdcUpcomingReport, PdcPlayerStats } from "../src/pdc/service.js";
 import type { ImageReport } from "../src/telegram/report-image.js";
-import { createBot, createConfiguredPdcJobDispatcher } from "../src/telegram/bot.js";
+import { createBot, createConfiguredPdcJobDispatcher, resolvePdcReportEndpointUrl, type BotEnvironment } from "../src/telegram/bot.js";
 import type { Update } from "grammy/types";
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
@@ -291,9 +291,32 @@ describe("PDC job dispatch safety", () => {
 
 describe("complete PDC bot wiring and native bundle", () => {
   it("does not break other bot commands when continuation credentials are missing or invalid", () => {
-    expect(createConfiguredPdcJobDispatcher({ VERCEL_PROJECT_PRODUCTION_URL: "example.test" }, noopLogger)).toBeUndefined();
+    expect(createConfiguredPdcJobDispatcher({ VERCEL: "1", VERCEL_ENV: "production", VERCEL_PROJECT_PRODUCTION_URL: "example.test" }, noopLogger)).toBeUndefined();
     expect(createConfiguredPdcJobDispatcher({ PDC_REPORT_URL: "http://evil.test/api/pdc-report", CRON_SECRET: cron, WEBHOOK_SECRET: secret }, noopLogger)).toBeUndefined();
-    expect(createConfiguredPdcJobDispatcher({ VERCEL_PROJECT_PRODUCTION_URL: "example.test", CRON_SECRET: cron, WEBHOOK_SECRET: secret }, noopLogger)).toBeDefined();
+    expect(createConfiguredPdcJobDispatcher({ VERCEL: "1", VERCEL_ENV: "production", VERCEL_PROJECT_PRODUCTION_URL: "example.test", CRON_SECRET: cron, WEBHOOK_SECRET: secret }, noopLogger)).toBeDefined();
+  });
+  it("keeps preview PDC continuations on the preview deployment, never the production host", () => {
+    const preview: BotEnvironment = {
+      VERCEL: "1",
+      VERCEL_ENV: "preview",
+      VERCEL_URL: "preview-abc.example.test",
+      VERCEL_PROJECT_PRODUCTION_URL: "production.example.test",
+    };
+    expect(resolvePdcReportEndpointUrl(preview)).toBe("https://preview-abc.example.test/api/pdc-report");
+    expect(resolvePdcReportEndpointUrl({
+      VERCEL_ENV: "preview",
+      VERCEL_URL: "preview-abc.example.test",
+      VERCEL_PROJECT_PRODUCTION_URL: "production.example.test",
+    })).toBe("https://preview-abc.example.test/api/pdc-report");
+    expect(resolvePdcReportEndpointUrl({
+      ...preview,
+      PDC_REPORT_URL: "https://production.example.test/api/pdc-report",
+    })).toBeUndefined();
+    expect(resolvePdcReportEndpointUrl({
+      ...preview,
+      PDC_REPORT_URL: "https://preview-abc.example.test/api/pdc-report",
+    })).toBe("https://preview-abc.example.test/api/pdc-report");
+    expect(resolvePdcReportEndpointUrl({ VERCEL: "1", VERCEL_ENV: "development", VERCEL_URL: "preview.example.test" })).toBeUndefined();
   });
   it("routes the owner's PDC command to signed continuation jobs, not the old partial reader", async () => {
     const dispatch = vi.fn(async (): Promise<void> => {});

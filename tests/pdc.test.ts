@@ -8,7 +8,7 @@ import {
 } from "../src/pdc/source.js";
 import { PdpaPdcFixtureSource, parsePdpaEventFixtures, parsePdpaEventReferences } from "../src/pdc/pdpa-fixture-source.js";
 import { parseDartsNerdPdcFixtures, reconcileFixtures } from "../src/pdc/darts-nerd-fixture-source.js";
-import { PdcTournamentService } from "../src/pdc/service.js";
+import { PdcTournamentService, type PdcPlayerStats } from "../src/pdc/service.js";
 import {
   PdcTournamentEventSchema,
   type PdcFixture,
@@ -493,6 +493,63 @@ describe("PDC tournament service", () => {
       { name: "Rob Cross", count: 10, source: "dartsorakel" },
       { name: "Ryan Searle", count: 10, source: "dartsorakel" },
     ]);
+  });
+
+  it("skips the average-only pass when no consumer requests partial research", async () => {
+    const fixture: PdcFixture = {
+      id: "fixture-no-partial", tournamentName: "World Series Finals 2026", date: "2026-09-17",
+      startTime: null, session: null, round: "Round One", playerOne: "Rob Cross", playerTwo: "Ryan Searle",
+      sourceUrl: "https://pdpa.co.uk/event/world-series/",
+    };
+    const makeStats = (playerName: string): PdcPlayerStats => ({
+      playerName, requestedCount: 10, matches: [], meanAverage: null, availableAverageCount: 0,
+      sourceUrl: "https://dartsorakel.com/player/details/1/player", sourceLabel: "DartsOrakel",
+      provider: "dartsorakel", evidenceUrls: [],
+    });
+    const getPlayerStatsBase = vi.fn(async (playerName: string): Promise<PdcPlayerStats> => makeStats(playerName));
+    const getPlayerStats = vi.fn(async (playerName: string): Promise<PdcPlayerStats> => makeStats(playerName));
+    const service = new PdcTournamentService({
+      source: {
+        getCalendar: async (): Promise<readonly PdcTournamentEvent[]> => [],
+        getResults: async (): Promise<PdcTournamentResult> => { throw new Error("not used"); },
+      },
+      playerStats: { getPlayerStatsBase, getPlayerStats },
+    });
+
+    const report = await service.getReportForFixtures(fixture.date, [fixture]);
+
+    expect(report.players.map((player) => player.requestedName)).toEqual(["Rob Cross", "Ryan Searle"]);
+    expect(getPlayerStatsBase).not.toHaveBeenCalled();
+    expect(getPlayerStats).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the average-only pass when a caller consumes partial progress", async () => {
+    const fixture: PdcFixture = {
+      id: "fixture-partial", tournamentName: "World Series Finals 2026", date: "2026-09-17",
+      startTime: null, session: null, round: "Round One", playerOne: "Rob Cross", playerTwo: "Ryan Searle",
+      sourceUrl: "https://pdpa.co.uk/event/world-series/",
+    };
+    const makeStats = (playerName: string): PdcPlayerStats => ({
+      playerName, requestedCount: 10, matches: [], meanAverage: null, availableAverageCount: 0,
+      sourceUrl: "https://dartsorakel.com/player/details/1/player", sourceLabel: "DartsOrakel",
+      provider: "dartsorakel", evidenceUrls: [],
+    });
+    const getPlayerStatsBase = vi.fn(async (playerName: string): Promise<PdcPlayerStats> => makeStats(playerName));
+    const getPlayerStats = vi.fn(async (playerName: string): Promise<PdcPlayerStats> => makeStats(playerName));
+    const service = new PdcTournamentService({
+      source: {
+        getCalendar: async (): Promise<readonly PdcTournamentEvent[]> => [],
+        getResults: async (): Promise<PdcTournamentResult> => { throw new Error("not used"); },
+      },
+      playerStats: { getPlayerStatsBase, getPlayerStats },
+    });
+    const onPartial = vi.fn();
+
+    await service.getReportForFixtures(fixture.date, [fixture], undefined, onPartial);
+
+    expect(getPlayerStatsBase).toHaveBeenCalledTimes(2);
+    expect(getPlayerStats).toHaveBeenCalledTimes(2);
+    expect(onPartial).toHaveBeenCalled();
   });
 
   it("coalesces same-date schedule reads and isolates one caller's cancellation", async () => {

@@ -6,7 +6,7 @@ const ToolCallSchema = z.object({ function: z.object({ name: z.string().min(1), 
 const ChatResponseSchema = z.object({ message: z.object({ role: z.literal("assistant"), content: z.string().default(""), tool_calls: z.array(ToolCallSchema).optional() }) });
 const JsonProtocolResponseSchema = z.object({
   action: z.enum(["tools", "final"]),
-  calls: z.array(z.object({ name: z.string().min(1), arguments: z.record(z.unknown()) })).optional(),
+  calls: z.array(z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()) })).optional(),
   answer: z.string().optional(),
 }).superRefine((value, context) => {
   if (value.action === "tools" && (value.calls === undefined || value.calls.length === 0)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Tool action requires at least one call." });

@@ -43,6 +43,8 @@ export interface PlayerStatsResult {
 export interface PlayerStatsReader {
   /** Optional light first pass for large slates; no 180/checkout requests. */
   getPlayerStatsBase?(playerName: string, matchCount: number, signal?: AbortSignal): Promise<PlayerStatsResult>;
+  /** Optional 10-row-focused path for a single-player history request. */
+  getPlayerStatsRecent?(playerName: string, matchCount: number, source?: PlayerStatsSource, signal?: AbortSignal): Promise<PlayerStatsResult>;
   getPlayerStats(
     playerName: string,
     matchCount: number,
@@ -106,12 +108,26 @@ export class DartsPlayerStatsService implements PlayerStatsReader {
 export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
   private readonly modusHistory: ModusPlayerHistoryReader;
   private readonly dartsStats: PlayerStatsReader;
+  private readonly recentDartsStats: PlayerStatsReader | undefined;
   private readonly logger: Logger;
 
-  public constructor(modusHistory: ModusPlayerHistoryReader, dartsStats: PlayerStatsReader, logger: Logger = noopLogger) {
+  public constructor(modusHistory: ModusPlayerHistoryReader, dartsStats: PlayerStatsReader, logger: Logger = noopLogger, recentDartsStats?: PlayerStatsReader) {
     this.modusHistory = modusHistory;
     this.dartsStats = dartsStats;
     this.logger = logger;
+    this.recentDartsStats = recentDartsStats;
+  }
+
+  public async getPlayerStatsRecent(
+    playerName: string,
+    matchCount: number,
+    source: PlayerStatsSource = "auto",
+    signal?: AbortSignal,
+  ): Promise<PlayerStatsResult> {
+    if (source === "modus" || this.recentDartsStats === undefined) {
+      return this.getPlayerStats(playerName, matchCount, source, signal);
+    }
+    return this.recentDartsStats.getPlayerStats(playerName, matchCount, source, signal);
   }
 
   public async getPlayerStats(
@@ -158,15 +174,16 @@ export class SourceRoutedPlayerStatsService implements PlayerStatsReader {
 
 export function createDefaultPlayerStatsService(
   logger?: Logger,
+  scheduleBackgroundTask?: (task: Promise<void>) => void,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  const dartsStats = sharedDartsStats(serviceLogger);
+  const dartsStats = sharedDartsStats(serviceLogger, scheduleBackgroundTask);
   const modusHistory = new ModusPlayerHistoryService({
     source: new OfficialModusHistorySource({ logger: serviceLogger }),
     index: bundledModusIndex,
     logger: serviceLogger,
   });
-  return new SourceRoutedPlayerStatsService(modusHistory, dartsStats, serviceLogger);
+  return new SourceRoutedPlayerStatsService(modusHistory, dartsStats.full, serviceLogger, dartsStats.recent);
 }
 
 /**
@@ -180,41 +197,56 @@ export function createDefaultBulkPlayerStatsService(
   logger?: Logger,
 ): PlayerStatsReader {
   const serviceLogger = logger ?? new ConsoleLogger({ minimumLevel: "warn" });
-  return sharedDartsStats(serviceLogger);
+  return sharedDartsStats(serviceLogger).full;
 }
 
-let sharedResearchStats: PlayerStatsReader | undefined;
+interface SharedDartsStats {
+  readonly full: PlayerStatsReader;
+  readonly recent: PlayerStatsReader;
+}
 
-/** One paced canonical history reader for interactive, compare, PDC and value commands per process. */
+let sharedResearchStats: SharedDartsStats | undefined;
+
+/** A shared paced, enriched snapshot reader for interactive and bulk research. */
 export function resolveDartsOrakelRequestIntervalMs(
   env: NodeJS.ProcessEnv = process.env,
   fallbackMs = 3_200,
 ): number {
+  const minimumSafeIntervalMs = env.DARTSORAKEL_DIRECT_FETCH === "true"
+    ? 250
+    : env.JINA_API_KEY !== undefined && env.JINA_API_KEY.trim() !== ""
+      ? 300
+      : Math.max(3_200, fallbackMs);
   const configured = env.DARTSORAKEL_REQUEST_INTERVAL_MS?.trim();
   if (configured !== undefined && configured !== "") {
     const parsed = Number(configured);
-    if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
+    if (Number.isSafeInteger(parsed) && parsed >= minimumSafeIntervalMs) return parsed;
   }
-  if (env.DARTSORAKEL_DIRECT_FETCH === "true") {
-    return 250;
-  }
-  if (env.JINA_API_KEY !== undefined && env.JINA_API_KEY.trim() !== "") {
-    return 300;
-  }
-  return fallbackMs;
+  return minimumSafeIntervalMs;
 }
 
-function sharedDartsStats(logger: Logger): PlayerStatsReader {
-  sharedResearchStats ??= createDartsPlayerStatsService(logger, true, resolveDartsOrakelRequestIntervalMs(process.env, 3_200), 2);
+function sharedDartsStats(logger: Logger, scheduleBackgroundTask?: (task: Promise<void>) => void): SharedDartsStats {
+  const environment = process.env;
+  const intervalMs = resolveDartsOrakelRequestIntervalMs(environment, 3_200);
+  if (sharedResearchStats === undefined) {
+    const jinaApiKey = environment.JINA_API_KEY?.trim();
+    const transportMode = environment.DARTSORAKEL_DIRECT_FETCH === "true"
+      ? "direct"
+      : jinaApiKey === undefined || jinaApiKey === ""
+        ? "reader-anonymous"
+        : "reader-authenticated";
+    logger.info("dartsorakel_request_pacing_configured", { transportMode, minRequestIntervalMs: intervalMs, maxRetries: 2 });
+    sharedResearchStats = createDartsPlayerStatsService(logger, intervalMs, 2, scheduleBackgroundTask);
+  }
   return sharedResearchStats;
 }
 
 function createDartsPlayerStatsService(
   logger: Logger,
-  enrichStatistics: boolean,
   minRequestIntervalMs: number,
   maxRetries: number,
-): PlayerStatsReader {
+  scheduleBackgroundTask?: (task: Promise<void>) => void,
+): SharedDartsStats {
   const client = new DartsOrakelClient({
     timeoutMs: DARTSORAKEL_TIMEOUT_MS,
     maxRetries,
@@ -225,13 +257,20 @@ function createDartsPlayerStatsService(
   });
   const storage = createResearchStorage();
   const resolver = new PlayerResolver(client);
-  const matchesService = new ResearchHistoryService({
+  const newMatchesService = (minimumAcquisitionCount: number): ResearchHistoryService => new ResearchHistoryService({
     resolver,
-    scraper: new DartsOrakelScraper(client, { enrichStatistics, requireStatistics: true, logger }),
+    scraper: new DartsOrakelScraper(client, { enrichStatistics: true, requireStatistics: true, logger }),
     ...storage,
+    minimumAcquisitionCount,
+    maxStaleAgeMs: 5 * 60_000,
+    ...(scheduleBackgroundTask === undefined ? {} : { scheduleBackgroundTask }),
+    onBackgroundRefreshError: (error: unknown): void => logger.warn("research_history_background_refresh_failed", {
+      errorType: error instanceof Error ? error.name : "UnknownError",
+    }),
     onPersistenceError: (): void => logger.warn("Research evidence persistence unavailable; valid source research remains non-durable."),
   });
-  const full = new DartsPlayerStatsService(matchesService, logger);
+  const fullHistory = newMatchesService(20);
+  const full = new DartsPlayerStatsService(fullHistory, logger);
   // Base evidence is separate and ephemeral: never let an average-only
   // snapshot replace the canonical enriched snapshot or durable ledger entry.
   const base = new DartsPlayerStatsService(new ResearchHistoryService({
@@ -241,11 +280,19 @@ function createDartsPlayerStatsService(
     minimumAcquisitionCount: 10,
   }), logger);
   return {
-    getPlayerStats: (name: string, count: number, source?: PlayerStatsSource, signal?: AbortSignal): Promise<PlayerStatsResult> => full.getPlayerStats(name, count, source, signal),
-    getPlayerStatsBase: async (name: string, count: number, signal?: AbortSignal): Promise<PlayerStatsResult> => {
-      const player = await resolver.resolvePlayer(name, signal);
-      if (matchesService.peekFreshSnapshot(player, count) !== null) return full.getPlayerStats(name, count, "dartsorakel", signal);
-      return base.getPlayerStats(name, count, "dartsorakel", signal);
+    full: {
+      getPlayerStats: (name: string, count: number, source?: PlayerStatsSource, signal?: AbortSignal): Promise<PlayerStatsResult> => full.getPlayerStats(name, count, source, signal),
+      getPlayerStatsBase: async (name: string, count: number, signal?: AbortSignal): Promise<PlayerStatsResult> => {
+        const player = await resolver.resolvePlayer(name, signal);
+        if (fullHistory.peekFreshSnapshot(player, count) !== null) return full.getPlayerStats(name, count, "dartsorakel", signal);
+        return base.getPlayerStats(name, count, "dartsorakel", signal);
+      },
+    },
+    // A 10-row request returns ten rows from the same 20-row enriched snapshot.
+    // Sharing one cache prevents an interactive read from causing a second set
+    // of provider requests when a later compare/bulk request needs 20 rows.
+    recent: {
+      getPlayerStats: (name: string, count: number, source?: PlayerStatsSource, signal?: AbortSignal): Promise<PlayerStatsResult> => full.getPlayerStats(name, count, source, signal),
     },
   };
 }

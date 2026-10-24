@@ -3,6 +3,7 @@ import path from "node:path";
 import { FileCache, MemoryCache } from "../cache.js";
 import { DartsOrakelClient } from "../dartsorakel/client.js";
 import { createResearchReaderFetch } from "../research/config.js";
+import { isServerlessRuntime } from "../services/runtime-environment.js";
 import type { Logger } from "../logger.js";
 import { FixtureNameResolver } from "../modus/fixture-name-resolver.js";
 import { CorroboratedPdcFixtureSource, DartsNerdPdcFixtureSource } from "./darts-nerd-fixture-source.js";
@@ -41,7 +42,7 @@ export function createDefaultPdcTournamentService(
       logger,
     }),
     ...(playerStats === undefined ? {} : { playerStats }),
-    cache: process.env.VERCEL === "1" ? new MemoryCache({ maxEntries: 256 }) : new FileCache({ directory: resolvedCacheDirectory, logger }),
+    cache: isServerlessRuntime(process.env) ? new MemoryCache({ maxEntries: 256 }) : new FileCache({ directory: resolvedCacheDirectory, logger }),
     logger,
   });
 }

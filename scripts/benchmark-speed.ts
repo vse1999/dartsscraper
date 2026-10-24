@@ -9,8 +9,8 @@ interface PacingComparison {
   readonly baselineMs: number;
   readonly optimizedJinaMs: number;
   readonly directFetchMs: number;
-  readonly speedupJina: string;
-  readonly speedupDirect: string;
+  readonly modeledRatioJina: string;
+  readonly modeledRatioDirect: string;
 }
 
 function calculatePacing(requests: number): { baseline: number; jina: number; direct: number } {
@@ -27,7 +27,8 @@ function calculatePacing(requests: number): { baseline: number; jina: number; di
 
 function runPacingBenchmarks(): PacingComparison[] {
   const workloads = [
-    { name: "Single Player (3 views: avg, 180s, checkouts)", requests: 3 },
+    { name: "Warm single player (average, 180s, checkout)", requests: 3 },
+    { name: "Cold single player (directory + 3 statistics views)", requests: 4 },
     { name: "PDC Batch (4 pairings = 8 players × 3 views)", requests: 24 },
     { name: "Daily MODUS Slate (12 players × 3 views)", requests: 36 },
     { name: "Full PDC Tournament (32 players × 3 views)", requests: 96 },
@@ -41,8 +42,8 @@ function runPacingBenchmarks(): PacingComparison[] {
       baselineMs: p.baseline,
       optimizedJinaMs: p.jina,
       directFetchMs: p.direct,
-      speedupJina: `${(p.baseline / Math.max(1, p.jina)).toFixed(1)}x`,
-      speedupDirect: `${(p.baseline / Math.max(1, p.direct)).toFixed(1)}x`,
+      modeledRatioJina: `${(p.baseline / Math.max(1, p.jina)).toFixed(1)}x`,
+      modeledRatioDirect: `${(p.baseline / Math.max(1, p.direct)).toFixed(1)}x`,
     };
   });
 }
@@ -50,7 +51,7 @@ function runPacingBenchmarks(): PacingComparison[] {
 async function benchmarkOddsProfileConcurrency(): Promise<{
   readonly sequentialMs: number;
   readonly concurrentMs: number;
-  readonly speedup: string;
+  readonly simulatedRatio: string;
 }> {
   const sampleProfiles = [
     { url: "https://www.eredmenyek.com/jatekos/smith-ross/l8mIsYNm/", name: "Ross Smith" },
@@ -90,14 +91,14 @@ async function benchmarkOddsProfileConcurrency(): Promise<{
   return {
     sequentialMs,
     concurrentMs,
-    speedup: `${(sequentialMs / concurrentMs).toFixed(1)}x`,
+    simulatedRatio: `${(sequentialMs / concurrentMs).toFixed(1)}x`,
   };
 }
 
 async function benchmarkDirectoryCache(): Promise<{
   readonly coldLookupMs: number;
   readonly warmCacheHitMs: number;
-  readonly cacheSpeedup: string;
+  readonly simulatedRatio: string;
 }> {
   const cache = new MemoryCache({ maxEntries: 100 });
   const directoryPayload = Array.from({ length: 4_000 }, (_, i) => ({
@@ -119,7 +120,7 @@ async function benchmarkDirectoryCache(): Promise<{
   return {
     coldLookupMs,
     warmCacheHitMs,
-    cacheSpeedup: `${(coldLookupMs / Math.max(0.001, warmCacheHitMs)).toFixed(1)}x`,
+    simulatedRatio: `${(coldLookupMs / Math.max(0.001, warmCacheHitMs)).toFixed(1)}x`,
   };
 }
 
@@ -130,14 +131,15 @@ async function main(): Promise<void> {
 
   const report = {
     benchmarkDate: new Date().toISOString(),
+    measurementType: "synthetic model; does not measure DartsOrakel, Jina, Telegram, or production latency",
     environment: {
       nodeVersion: process.version,
       platform: process.platform,
     },
     results: {
-      requestPacingLatency: pacingResults,
-      oddsProfileScraping: oddsResults,
-      playerDirectoryCaching: cacheResults,
+      modeledRequestSpacing: pacingResults,
+      syntheticOddsProfileConcurrency: oddsResults,
+      syntheticMemoryCacheTiming: cacheResults,
     },
   };
 

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { waitUntil } from "@vercel/functions";
+import { readBoundedRequestBody } from "../src/services/bounded-request-body.js";
 import { ConsoleLogger, type Logger } from "../src/logger.js";
 import { PDC_JOB_MAX_BYTES, PDC_JOB_TTL_MS, readPdcSigningSecret, verifyPdcJob, type PdcReportJob } from "../src/pdc/report-job-protocol.js";
 import { InMemoryPdcJobReceiptStore, type PdcJobReceiptReservation, type PdcJobReceiptStore } from "../src/pdc/job-receipt-store.js";
@@ -28,11 +29,9 @@ export async function handlePdcJobRequest(request: Request, dependencies: PdcJob
   let signed: ReturnType<typeof verifyPdcJob>;
   const now = dependencies.now?.() ?? Date.now();
   try {
-    const declared = request.headers.get("content-length");
-    if (declared !== null && (!Number.isSafeInteger(Number(declared)) || Number(declared) < 0 || Number(declared) > PDC_JOB_MAX_BYTES)) return response(413);
-    const body = await request.text();
-    if (Buffer.byteLength(body) > PDC_JOB_MAX_BYTES) return response(413);
-    signed = verifyPdcJob(JSON.parse(body) as unknown, dependencies.signingSecret, now);
+    const body = await readBoundedRequestBody(request, PDC_JOB_MAX_BYTES);
+    if (body.kind !== "ok") return response(413);
+    signed = verifyPdcJob(JSON.parse(body.text) as unknown, dependencies.signingSecret, now);
   } catch { return response(400); }
   const key = `${signed.job.jobId}:${signed.job.cursor}`;
   let reservation: PdcJobReceiptReservation;

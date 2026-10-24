@@ -247,7 +247,10 @@ export class PdcTournamentService {
     };
     publishPartial();
     const bases = new Map<string, PdcPlayerResearch>();
-    if (this.playerStats.getPlayerStatsBase !== undefined) {
+    // The average-only pass exists only to publish useful partial progress to
+    // callers that consume it. Chunked production jobs wait for full stats and
+    // would otherwise pay for a duplicate average request per player.
+    if (onPartial !== undefined && this.playerStats.getPlayerStatsBase !== undefined) {
       const readBase = this.playerStats.getPlayerStatsBase.bind(this.playerStats);
       await mapWithConcurrency(names, this.playerConcurrency, async (requestedName: string): Promise<PdcPlayerResearch> => {
         try {

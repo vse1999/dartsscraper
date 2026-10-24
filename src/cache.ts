@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { Logger } from "./logger.js";
 import { noopLogger } from "./logger.js";
+import { isServerlessRuntime } from "./services/runtime-environment.js";
 
 const CacheEnvelopeSchema = z.object({
   expiresAt: z.number().finite(),
@@ -141,7 +142,7 @@ export class FileCache implements CacheStore {
  * MemoryCache for serverless environments (e.g. Vercel).
  */
 export function createDefaultDartsCache(logger?: Logger, env: NodeJS.ProcessEnv = process.env): CacheStore {
-  if (env.RESEARCH_LOCAL_LEDGER_ENABLED === "true" && env.VERCEL !== "1" && env.AWS_LAMBDA_FUNCTION_NAME === undefined) {
+  if (env.RESEARCH_LOCAL_LEDGER_ENABLED === "true" && !isServerlessRuntime(env)) {
     return new FileCache({
       directory: path.resolve(process.cwd(), ".cache", "dartsorakel"),
       ...(logger === undefined ? {} : { logger }),

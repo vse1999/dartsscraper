@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DartsOrakelRequestError,
@@ -528,8 +528,11 @@ describe("Telegram request handler", () => {
   });
 
   it("replaces the status message with a successful result", async () => {
+    const recent = vi.fn(async (): Promise<PlayerStatsResult> => result());
+    const full = vi.fn(async (): Promise<PlayerStatsResult> => result());
     const service: PlayerStatsReader = {
-      getPlayerStats: async (): Promise<PlayerStatsResult> => result(),
+      getPlayerStats: full,
+      getPlayerStatsRecent: recent,
     };
     const responder = new MemoryResponder();
     const logger = new MemoryLogger();
@@ -542,6 +545,8 @@ describe("Telegram request handler", () => {
     );
 
     expect(outcome).toBe("success");
+    expect(recent).toHaveBeenCalledWith("Rob Cross", 2, "auto");
+    expect(full).not.toHaveBeenCalled();
     expect(responder.replies).toEqual(["Looking up completed matches…"]);
     expect(responder.edits[0]?.messageId).toBe(1);
     expect(responder.edits[0]?.text).toContain("Rob Cross");

@@ -19,7 +19,7 @@ describe("progressive PDC player coverage", () => {
       getPlayerStatsBase: async (name: string): Promise<PdcPlayerStats> => { order.push(`base:${name}`); return stats(name); },
       getPlayerStats: async (name: string): Promise<PdcPlayerStats> => { order.push(`full:${name}`); return { ...stats(name), matches: stats(name).matches.map((match) => ({ ...match, oneEighties: 3, checkoutPercentage: 50, checkoutHits: 6, checkoutAttempts: 12 })) }; },
     };
-    const result = await service(reader).getUpcomingReportForDate("2026-10-09");
+    const result = await service(reader).getUpcomingReportForDate("2026-10-09", undefined, (): void => undefined);
     expect(order.slice(0, 32).every((call) => call.startsWith("base:"))).toBe(true);
     expect(result.players).toHaveLength(32);
     expect(result.players.every((player) => player.stats !== null && player.failureCode === null)).toBe(true);
@@ -45,7 +45,7 @@ describe("progressive PDC player coverage", () => {
 
   it("keeps usable base data on optional enrichment errors, without inventing metrics", async () => {
     const reader: PdcPlayerStatsReader = { getPlayerStatsBase: async (name: string): Promise<PdcPlayerStats> => stats(name), getPlayerStats: async (): Promise<PdcPlayerStats> => { throw new Error("Checkout endpoint unavailable"); } };
-    const result = await service(reader, 2).getUpcomingReportForDate("2026-10-09");
+    const result = await service(reader, 2).getUpcomingReportForDate("2026-10-09", undefined, (): void => undefined);
     expect(result.players.every((player) => player.stats?.meanAverage === 95 && player.failureCode === "unavailable")).toBe(true);
     expect(result.players[0]?.stats?.matches[0]?.checkoutPercentage).toBeUndefined();
   });
@@ -53,7 +53,7 @@ describe("progressive PDC player coverage", () => {
   it("does not repeatedly request a genuine base identity/history failure", async () => {
     const getPlayerStats = vi.fn(async (name: string): Promise<PdcPlayerStats> => stats(name));
     const reader: PdcPlayerStatsReader = { getPlayerStatsBase: async (name: string): Promise<PdcPlayerStats> => { if (name === "Player 0") throw new Error("Player absent"); return stats(name); }, getPlayerStats };
-    const result = await service(reader, 2).getUpcomingReportForDate("2026-10-09");
+    const result = await service(reader, 2).getUpcomingReportForDate("2026-10-09", undefined, (): void => undefined);
     expect(getPlayerStats).toHaveBeenCalledTimes(1);
     expect(getPlayerStats).toHaveBeenCalledWith("Player 1", 10, "dartsorakel", undefined);
     expect(result.players[0]).toMatchObject({ stats: null, failureCode: "unavailable" });
@@ -64,7 +64,7 @@ describe("progressive PDC player coverage", () => {
     const getPlayerStats = vi.fn(async (name: string): Promise<PdcPlayerStats> => stats(name));
     let count = 0;
     const reader: PdcPlayerStatsReader = { getPlayerStatsBase: async (name: string): Promise<PdcPlayerStats> => { count += 1; if (count > 4) return new Promise<PdcPlayerStats>(() => {}); return stats(name); }, getPlayerStats };
-    const work = service(reader).getUpcomingReportForDate("2026-10-09", controller.signal);
+    const work = service(reader).getUpcomingReportForDate("2026-10-09", controller.signal, (): void => undefined);
     await vi.waitFor(() => expect(count).toBe(8));
     controller.abort(new ReportDeadlineExceededError("research"));
     const result = await work;

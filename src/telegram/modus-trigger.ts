@@ -12,7 +12,14 @@ export interface HttpModusReportTriggerOptions {
 export function createHttpModusReportTrigger(options: HttpModusReportTriggerOptions): ModusReportTrigger {
   const endpointUrl = new URL(options.endpointUrl);
   const cronSecret = options.cronSecret.trim();
-  if (cronSecret === "") throw new Error("MODUS report trigger cron secret must not be empty.");
+  const local = endpointUrl.hostname === "localhost" || endpointUrl.hostname === "127.0.0.1";
+  if ((endpointUrl.protocol !== "https:" && !(local && endpointUrl.protocol === "http:"))
+    || endpointUrl.username !== "" || endpointUrl.password !== "") {
+    throw new Error("MODUS report endpoint must use HTTPS and must not contain URL credentials (HTTP is allowed only on localhost).");
+  }
+  if (!/^[A-Za-z0-9_-]{32,256}$/u.test(cronSecret)) {
+    throw new Error("MODUS report trigger requires a valid CRON_SECRET.");
+  }
   const fetchImpl = options.apiFetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 170_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
@@ -29,6 +36,7 @@ export function createHttpModusReportTrigger(options: HttpModusReportTriggerOpti
         const response = await fetchImpl(requestUrl, {
           method: "GET",
           headers: { authorization: `Bearer ${cronSecret}` },
+          redirect: "error",
           signal: controller.signal,
         });
         const payload: unknown = await response.json().catch((): null => null);

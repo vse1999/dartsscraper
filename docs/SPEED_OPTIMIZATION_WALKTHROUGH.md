@@ -1,17 +1,16 @@
 # Speed & Time Optimization Walkthrough
 
-**Execution Date:** 2026-10-20  
-**Phase:** Phase 1 — Speed & Latency Optimization  
-**Status:** Successfully Implemented, Tested, and Verified  
-**Free Plan Compliance:** 100% Zero-Cost / Vercel Hobby Safe  
+**Original execution date:** 2026-10-20
+**Review note:** 2026-10-24
+**Status:** Earlier code changes remain, but the speed figures below are models/simulations—not end-to-end or production measurements.
 
 ---
 
 ## 1. Executive Summary
 
-We identified and eliminated the primary bottlenecks responsible for the multi-minute slates and slow request times in DartsScraper. By decoupling transport pacing, adding free-tier API token support, enabling in-process directory and match caching, and parallelizing odds player profile verification, **we achieved a 10.7x to 12.8x speedup on research pipelines and a 2.0x speedup on odds identity scraping, while cutting Vercel serverless compute time by over 90%**.
+The repository has configurable Reader pacing, optional authenticated Jina transport, process-local caches, and concurrent odds-profile parsing. Those changes can reduce modeled wait time, but this document does **not** contain a live DartsOrakel, Vercel, or Telegram end-to-end benchmark. The earlier 10.7x–12.8x and 2.0x figures were produced by synthetic/modelled workloads; they do not prove a production speedup or a Vercel compute reduction.
 
-All 878 unit, integration, and contract tests across 91 test files pass with zero regressions.
+The 878-test result below is the historical result recorded on 2026-10-20, not a fresh verification of the current checkout.
 
 ---
 
@@ -21,11 +20,11 @@ All 878 unit, integration, and contract tests across 91 test files pass with zer
 * **Files Modified**: [`src/dartsorakel/reader-fetch.ts`](file:///c:/Users/KomPhone/Desktop/ProjectFolder/dartsscraper/src/dartsorakel/reader-fetch.ts), [`src/research/config.ts`](file:///c:/Users/KomPhone/Desktop/ProjectFolder/dartsscraper/src/research/config.ts), [`src/telegram/stats-service.ts`](file:///c:/Users/KomPhone/Desktop/ProjectFolder/dartsscraper/src/telegram/stats-service.ts), [`api/daily-modus-report.ts`](file:///c:/Users/KomPhone/Desktop/ProjectFolder/dartsscraper/api/daily-modus-report.ts).
 * **Decisions & Changes**:
   * Added `resolveDartsOrakelRequestIntervalMs` to make inter-request sleep configurable (`DARTSORAKEL_REQUEST_INTERVAL_MS`).
-  * Added support for `JINA_API_KEY` (Jina's free tier offering 1,000,000 free tokens) to pass `Authorization: Bearer <key>`. When configured, default pacing drops from **3,200ms to 300ms** (200+ RPM).
-  * Added `DARTSORAKEL_DIRECT_FETCH=true` mode for local or non-datacenter IP execution, bypassing Jina completely (defaulting to **250ms**).
-  * Retained full backward compatibility: if no environment variables are set, it defaults safely to anonymous 3,200ms pacing.
+  * Added support for `JINA_API_KEY` to pass `Authorization: Bearer <key>`. When configured, default pacing drops from **3,200ms to 300ms** (about 200 starts/minute per client).
+  * Added `DARTSORAKEL_DIRECT_FETCH=true` for local non-serverless hosts (defaulting to **250ms**); the runtime now rejects this mode on Vercel/AWS serverless deployments.
+  * Retained a conservative fallback: without a key, the client uses anonymous 3,200ms pacing. Explicit intervals may raise, but cannot lower, the provider-specific minimum.
 * **Why Decided This Way**:
-  * *Reason*: The previous hardcoded 3,200ms throttle meant 12 players took ~115s just in idle sleeps. Providing a free key or direct fetch eliminates 90% of idle waiting without incurring any financial cost.
+  * *Reason*: A 3,200ms throttle across 36 request starts models 112 seconds of inter-request spacing. A key enables faster pacing within the published per-key quota; actual total latency still depends on the provider, retries, and shared traffic.
 
 ---
 
@@ -44,7 +43,7 @@ All 878 unit, integration, and contract tests across 91 test files pass with zer
 * **Decisions & Changes**:
   * Changed the inner player profile loop from sequential `for (const profileUrl of profileUrls)` to concurrent `await Promise.all(...)`.
 * **Why Decided This Way**:
-  * *Reason*: Each match requires verifying two player profiles. Fetching profile 1 and profile 2 in parallel cuts per-match identity network latency by **50% (2.0x measured speedup)** while preserving all timeout and error boundaries.
+  * *Reason*: Each match requires verifying two player profiles. Concurrent fetches can reduce ideal wait time under the benchmark's fixed synthetic delay; they do not establish a 2.0x production speedup. Timeout and error boundaries remain in place.
 
 ---
 
@@ -57,70 +56,67 @@ All 878 unit, integration, and contract tests across 91 test files pass with zer
 
 ---
 
-## 3. Empirical Benchmark Results
+## 3. Modeled and Simulated Results (Not Empirical Production Results)
 
-We benchmarked the optimized pipelines with `npm run benchmark:speed`:
+`npm run benchmark:speed` does not call DartsOrakel or Telegram. Its request table computes only ideal inter-request spacing: `(request count - 1) × configured interval`. It omits network time, retries, queue contention, cold directory resolution, image rendering/upload, and Vercel cold starts.
 
 ### 3.1 Network Launch & Request Pacing Latency
 
-| Workload | Requests | Baseline (Anonymous 3,200ms) | Optimized Free Jina (300ms) | Direct Fetch (250ms) | Measured Speedup |
+| Modeled workload | Requests included | 3,200ms interval | 300ms interval if a Jina key is configured | 250ms direct-fetch mode | Modeled ratio |
 |---|:---:|:---:|:---:|:---:|:---:|
-| **Single Player** (3 views) | 3 | 6,400 ms | **600 ms** | **500 ms** | **10.7x – 12.8x** |
-| **PDC Batch** (4 pairings = 8 players) | 24 | 73,600 ms | **6,900 ms** | **5,750 ms** | **10.7x – 12.8x** |
-| **Daily MODUS Slate** (12 players) | 36 | 112,000 ms | **10,500 ms** | **8,750 ms** | **10.7x – 12.8x** |
-| **Full PDC Tournament** (32 players) | 96 | 304,000 ms (5+ min) | **28,500 ms** | **23,750 ms** | **10.7x – 12.8x** |
+| **One warm player** (average, 180s, checkout) | 3 | 6,400 ms | 600 ms | 500 ms | 10.7x–12.8x |
+| **One cold player** (directory + 3 views) | 4 | 9,600 ms | 900 ms | 750 ms | 10.7x–12.8x |
+| **8-player batch** (3 views/player) | 24 | 73,600 ms | 6,900 ms | 5,750 ms | 10.7x–12.8x |
+| **12-player slate** (3 views/player) | 36 | 112,000 ms | 10,500 ms | 8,750 ms | 10.7x–12.8x |
+| **32-player slate** (3 views/player) | 96 | 304,000 ms | 28,500 ms | 23,750 ms | 10.7x–12.8x |
+
+These are idle-spacing estimates, not predicted total durations. Production uses direct fetch only when explicitly enabled; direct fetch can be blocked by the source's edge protection and is not a recommended Vercel setting.
 
 ### 3.2 Odds Profile Scraping Concurrency
 
-| Method | 6 Matches (12 Profiles) | Speedup |
+| Method | Simulated workload | Interpretation |
 |---|:---:|:---:|
-| **Sequential Baseline** | 751 ms | Baseline |
-| **Concurrent `Promise.all`** | **378 ms** | **2.0x faster** |
+| **Sequential** | 12 × 50ms synthetic delay, plus parser/runtime overhead | Demonstrates sequential-vs-concurrent control flow only |
+| **Concurrent `Promise.all`** | 6 × 50ms synthetic delay, plus parser/runtime overhead | Not a live network latency or production speedup |
 
 ---
 
-## 4. Verification & Testing Evidence
+## 4. Why the Interactive Request Became Slower
 
-Before concluding, the following test suites and verification gates were executed:
+Git history identifies the latency tradeoff. Commit `89896a5` unified the interactive and bulk readers into one shared client and changed interactive pacing from **250 ms** to the **3,200 ms** bulk-safe fallback. That is sensible for anonymous Reader traffic, but makes interactive reads slower when no API key is configured. The target branch still has this fallback; the later recent-history changes do not override it.
 
-1. **Full Vitest Test Suite**:
-   ```powershell
-   npm test
-   ```
-   **Result**: `91 passed (91) | 878 passed (878) | Duration: 10.83s` with 0 failures.
-2. **TypeScript Compiler Check**:
-   ```powershell
-   npm run build
-   ```
-   **Result**: Clean compilation with `tsc --noEmit` and `exactOptionalPropertyTypes: true`.
-3. **Production Security Audit**:
-   ```powershell
-   npm run audit:prod
-   ```
-   **Result**: `found 0 vulnerabilities`.
-4. **Speed Benchmark Execution**:
-   ```powershell
-   npm run benchmark:speed
-   ```
-   **Result**: Validated exact latency models and profile concurrency speedup.
+The source calls are paced sequentially at request start, even when the 180s and checkout fetches are launched together. A cold player lookup can need the player-directory request plus average, 180s, and checkout views: three gaps × 3,200 ms = **9.6 seconds of pacing alone**. A warm directory removes one gap, but two gaps still add 6.4 seconds. Provider latency and retries come on top.
 
----
+Jina's current Reader rate-limit table lists **20 requests/minute without a key** and **500 requests/minute with a key**. The no-key 3,200 ms interval allows about 18.75 request starts/minute in one client. With a key, this application uses 300 ms (about 200 starts/minute in one client), below the published per-key limit. The limiter is process-local, not distributed across Vercel instances, so shared-key traffic and 429s must still be monitored. [Jina Reader rate limits](https://jina.ai/en-US/api-dashboard/rate-limit/)
 
-## 5. How to Activate Maximum Speed
+An interactive 10-row request now returns ten rows from the same 20-row enriched snapshot used by compare/bulk research. That preserves metrics and avoids a second three-view acquisition when a later command needs 20 rows; it does **not** reduce the initial cold request count. A warm instance may serve a clearly marked in-memory observation up to five minutes old while refreshing in the background (`waitUntil` on Vercel). This does not persist across cold starts or coordinate multiple instances.
 
-The application maintains 100% backward compatibility. To activate the speed optimizations in your local or hosted environment:
+Transport logs report the mode/interval and per-operation latency without exposing the Jina key or player URL. Use `dartsorakel_request_completed` and `player_research_outcome` to distinguish cache hits, source wait, and total research time. Production Vercel environment variables and live p50/p95 latency were not available during this code review.
 
-1. **In `.env.local` or Vercel Environment Variables**:
-   * Add a free Jina Reader key:
-     ```env
-     JINA_API_KEY=your_free_jina_key_here
-     ```
-     *(Free up to 1,000,000 tokens at [jina.ai](https://jina.ai/reader/))*
-   * Or if testing locally with direct access:
-     ```env
-     DARTSORAKEL_DIRECT_FETCH=true
-     ```
-   * Optionally customize pacing (defaults automatically to 300ms with key or 250ms direct):
-     ```env
-     DARTSORAKEL_REQUEST_INTERVAL_MS=300
-     ```
+## 5. Safe Production Configuration
+
+For faster interactive reads without bypassing the anonymous request limit:
+
+1. Add `JINA_API_KEY` in Vercel's encrypted environment settings. Never put the real value in `.env.example`, source, logs, or commits.
+2. Remove a stale `DARTSORAKEL_REQUEST_INTERVAL_MS=3200` override if the key is configured, or set it to `300`. An override can now only **increase** the safe floor; it cannot disable request pacing with `0` or another too-low value.
+3. Do not enable `DARTSORAKEL_DIRECT_FETCH` on Vercel; the runtime rejects that configuration because DartsOrakel may challenge serverless IPs. Direct fetch is accepted only on local non-serverless hosts.
+4. Monitor transport mode and 429/retry outcomes after a preview release. The 300 ms limiter is process-local; if multiple instances share one key, observe aggregate quota and raise the interval if needed.
+
+Without a Jina key the bot remains operational, but uses the conservative 3,200 ms fallback. That can still add roughly 6.4–9.6 seconds of pacing on a cold or partially warm request. The key must be supplied by an authorized operator; it is not available to this code review.
+
+```env
+JINA_API_KEY=your_key_in_deployment_secret_settings
+DARTSORAKEL_REQUEST_INTERVAL_MS=300
+```
+
+## 6. Current Verification
+
+Verification on 2026-10-24, Node `v24.11.0`, Windows:
+
+* `npm ci` completed from the checked-in lockfile and reported zero vulnerabilities.
+* `npm run build` passed (`tsc --noEmit`).
+* `npm test -- --reporter=dot` passed: **92 files / 895 tests**.
+* `npm audit` and `npm audit --omit=dev` each reported **zero vulnerabilities**.
+* `npm run benchmark:speed` completed; it reports synthetic/modelled timings only and is not an end-to-end latency measurement.
+
+The test suite also verifies that the complete PDC chunk path skips an unused average-only pre-read, preserving the separate progressive pass only for callers that consume partial research. These local checks do not verify production secrets, Vercel environment settings, hosted deployment protection, live provider quota, or end-to-end production latency.

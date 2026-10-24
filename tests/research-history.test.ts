@@ -105,6 +105,121 @@ describe("canonical research history", () => {
     expect(scrape.mock.calls[2]?.[2]).toBe("2026-10-02");
   });
 
+  it("serves bounded stale history immediately and coalesces a scheduled refresh", async () => {
+    let time = now().getTime();
+    const clock = (): Date => new Date(time);
+    const backgroundTasks: Promise<void>[] = [];
+    let release: (matches: Match[]) => void = (): void => undefined;
+    const pending = new Promise<Match[]>((resolve): void => { release = resolve; });
+    const scrape = vi.fn(async (): Promise<Match[]> => history());
+    const service = new ResearchHistoryService({
+      resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player },
+      scraper: { getPlayerMatches: scrape },
+      ledger: new MemoryEvidenceLedger({ now: clock }),
+      now: clock,
+      maxStaleAgeMs: 5 * 60_000,
+      scheduleBackgroundTask: (task: Promise<void>): void => { backgroundTasks.push(task); },
+    });
+
+    const original = await service.getResolvedMatchesSnapshot(player, 10);
+    time += 60_001;
+    scrape.mockImplementation(async (): Promise<Match[]> => pending);
+
+    const stale = await service.getResolvedMatchesSnapshot(player, 10);
+    const secondStale = await service.getResolvedMatchesSnapshot(player, 10);
+    await vi.waitFor(() => expect(scrape).toHaveBeenCalledTimes(2));
+    expect(stale.stale).toBe(true);
+    expect(stale.evidence.id).toBe(original.evidence.id);
+    expect(stale.assessment?.dimensions.observationAge).toBe("stale");
+    expect(secondStale.evidence.id).toBe(original.evidence.id);
+    expect(scrape).toHaveBeenCalledTimes(2);
+    expect(backgroundTasks).toHaveLength(1);
+
+    release(history().map((match, index): Match => ({ ...match, average: 100 + index })));
+    await backgroundTasks[0];
+    const refreshed = await service.getResolvedMatchesSnapshot(player, 10);
+    expect(refreshed.stale).toBe(false);
+    expect(refreshed.evidence.id).not.toBe(original.evidence.id);
+    expect(refreshed.value.matches[0]?.average).toBe(100);
+    expect(service.diagnostics().activeAcquisitions).toBe(0);
+  });
+
+  it("does not serve observations beyond the configured maximum stale age", async () => {
+    let time = now().getTime();
+    const clock = (): Date => new Date(time);
+    let release: (matches: Match[]) => void = (): void => undefined;
+    const pending = new Promise<Match[]>((resolve): void => { release = resolve; });
+    const scrape = vi.fn(async (): Promise<Match[]> => history());
+    const service = new ResearchHistoryService({
+      resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player },
+      scraper: { getPlayerMatches: scrape },
+      ledger: new MemoryEvidenceLedger({ now: clock }),
+      now: clock,
+      maxStaleAgeMs: 90_000,
+    });
+    await service.getResolvedMatchesSnapshot(player, 10);
+    time += 90_001;
+    scrape.mockImplementation(async (): Promise<Match[]> => pending);
+
+    let completed = false;
+    const refreshed = service.getResolvedMatchesSnapshot(player, 10).then((result) => {
+      completed = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(scrape).toHaveBeenCalledTimes(2));
+    expect(completed).toBe(false);
+    release(history());
+    await expect(refreshed).resolves.toMatchObject({ stale: false });
+  });
+
+  it("contains refresh-hook failures and backs off repeated background failures", async (): Promise<void> => {
+    let time = now().getTime();
+    const clock = (): Date => new Date(time);
+    const backgroundTasks: Promise<void>[] = [];
+    let refreshCount = 0;
+    const scrape = vi.fn(async (): Promise<Match[]> => history());
+    const service = new ResearchHistoryService({
+      resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player },
+      scraper: { getPlayerMatches: scrape },
+      ledger: new MemoryEvidenceLedger({ now: clock }),
+      now: clock,
+      maxStaleAgeMs: 5 * 60_000,
+      backgroundRefreshFailureCooldownMs: 30_000,
+      scheduleBackgroundTask: (task: Promise<void>): void => { backgroundTasks.push(task); },
+      onBackgroundRefreshError: (): never => { throw new Error("logging hook failed"); },
+    });
+    await service.getResolvedMatchesSnapshot(player, 10);
+    scrape.mockImplementation(async (): Promise<Match[]> => {
+      refreshCount += 1;
+      if (refreshCount === 1) throw new Error("source unavailable");
+      return history();
+    });
+    time += 60_001;
+
+    await expect(service.getResolvedMatchesSnapshot(player, 10)).resolves.toMatchObject({ stale: true });
+    await vi.waitFor(() => expect(backgroundTasks).toHaveLength(1));
+    await expect(backgroundTasks[0]).resolves.toBeUndefined();
+    await expect(service.getResolvedMatchesSnapshot(player, 10)).resolves.toMatchObject({ stale: true });
+    expect(scrape).toHaveBeenCalledTimes(2);
+
+    time += 30_001;
+    await expect(service.getResolvedMatchesSnapshot(player, 10)).resolves.toMatchObject({ stale: true });
+    await vi.waitFor(() => expect(backgroundTasks).toHaveLength(2));
+    await expect(backgroundTasks[1]).resolves.toBeUndefined();
+    expect(scrape).toHaveBeenCalledTimes(3);
+    await expect(service.getResolvedMatchesSnapshot(player, 10)).resolves.toMatchObject({ stale: false });
+  });
+
+  it("rejects a stale-age policy shorter than the fresh window", () => {
+    expect(() => new ResearchHistoryService({
+      resolver: { resolvePlayer: async (): Promise<PlayerIdentity> => player },
+      scraper: { getPlayerMatches: async (): Promise<Match[]> => history() },
+      ledger: new MemoryEvidenceLedger(),
+      freshTtlMs: 60_000,
+      maxStaleAgeMs: 30_000,
+    })).toThrow("at least the freshness TTL");
+  });
+
   it("shares concurrent canonical requests without poisoning another subscriber", async () => {
     let release: (matches: Match[]) => void = (): void => undefined;
     const pending = new Promise<Match[]>((resolve): void => { release = resolve; });
